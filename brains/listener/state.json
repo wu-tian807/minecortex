@@ -1,0 +1,12 @@
+{
+  "messagesForwarded": 0,
+  "lastTick": 1772177606378,
+  "lastTriggers": [
+    "subscription"
+  ],
+  "sessionLength": 4,
+  "noticesProcessed": 1,
+  "noticeKinds": [
+    "event"
+  ]
+}

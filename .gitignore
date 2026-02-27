@@ -1,0 +1,8 @@
+node_modules/
+dist/
+key/
+logs/
+brains/*/sessions/
+brains/*/memory/
+task-board.md
+*.tsbuildinfo

@@ -1,0 +1,7 @@
+{
+  "model": "gemini-2.5-flash",
+  "subscriptions": { "default": "none" },
+  "tools":         { "default": "all" },
+  "skills":        { "default": "none" },
+  "directives":    { "default": "all" }
+}
