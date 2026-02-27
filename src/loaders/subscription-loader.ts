@@ -1,8 +1,14 @@
-/** @desc 扫描全局 + 脑内订阅源，按 brain.json 配置过滤，返回激活列表 */
+/** @desc 扫描全局 + 脑内订阅源，工厂模式加载，传入 SourceContext */
 
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { BrainJson, CapabilitySelector, EventSource } from "../core/types.js";
+import type {
+  BrainJson,
+  CapabilitySelector,
+  EventSource,
+  EventSourceFactory,
+  SourceContext,
+} from "../core/types.js";
 
 const ROOT = process.cwd();
 
@@ -42,7 +48,6 @@ export async function loadSubscriptions(
     join(ROOT, "brains", brainId, "subscriptions"),
   );
 
-  // local overrides global
   const merged = new Map([...globalSources, ...localSources]);
   const enabled = applySelector(
     [...merged.keys()],
@@ -54,7 +59,13 @@ export async function loadSubscriptions(
     const path = merged.get(name);
     if (!path) continue;
     const mod = await import(path);
-    sources.push(mod.default as EventSource);
+    const factory = mod.default as EventSourceFactory;
+    const sourceCtx: SourceContext = {
+      brainId,
+      brainDir: join(ROOT, "brains", brainId),
+      config: brainConfig.subscriptions?.config?.[name],
+    };
+    sources.push(factory(sourceCtx));
   }
   return sources;
 }

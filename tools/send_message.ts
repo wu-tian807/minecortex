@@ -1,18 +1,18 @@
-/** @desc 工具: 通过 BrainBus 向其他脑发送自然语言消息 */
+/** @desc 工具: 向其他脑发送自然语言消息，通过统一 Event 路由 */
 
 import type { ToolDefinition } from "../src/core/types.js";
 
 export default {
   name: "send_message",
   description:
-    "Send a natural language message to another brain via BrainBus. " +
+    "Send a natural language message to another brain. " +
     "Messages are delivered to the recipient's next tick. " +
     "Use '*' as target to broadcast to all brains. " +
     "After sending, output a brief confirmation and end your turn — do not wait for a reply.",
   parameters: {
     to: {
       type: "string",
-      description: "Target brain ID (e.g. 'responder') or '*' for broadcast",
+      description: "Target brain ID (e.g. 'creative') or '*' for broadcast",
       required: true,
     },
     content: {
@@ -32,18 +32,14 @@ export default {
 
     if (!to || !content) return { error: '"to" and "content" are required' };
 
-    if (to === "*") {
-      ctx.brainBus.broadcast(ctx.brainId, content, summary);
-      return { ok: true, broadcast: true };
-    }
-
-    ctx.brainBus.send({
-      from: ctx.brainId,
-      to,
-      content,
-      summary,
+    ctx.emit({
+      source: `brain:${ctx.brainId}`,
+      type: "message",
+      payload: { to, content, summary },
       ts: Date.now(),
+      priority: 0,
     });
+
     return { ok: true, to, summary };
   },
 } satisfies ToolDefinition;
