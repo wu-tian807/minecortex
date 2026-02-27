@@ -181,33 +181,31 @@ bus.pending(brainId) → number          // 查看待处理消息数
   Result: 优化了 mine_diamond skill 的 BT 模板
 ```
 
-### 触发与累积 — 完全分离
+### Agent Loop — 对齐 agentic_os
 
-触发（唤醒）和消息累积是两个独立关注点：
-
-| 组件 | 职责 | 知道对方吗 |
-|------|------|-----------|
-| **NoticeQueue** | 纯内容累积 (push/drain/pending) | 不知道唤醒的存在 |
-| **WakePolicy** | 纯判断 (shouldWake → boolean) | 不知道队列的存在 |
-| **Scheduler** | 协调两者: 入队 → 问 policy → 唤醒 | 唯一的协调者 |
-
-每个脑通过 `brains/<id>/wake.ts` 自定义唤醒策略（TypeScript 代码）：
+每个有 LLM 的脑拥有自己的 async while 循环（对齐 agentic_os 的 agent loop）：
 
 ```typescript
-// brains/listener/wake.ts
-export default {
-  shouldWake(notice, ctx) {
-    return notice.kind === "event" && notice.event?.source === "stdin";
-  },
-  coalesceMs: 100,  // 合并窗口
-} satisfies WakePolicy;
+// brain.run(signal) — agentic_os 风格
+while (!signal.aborted) {
+  const trigger = await queue.waitForEvent(signal);   // 阻塞等待
+  if (trigger.priority > 0) await sleep(coalesceMs);  // 合并窗口
+  const events = queue.drain();                        // 按 priority 排序
+  await this.process(events);                          // LLM + tool loop
+}
 ```
 
-- 没有 `wake.ts` 的脑 → 默认策略: 任何 notice 都唤醒
-- `shouldWake` 返回 false 的 notice 仍然累积在队列中
-- `heartbeatMs` 可选: 定时唤醒（处理累积的静默 notices）
-- `coalesceMs` 可选: 合并窗口内的多次唤醒为一次 tick
-- `Brain.tick()` 开头 drain 队列，拿到所有累积内容一次性处理
+| 组件 | 职责 |
+|------|------|
+| **EventQueue** | 事件累积 (push/drain/pending) + 阻塞等待 (waitForEvent) |
+| **brain.run()** | agent loop: wait → coalesce → drain → process → loop |
+| **Scheduler** | 发现脑 → 接线 → 启动 loop → 关闭 |
+
+- 订阅配置 (`brain.json` subscriptions) 是唯一的事件过滤层
+- 无 `shouldWake` / `WakePolicy` — 收到事件即处理
+- `coalesceMs` 在 `brain.json` 中配置，控制合并窗口
+- `priority` 字段控制排队顺序：0=immediate, 1=normal, 2=low
+- priority 0 跳过 coalesce 窗口，立即处理
 
 ---
 
@@ -449,10 +447,9 @@ mineclaw/
 │   ├── listener/              #   最小意识脑
 │   │   ├── brain.json         #   ★ 必须: 启用 stdin 订阅 + 全局工具
 │   │   ├── soul.md            #   必须 (有 model): 身份/人格
-│   │   ├── state.json         #   必须: 工作记忆
-│   │   └── wake.ts            #   可选: 唤醒策略 (TypeScript 代码)
+│   │   └── state.json         #   必须: 工作记忆
 │   │
-│   ├── responder/             #   最小意识脑 (brain.json/wake.ts 不同)
+│   ├── responder/             #   最小意识脑
 │   │   └── ...
 │   │
 │   └── planner/               #   复杂脑 (按需添加可选目录)
@@ -497,11 +494,10 @@ mineclaw/
 
 **关键约定:**
 - `brain.json` + `state.json` 必须存在; `soul.md` 有 model 时必须
-- `wake.ts` 可选: 定义唤醒策略，不存在 = 任何 notice 都唤醒
 - 其他子目录全部可选，不存在则跳过，按需创建
-- `brain.json` 有 `model` 的脑 → Scheduler 启动 LLM Session
+- `brain.json` 有 `model` 的脑 → Scheduler 启动 agent loop
 - 有 `src/` 的脑 → Scheduler 加载脚本入口
-- 触发与累积分离: NoticeQueue 存内容, WakePolicy 判断, Scheduler 协调
+- `coalesceMs` 在 `brain.json` 中配置合并窗口（默认 300ms）
 - 全局能力池 + brain.json 选用 + 脑内覆盖 = 三层能力解析
 - 顶层 `src/` 只有框架抽象，零脑特定逻辑
 - 新建脑 = 创建 `brains/<id>/` 目录 + brain.json + state.json (+ soul.md if model)
@@ -541,9 +537,9 @@ mineclaw/
 | **目录即大脑** | `brains/<id>/` = 一个完整自包含的脑区 |
 | **两个开关** | `model`(LLM 意识) 和 `src/`(脚本能力) 正交组合 |
 | **src/ 在脑里** | 脚本代码在 `brains/<id>/src/`, 顶层 `src/` 纯框架 |
-| **三条路径** | BrainBus(消息) / NoticeQueue(事件累积) / 文件读(state.json) |
-| **触发与累积分离** | NoticeQueue(纯内容) + WakePolicy(纯判断) + Scheduler(协调) |
-| **wake.ts** | 每脑可选, TypeScript 代码自定义唤醒条件, 支持 coalesce/heartbeat |
+| **三条路径** | BrainBus(消息路由) / EventQueue(事件累积) / 文件读(state.json) |
+| **Agent Loop** | agentic_os 风格 while 循环: wait → coalesce → drain → process |
+| **priority** | 0=immediate(跳过coalesce), 1=normal, 2=low; drain 按 priority 排序 |
 | **无 Blackboard** | 文件系统即共享状态, `cat state.json` 即可读其他脑状态 |
 | **Session 隔离** | 每个有 LLM 的脑独立 session, 绝不共享 |
 | **6 层 Prompt** | Soul → Runtime → Skills → Directives → Tools → State |

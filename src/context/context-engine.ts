@@ -1,10 +1,10 @@
-/** @desc ContextEngine — 分层组装 LLM System Prompt: Soul → State → Notices → Tools → Directives */
+/** @desc ContextEngine — 分层组装 LLM System Prompt: Soul → State → Events → Tools → Directives */
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   ToolDefinition,
-  Notice,
+  Event,
   LLMMessage,
   BrainJson,
   DirectiveContext,
@@ -16,14 +16,26 @@ const ROOT = process.cwd();
 export interface ContextInput {
   brainId: string;
   model: string;
-  notices: Notice[];
+  events: Event[];
   tools: ToolDefinition[];
   sessionHistory: LLMMessage[];
   brainConfig: BrainJson;
 }
 
+function renderEventDisplay(event: Event): string {
+  const payload = event.payload as Record<string, unknown> | undefined;
+  if (payload?.prompt && typeof payload.prompt === "string") {
+    return payload.prompt;
+  }
+  if (payload?.content && typeof payload.content === "string") {
+    const summary = (payload as any).summary;
+    return summary ? `${summary}: ${payload.content}` : String(payload.content);
+  }
+  return JSON.stringify(event.payload);
+}
+
 export async function assemblePrompt(input: ContextInput): Promise<LLMMessage[]> {
-  const { brainId, model, notices, tools, sessionHistory, brainConfig } = input;
+  const { brainId, model, events, tools, sessionHistory, brainConfig } = input;
   const brainDir = join(ROOT, "brains", brainId);
 
   // Layer 1: Soul
@@ -38,24 +50,21 @@ export async function assemblePrompt(input: ContextInput): Promise<LLMMessage[]>
     state = JSON.parse(await readFile(join(brainDir, "state.json"), "utf-8"));
   } catch { /* empty state */ }
 
-  // Layer 3: Notices
+  // Layer 3: Events — grouped by source
   const runtimeLines: string[] = [];
-  const eventNotices = notices.filter((n) => n.kind === "event" && n.event);
-  const busNotices = notices.filter((n) => n.kind === "bus" && n.message);
-
-  if (eventNotices.length > 0) {
-    runtimeLines.push("## 收到的事件");
-    for (const n of eventNotices) {
-      const e = n.event!;
-      runtimeLines.push(`- [${e.source}] ${e.type}: ${JSON.stringify(e.payload)}`);
+  if (events.length > 0) {
+    const grouped = new Map<string, Event[]>();
+    for (const e of events) {
+      const list = grouped.get(e.source) ?? [];
+      list.push(e);
+      grouped.set(e.source, list);
     }
-  }
 
-  if (busNotices.length > 0) {
-    runtimeLines.push("## 收到的脑间消息");
-    for (const n of busNotices) {
-      const m = n.message!;
-      runtimeLines.push(`- [${m.from}] ${m.summary}: ${m.content}`);
+    for (const [source, evts] of grouped) {
+      runtimeLines.push(`## 来自 ${source}`);
+      for (const e of evts) {
+        runtimeLines.push(`- [${e.type}] ${renderEventDisplay(e)}`);
+      }
     }
   }
 
@@ -105,15 +114,11 @@ export async function assemblePrompt(input: ContextInput): Promise<LLMMessage[]>
     ...sessionHistory,
   ];
 
-  // Construct user message from drained notices
-  if (notices.length > 0) {
+  // Construct user message from drained events
+  if (events.length > 0) {
     const parts: string[] = [];
-    for (const n of notices) {
-      if (n.kind === "event" && n.event) {
-        parts.push(`[${n.event.source}:${n.event.type}] ${JSON.stringify(n.event.payload)}`);
-      } else if (n.kind === "bus" && n.message) {
-        parts.push(`[${n.message.from}] ${n.message.content}`);
-      }
+    for (const e of events) {
+      parts.push(`[${e.source}:${e.type}] ${renderEventDisplay(e)}`);
     }
     messages.push({
       role: "user",
