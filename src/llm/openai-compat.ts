@@ -120,6 +120,9 @@ function normalizeBaseUrl(url: string): string {
 function createOpenAICompatProvider(opts: ProviderFactoryOpts): LLMProviderInterface {
   const { apiKey, baseUrl } = opts;
   const base = normalizeBaseUrl(baseUrl ?? "https://api.openai.com/v1");
+  const temperature = opts.temperature ?? 0.7;
+  const maxTokens = opts.maxTokens;
+  const reasoningEffort = opts.reasoningEffort;
 
   return {
     async chat(messages, tools) {
@@ -130,8 +133,11 @@ function createOpenAICompatProvider(opts: ProviderFactoryOpts): LLMProviderInter
       const body: any = {
         model,
         messages: openaiMessages,
+        temperature,
       };
+      if (maxTokens) body.max_tokens = maxTokens;
       if (openaiTools) body.tools = openaiTools;
+      if (reasoningEffort) body.reasoning_effort = reasoningEffort;
 
       const res = await fetch(`${base}/chat/completions`, {
         method: "POST",

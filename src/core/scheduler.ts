@@ -114,7 +114,7 @@ export class Scheduler {
       return;
     }
 
-    const provider = createProvider(model);
+    const provider = createProvider(model, brainConfig);
     const brain = new ConsciousBrain({
       id: brainId,
       model,

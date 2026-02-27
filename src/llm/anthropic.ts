@@ -110,6 +110,8 @@ function normalizeBase(url: string): string {
 function createAnthropicProvider(opts: ProviderFactoryOpts): LLMProviderInterface {
   const { apiKey, baseUrl, authType } = opts;
   const base = normalizeBase(baseUrl ?? "https://api.anthropic.com");
+  const temperature = opts.temperature ?? 0.7;
+  const maxTokens = opts.maxTokens ?? 4096;
 
   function buildHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
@@ -134,7 +136,8 @@ function createAnthropicProvider(opts: ProviderFactoryOpts): LLMProviderInterfac
       const body: any = {
         model,
         messages: anthropicMessages,
-        max_tokens: 4096,
+        max_tokens: maxTokens,
+        temperature,
       };
       if (systemMsg?.content) body.system = systemMsg.content;
       if (anthropicTools) body.tools = anthropicTools;

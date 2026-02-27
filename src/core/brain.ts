@@ -44,7 +44,6 @@ export class ConsciousBrain implements BrainInterface {
     this.brainBus = opts.brainBus;
     this.brainConfig = opts.brainConfig;
     this.noticeQueue = opts.noticeQueue;
-    (this.provider as any)._model = opts.model;
   }
 
   async tick(): Promise<void> {

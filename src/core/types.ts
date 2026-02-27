@@ -48,6 +48,20 @@ export interface WakePolicy {
   coalesceMs?: number;
 }
 
+// ─── Model Spec ───
+
+export type InputModality = "text" | "image" | "video" | "audio";
+export type ReasoningEffort = "low" | "medium" | "high";
+
+export interface ModelSpec {
+  input: InputModality[];
+  reasoning: boolean;
+  contextWindow: number;
+  maxOutput: number;
+  defaultTemperature: number;
+  tokensPerChar: number;
+}
+
 // ─── Brain Config ───
 
 export interface CapabilitySelector {
@@ -58,6 +72,9 @@ export interface CapabilitySelector {
 
 export interface BrainJson {
   model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  reasoningEffort?: ReasoningEffort;
   subscriptions?: CapabilitySelector;
   tools?: CapabilitySelector;
   skills?: CapabilitySelector;

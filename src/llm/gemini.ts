@@ -111,6 +111,8 @@ function parseResponse(response: any): LLMResponse {
 
 function createGeminiProvider(opts: ProviderFactoryOpts): LLMProviderInterface {
   const client = new GoogleGenAI({ apiKey: opts.apiKey });
+  const temperature = opts.temperature;
+  const maxOutputTokens = opts.maxTokens;
 
   return {
     async chat(messages, tools) {
@@ -125,6 +127,8 @@ function createGeminiProvider(opts: ProviderFactoryOpts): LLMProviderInterface {
         config: {
           systemInstruction: systemMsg?.content,
           tools: geminiTools,
+          temperature,
+          maxOutputTokens,
         },
       });
 

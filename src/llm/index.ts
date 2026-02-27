@@ -4,4 +4,4 @@ import "./gemini.js";
 import "./anthropic.js";
 import "./openai-compat.js";
 
-export { createProvider, registerProvider, parseModelSpec } from "./provider.js";
+export { createProvider, registerProvider, parseModelSpec, getModelSpec, resolveModelParams } from "./provider.js";
