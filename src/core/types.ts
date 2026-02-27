@@ -1,51 +1,22 @@
-/** @desc 框架核心类型定义 */
+/** @desc 框架核心类型定义 — Event 是唯一的信号原语 */
 
-// ─── Event ───
+// ─── Event (唯一信号原语) ───
 
 export interface Event {
-  source: string;       // e.g. "stdin", "minecraft-chat"
-  type: string;         // e.g. "message", "block_break"
+  source: string;       // e.g. "stdin", "heartbeat", "brain:architect", "tool:spawn_thought"
+  type: string;         // e.g. "message", "tick", "block_break"
   payload: unknown;
   ts: number;
+  priority?: number;    // 0=immediate, 1=normal(default), 2=low
+  silent?: boolean;     // true = queue only, don't trigger processing
 }
 
-// ─── BrainBus ───
+// ─── EventQueue (per-brain 事件累积器) ───
 
-export interface BusMessage {
-  from: string;
-  to: string | "*";     // "*" = broadcast
-  content: string;       // natural language message body
-  summary: string;       // 5-10 word preview for logs/inbox
-  ts: number;
-}
-
-// ─── Notice (unified accumulation unit) ───
-
-export type NoticeKind = "event" | "bus";
-
-export interface Notice {
-  kind: NoticeKind;
-  event?: Event;        // present when kind === "event"
-  message?: BusMessage; // present when kind === "bus"
-  ts: number;
-}
-
-export interface NoticeQueueInterface {
-  push(notice: Notice): void;
-  drain(): Notice[];
+export interface EventQueueInterface {
+  push(event: Event): void;
+  drain(): Event[];
   pending(): number;
-}
-
-// ─── WakePolicy (per-brain, loaded from brains/<id>/wake.ts) ───
-
-export interface WakeContext {
-  pending: number;
-}
-
-export interface WakePolicy {
-  shouldWake(notice: Notice, ctx?: WakeContext): boolean;
-  heartbeatMs?: number;
-  coalesceMs?: number;
 }
 
 // ─── Model Spec ───
@@ -68,6 +39,7 @@ export interface CapabilitySelector {
   default: "all" | "none";
   enable?: string[];
   disable?: string[];
+  config?: Record<string, Record<string, unknown>>;
 }
 
 export interface BrainJson {
@@ -75,6 +47,7 @@ export interface BrainJson {
   temperature?: number;
   maxTokens?: number;
   reasoningEffort?: ReasoningEffort;
+  coalesceMs?: number;
   subscriptions?: CapabilitySelector;
   tools?: CapabilitySelector;
   skills?: CapabilitySelector;
@@ -126,7 +99,7 @@ export interface ToolDefinition {
 
 export interface ToolContext {
   brainId: string;
-  brainBus: BrainBusInterface;
+  emit: (event: Event) => void;
   readState: (targetBrainId: string) => Promise<Record<string, unknown>>;
 }
 
@@ -155,7 +128,15 @@ export interface LLMProviderInterface {
   chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse>;
 }
 
-// ─── EventSource (pluggable subscription) ───
+// ─── EventSource (pluggable subscription, factory pattern) ───
+
+export interface SourceContext {
+  brainId: string;
+  brainDir: string;
+  config?: Record<string, unknown>;
+}
+
+export type EventSourceFactory = (ctx: SourceContext) => EventSource;
 
 export interface EventSource {
   name: string;
@@ -163,18 +144,9 @@ export interface EventSource {
   stop(): void;
 }
 
-// ─── BrainBus interface (for dependency injection) ───
-
-export interface BrainBusInterface {
-  send(msg: BusMessage): void;
-  broadcast(from: string, content: string, summary: string): void;
-  drain(brainId: string): BusMessage[];
-  pending(brainId: string): number;
-}
-
 // ─── Brain interface ───
 
 export interface BrainInterface {
   id: string;
-  tick(): Promise<void>;
+  run(signal: AbortSignal): Promise<void>;
 }

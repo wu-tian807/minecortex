@@ -1,31 +1,35 @@
-/** @desc ConsciousBrain — 有 LLM 的意识脑: drain → prompt → LLM → tool loop */
+/** @desc ConsciousBrain — agentic_os style agent loop: wait → coalesce → drain → process */
 
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   BrainInterface,
-  BrainBusInterface,
   BrainJson,
-  NoticeQueueInterface,
-  Notice,
+  Event,
   ToolDefinition,
   LLMProviderInterface,
   LLMMessage,
   LLMToolCall,
   ToolContext,
 } from "./types.js";
+import { EventQueue } from "./event-queue.js";
 import { assemblePrompt } from "../context/context-engine.js";
 
 const ROOT = process.cwd();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 export class ConsciousBrain implements BrainInterface {
   readonly id: string;
   private model: string;
   private provider: LLMProviderInterface;
   private tools: ToolDefinition[];
-  private brainBus: BrainBusInterface;
+  private emitFn: (event: Event) => void;
   private brainConfig: BrainJson;
-  private noticeQueue: NoticeQueueInterface;
+  private eventQueue: EventQueue;
+  private coalesceMs: number;
   private sessionHistory: LLMMessage[] = [];
 
   constructor(opts: {
@@ -33,26 +37,52 @@ export class ConsciousBrain implements BrainInterface {
     model: string;
     provider: LLMProviderInterface;
     tools: ToolDefinition[];
-    brainBus: BrainBusInterface;
     brainConfig: BrainJson;
-    noticeQueue: NoticeQueueInterface;
+    eventQueue: EventQueue;
+    coalesceMs: number;
+    emit: (event: Event) => void;
   }) {
     this.id = opts.id;
     this.model = opts.model;
     this.provider = opts.provider;
     this.tools = opts.tools;
-    this.brainBus = opts.brainBus;
     this.brainConfig = opts.brainConfig;
-    this.noticeQueue = opts.noticeQueue;
+    this.eventQueue = opts.eventQueue;
+    this.coalesceMs = opts.coalesceMs;
+    this.emitFn = opts.emit;
   }
 
-  async tick(): Promise<void> {
-    const notices = this.noticeQueue.drain();
+  /** agentic_os style agent loop */
+  async run(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted) {
+      let trigger: Event;
+      try {
+        trigger = await this.eventQueue.waitForEvent(signal);
+      } catch {
+        break;
+      }
 
+      if ((trigger.priority ?? 1) > 0 && this.coalesceMs > 0) {
+        await sleep(this.coalesceMs);
+      }
+
+      const events = this.eventQueue.drain();
+      if (events.length === 0) continue;
+
+      console.log(`\n[${this.id}] ▶ process [${events.length} events]`);
+      try {
+        await this.process(events);
+      } catch (err) {
+        console.error(`[${this.id}] ✗ process failed:`, err);
+      }
+    }
+  }
+
+  private async process(events: Event[]): Promise<void> {
     const messages = await assemblePrompt({
       brainId: this.id,
       model: this.model,
-      notices,
+      events,
       tools: this.tools,
       sessionHistory: this.sessionHistory,
       brainConfig: this.brainConfig,
@@ -104,14 +134,14 @@ export class ConsciousBrain implements BrainInterface {
         const toolMsg: LLMMessage = {
           role: "tool",
           content: resultStr,
-          toolCallId: tc.name,
+          toolCallId: tc.id,
         };
         this.sessionHistory.push(toolMsg);
         currentMessages.push(toolMsg);
       }
     }
 
-    await this.updateState(notices);
+    await this.updateState(events);
 
     if (this.sessionHistory.length > 20) {
       this.sessionHistory = this.sessionHistory.slice(-14);
@@ -125,7 +155,7 @@ export class ConsciousBrain implements BrainInterface {
     }
     const ctx: ToolContext = {
       brainId: this.id,
-      brainBus: this.brainBus,
+      emit: this.emitFn,
       readState: async (targetId) => {
         try {
           const raw = await readFile(
@@ -145,7 +175,7 @@ export class ConsciousBrain implements BrainInterface {
     }
   }
 
-  private async updateState(notices: Notice[]): Promise<void> {
+  private async updateState(events: Event[]): Promise<void> {
     const statePath = join(ROOT, "brains", this.id, "state.json");
     let state: Record<string, unknown> = {};
     try {
@@ -153,8 +183,8 @@ export class ConsciousBrain implements BrainInterface {
     } catch { /* fresh state */ }
 
     state.lastTick = Date.now();
-    state.noticesProcessed = notices.length;
-    state.noticeKinds = notices.map((n) => n.kind);
+    state.eventsProcessed = events.length;
+    state.eventSources = [...new Set(events.map((e) => e.source))];
     state.sessionLength = this.sessionHistory.length;
 
     await writeFile(statePath, JSON.stringify(state, null, 2));

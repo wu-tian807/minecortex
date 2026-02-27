@@ -1,62 +1,33 @@
-/** @desc 脑间消息总线 — 对齐 agentic_os MessageBus (send/broadcast/drain/pending) */
+/** @desc 脑间消息路由 — Event 统一原语，内部处理点对点和广播路由 */
 
-import type { BrainBusInterface, BusMessage } from "./types.js";
+import type { Event } from "./types.js";
 
-export class BrainBus implements BrainBusInterface {
-  private queues = new Map<string, BusMessage[]>();
-  private onMessageCallbacks: Array<(msg: BusMessage) => void> = [];
+type RouteCallback = (brainId: string, event: Event) => void;
 
-  send(msg: BusMessage): void {
-    if (msg.to === "*") {
-      this.broadcastRaw(msg);
-    } else {
-      this.enqueue(msg.to, msg);
-    }
-    for (const cb of this.onMessageCallbacks) cb(msg);
-  }
+export class BrainBus {
+  private brainIds = new Set<string>();
+  private routeCallback: RouteCallback | null = null;
 
-  broadcast(from: string, content: string, summary: string): void {
-    const msg: BusMessage = { from, to: "*", content, summary, ts: Date.now() };
-    this.broadcastRaw(msg);
-    for (const cb of this.onMessageCallbacks) cb(msg);
-  }
-
-  drain(brainId: string): BusMessage[] {
-    const queue = this.queues.get(brainId);
-    if (!queue || queue.length === 0) return [];
-    const msgs = [...queue];
-    queue.length = 0;
-    return msgs;
-  }
-
-  pending(brainId: string): number {
-    return this.queues.get(brainId)?.length ?? 0;
-  }
-
-  /** Register a brain so it can receive broadcasts */
   register(brainId: string): void {
-    if (!this.queues.has(brainId)) {
-      this.queues.set(brainId, []);
-    }
+    this.brainIds.add(brainId);
   }
 
-  /** Subscribe to all messages (used by Scheduler to detect bus triggers) */
-  onMessage(cb: (msg: BusMessage) => void): void {
-    this.onMessageCallbacks.push(cb);
+  onRoute(cb: RouteCallback): void {
+    this.routeCallback = cb;
   }
 
-  private enqueue(brainId: string, msg: BusMessage): void {
-    if (!this.queues.has(brainId)) {
-      this.queues.set(brainId, []);
-    }
-    this.queues.get(brainId)!.push(msg);
-  }
-
-  private broadcastRaw(msg: BusMessage): void {
-    for (const [brainId, queue] of this.queues) {
-      if (brainId !== msg.from) {
-        queue.push({ ...msg, to: brainId });
+  /** Route an event to target brain(s) based on payload.to */
+  route(event: Event): void {
+    const to = (event.payload as any)?.to as string | undefined;
+    if (!to || to === "*") {
+      const from = event.source.startsWith("brain:") ? event.source.slice(6) : undefined;
+      for (const id of this.brainIds) {
+        if (id !== from) {
+          this.routeCallback?.(id, event);
+        }
       }
+    } else {
+      this.routeCallback?.(to, event);
     }
   }
 }

@@ -1,4 +1,4 @@
-/** @desc Scheduler — 扫描 brains/ 目录自动发现脑，WakePolicy 驱动调度 */
+/** @desc Scheduler — discover brains, wire EventSources, start agent loops */
 
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -6,30 +6,22 @@ import type {
   BrainInterface,
   BrainJson,
   MineclawConfig,
-  Notice,
   Event,
   EventSource,
-  WakePolicy,
-  ToolDefinition,
 } from "./types.js";
 import { BrainBus } from "./brain-bus.js";
-import { NoticeQueue } from "./notice-queue.js";
+import { EventQueue } from "./event-queue.js";
 import { ConsciousBrain } from "./brain.js";
 import { loadSubscriptions } from "../loaders/subscription-loader.js";
 import { loadTools } from "../loaders/tool-loader.js";
-import { loadWakePolicy } from "../loaders/wake-loader.js";
 import { createProvider } from "../llm/index.js";
 
 const ROOT = process.cwd();
 
 interface BrainSlot {
   brain: BrainInterface;
-  queue: NoticeQueue;
-  policy: WakePolicy;
-  busy: boolean;
-  wakeRequested: boolean;
-  heartbeatTimer?: ReturnType<typeof setInterval>;
-  coalesceTimer?: ReturnType<typeof setTimeout>;
+  queue: EventQueue;
+  abortController: AbortController;
 }
 
 export class Scheduler {
@@ -48,26 +40,20 @@ export class Scheduler {
       return;
     }
 
+    this.brainBus.onRoute((targetId, event) => {
+      this.slots.get(targetId)?.queue.push(event);
+    });
+
     for (const brainId of brainIds) {
       await this.initBrain(brainId, globalConfig);
     }
 
-    this.brainBus.onMessage((msg) => {
-      const targets =
-        msg.to === "*"
-          ? [...this.slots.keys()].filter((id) => id !== msg.from)
-          : [msg.to];
+    for (const [id, slot] of this.slots) {
+      slot.brain.run(slot.abortController.signal)
+        .catch(err => console.error(`[scheduler] brain '${id}' loop crashed:`, err));
+    }
 
-      for (const targetId of targets) {
-        this.pushNotice(targetId, {
-          kind: "bus",
-          message: msg,
-          ts: Date.now(),
-        });
-      }
-    });
-
-    console.log("[scheduler] 就绪，等待事件触发...\n");
+    console.log("[scheduler] 就绪，所有 brain loop 已启动\n");
   }
 
   private async discoverBrains(): Promise<string[]> {
@@ -91,18 +77,12 @@ export class Scheduler {
     this.brainBus.register(brainId);
 
     const brainConfig = await this.loadBrainConfig(brainId);
-    const policy = await loadWakePolicy(brainId);
-    const queue = new NoticeQueue();
+    const queue = new EventQueue();
+    const abortController = new AbortController();
 
     const sources = await loadSubscriptions(brainId, brainConfig);
     for (const source of sources) {
-      source.start((event: Event) => {
-        this.pushNotice(brainId, {
-          kind: "event",
-          event,
-          ts: Date.now(),
-        });
-      });
+      source.start((event: Event) => queue.push(event));
       this.activeSources.push(source);
     }
 
@@ -114,97 +94,36 @@ export class Scheduler {
       return;
     }
 
+    const brainBus = this.brainBus;
     const provider = createProvider(model, brainConfig);
     const brain = new ConsciousBrain({
       id: brainId,
       model,
       provider,
       tools,
-      brainBus: this.brainBus,
       brainConfig,
-      noticeQueue: queue,
+      eventQueue: queue,
+      coalesceMs: brainConfig.coalesceMs ?? 300,
+      emit(event: Event) {
+        const to = (event.payload as any)?.to as string | undefined;
+        if (to && to !== brainId) {
+          brainBus.route(event);
+        } else {
+          queue.push(event);
+        }
+      },
     });
 
-    const slot: BrainSlot = {
-      brain,
-      queue,
-      policy,
-      busy: false,
-      wakeRequested: false,
-    };
-    this.slots.set(brainId, slot);
-
-    if (policy.heartbeatMs && policy.heartbeatMs > 0) {
-      slot.heartbeatTimer = setInterval(() => {
-        this.wake(brainId);
-      }, policy.heartbeatMs);
-    }
+    this.slots.set(brainId, { brain, queue, abortController });
 
     console.log(
       `[scheduler] 脑区 '${brainId}' 就绪 (model: ${model}, tools: [${tools.map((t) => t.name).join(",")}])`,
     );
   }
 
-  private pushNotice(brainId: string, notice: Notice): void {
-    const slot = this.slots.get(brainId);
-    if (!slot) return;
-
-    slot.queue.push(notice);
-
-    const shouldWake = slot.policy.shouldWake(notice, {
-      pending: slot.queue.pending(),
-    });
-    if (!shouldWake) return;
-
-    const coalesceMs = slot.policy.coalesceMs;
-    if (coalesceMs && coalesceMs > 0) {
-      if (slot.coalesceTimer) return;
-      slot.coalesceTimer = setTimeout(() => {
-        slot.coalesceTimer = undefined;
-        this.wake(brainId);
-      }, coalesceMs);
-    } else {
-      this.wake(brainId);
-    }
-  }
-
-  private wake(brainId: string): void {
-    const slot = this.slots.get(brainId);
-    if (!slot) return;
-
-    if (slot.busy) {
-      slot.wakeRequested = true;
-      return;
-    }
-
-    this.runTick(brainId, slot);
-  }
-
-  private async runTick(brainId: string, slot: BrainSlot): Promise<void> {
-    slot.busy = true;
-    slot.wakeRequested = false;
-
-    const noticeCount = slot.queue.pending();
-    console.log(`\n[scheduler] ▶ ${brainId}.tick() [${noticeCount} notices]`);
-
-    try {
-      await slot.brain.tick();
-    } catch (err) {
-      console.error(`[scheduler] ✗ ${brainId}.tick() 失败:`, err);
-    }
-
-    slot.busy = false;
-
-    if (slot.wakeRequested || slot.queue.pending() > 0) {
-      slot.wakeRequested = false;
-      this.runTick(brainId, slot);
-    }
-  }
-
   async stop(): Promise<void> {
     for (const [, slot] of this.slots) {
-      if (slot.heartbeatTimer) clearInterval(slot.heartbeatTimer);
-      if (slot.coalesceTimer) clearTimeout(slot.coalesceTimer);
+      slot.abortController.abort();
     }
     for (const source of this.activeSources) {
       source.stop();
