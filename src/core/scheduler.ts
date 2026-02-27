@@ -18,7 +18,7 @@ import { ConsciousBrain } from "./brain.js";
 import { loadSubscriptions } from "../loaders/subscription-loader.js";
 import { loadTools } from "../loaders/tool-loader.js";
 import { loadWakePolicy } from "../loaders/wake-loader.js";
-import { createProvider } from "../llm/provider.js";
+import { createProvider } from "../llm/index.js";
 
 const ROOT = process.cwd();
 
@@ -114,7 +114,7 @@ export class Scheduler {
       return;
     }
 
-    const provider = await createProvider(model);
+    const provider = createProvider(model);
     const brain = new ConsciousBrain({
       id: brainId,
       model,

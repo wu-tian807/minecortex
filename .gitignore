@@ -2,7 +2,6 @@ node_modules/
 dist/
 key/
 logs/
-brains/*/sessions/
-brains/*/memory/
+brains/
 task-board.md
 *.tsbuildinfo

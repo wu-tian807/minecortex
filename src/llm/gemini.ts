@@ -133,6 +133,6 @@ function createGeminiProvider(opts: ProviderFactoryOpts): LLMProviderInterface {
   };
 }
 
-registerProvider("gemini", createGeminiProvider);
+registerProvider("google-generative-ai", createGeminiProvider);
 
 export { createGeminiProvider };
