@@ -1,0 +1,5041 @@
+user:
+<user_query>
+@mineclaw @mineclaw/docs/roadmap.md 调研下当前的mineclaw的框架本身和@mineclaw/docs/roadmap.md 未来的演进，对比@agentic_os ，描述当前框架如果实现了所有的roadmap的目标，能否补全其缺失的所有agent工具，并兼容skills
+其次看下roadmap实现后，是否能实现与agentic_os对应的功能
+</user_query>
+
+assistant:
+[Thinking] The user wants me to:
+1. Research the current mineclaw framework and its roadmap
+2. Compare it with agentic_os
+3. Determine if implementing all roadmap goals would fill in missing agent tools and be compatible with skills
+4. Check if the roadmap implementation would achieve functionality equivalent to agentic_os
+
+Let me start by reading the relevant files to understand both projects.
+我来全面调研 mineclaw 框架和 agentic_os，然后进行对比分析。
+[Tool call] TodoWrite
+  todos: [{"id":"1","content":"阅读 mineclaw 核心架构和源码","status":"in_progress"},{"id":"2","content":"阅读 mineclaw roadmap","status":"pending"},{"id":"3","content":"阅读 agentic_os 架构和源码","status":"pending"},{"id":"4","content":"对比分析并输出结论","status":"pending"}]
+  merge: false
+
+[Tool result] TodoWrite
+
+assistant:
+[Tool call] Task
+  description: 探索 mineclaw 框架全部源码
+  prompt: 请全面探索 /home/aw/Desktop/gamer/mineclaw 目录下的所有代码和配置文件，包括但不限于：
+1. 项目结构（目录树）
+2. 核心源码（src/ 下所有文件）
+3. 配置文件（brains/, key/, package.json, tsconfig.json 等）
+4. 文档（docs/ 下所有文件）
+
+请返回：
+- 完整的目录结构
+- 每个核心源码文件的完整内容摘要（包括类型定义、模块功能、导出接口）
+- 架构设计要点
+- 当前已实现的功能清单
+- 配置文件的结构和用途
+
+搜索深度：very thorough
+  subagent_type: explore
+[Tool call] Task
+  description: 探索 agentic_os 框架全部源码
+  prompt: 请全面探索 /home/aw/Desktop/gamer/agentic_os 目录下的所有代码和配置文件，包括但不限于：
+1. 项目结构（目录树）
+2. 核心源码（所有 .py, .ts, .js, .json 等文件）
+3. 配置文件
+4. 文档
+
+请返回：
+- 完整的目录结构
+- 每个核心源码文件的功能摘要
+- 架构设计要点
+- 当前已实现的功能清单（特别关注 agent 工具、skills 系统）
+- Agent 工具列表和 skills 系统的实现方式
+
+搜索深度：very thorough
+  subagent_type: explore
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+
+[Tool result] Task
+
+[Tool result] Task
+
+[Tool result] Read
+
+assistant:
+[Thinking] Now I have comprehensive information about both mineclaw and agentic_os. Let me also read the architecture deep dive for additional context.
+现在我已经获得了两个框架的全面信息。让我再读一下架构深度文档，然后进行系统性对比。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/architecture-deep-dive.md
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/AGENTIC.md
+
+[Tool result] Read
+
+[Tool result] Read
+
+assistant:
+[Thinking] Now I have a comprehensive understanding of both frameworks. Let me synthesize the comparison analysis.
+
+Key aspects to compare:
+
+1. **Core Architecture**
+2. **Agent Tools (30+ in agentic_os vs 2 in mineclaw)**
+3. **Skills System**
+4. **Session Management**
+5. **Context Management**
+6. **Multi-Agent / Sub-Agent**
+7. **MCP Integration**
+8. **Permission System**
+9. **Pipeline/Workflow**
+10. **Communication Channels**
+
+Let me now organize a thorough analysis.
+[Tool call] TodoWrite
+  todos: [{"id":"1","content":"阅读 mineclaw 核心架构和源码","status":"completed"},{"id":"2","content":"阅读 mineclaw roadmap","status":"completed"},{"id":"3","content":"阅读 agentic_os 架构和源码","status":"completed"},{"id":"4","content":"对比分析并输出结论","status":"in_progress"}]
+  merge: true
+
+[Tool result] TodoWrite
+
+assistant:
+好的，我已经完成了对两个框架的全面调研。下面是系统性的对比分析。
+
+---
+
+## MineClaw vs AgenticOS — 全面对比分析
+
+### 一、架构层面的核心差异
+
+两个框架虽然共享"目录即大脑"的哲学和 `while(tool_use)` 的 Agent Loop 范式，但定位截然不同：
+
+| 维度 | MineClaw | AgenticOS |
+|------|----------|-----------|
+| **定位** | Minecraft 游戏 AI 的"大脑侧"框架 | 通用编程 Agent / AGI 上下文管理框架 |
+| **多 Agent 模型** | 对等多脑自治（BrainBus 直接通信） | Supervisor 层级（lead → 匿名/有名 agent） |
+| **循环模型** | tick 制（做完就睡，事件驱动唤醒） | 持续对话 loop（用户交互驱动） |
+| **核心原语** | Slot（感知面）+ Tool（行动面） | 无统一原语，但功能更全面 |
+| **扩展方式** | 脑内目录覆盖全局（两层查找） | 工厂注册 + 多目录发现 |
+
+MineClaw 的架构更**优雅、极简**，用两个原语（Slot + Tool）统摄一切。AgenticOS 则更**实用、全面**，覆盖了编程 Agent 所需的全部工具链。
+
+---
+
+### 二、Agent 工具对比（核心差距所在）
+
+这是最大的差距。AgenticOS 拥有 **30+ 个成熟工具**，MineClaw 当前只有 **2 个**。
+
+#### 按类别对比：
+
+| 工具类别 | AgenticOS 工具 | MineClaw 当前 | Roadmap 后是否可补全 |
+|---------|---------------|--------------|-------------------|
+| **脑间通信** | `send_message`, `request_approval` | `send_message`, `read_state` | **部分** — 缺 `request_approval` 工具，但 AGENTIC.md 设计了审批协议，可用 BrainBus 消息实现 |
+| **文件操作** | `read_file`, `write_file`, `edit_file` | 无 | **不需要** — MineClaw 是游戏 AI，文件操作非核心需求；如需要可简单添加 |
+| **搜索/匹配** | `glob`, `grep` | 无 | **不需要** — 同上 |
+| **Shell 执行** | `bash` | 无 | **不需要** — 游戏 AI 不需要 Shell |
+| **任务管理** | `todo_write` | 无 | **可以** — Roadmap §4 的 Slot 化完成后，`todo_write` 只需写 `slot:todos`，轻量实现 |
+| **规划模式** | `enter_plan_mode` / `exit_plan_mode` | 无 | **可以但不同** — MineClaw 的 ScriptBrain（§6）+ HTN Planner 是"算法规划"而非"LLM 规划模式" |
+| **子 Agent** | `spawn_agent`, `agent_status`, `agent_kill` | 无 | **可以** — Roadmap §2 的 `spawn_thought` + architecture-deep-dive 已有完整设计，但比 AgenticOS 轻量（无持久化 teammate） |
+| **Skill 调用** | `skill`, `create_skill` | 无 | **可以** — Roadmap §5 明确计划 `read_skill` 工具 + Skill 加载器 |
+| **MCP 集成** | `tool_search`, `mcp_list_resources`, `mcp_read_resource` | 无 | **不在 Roadmap 中** — 需要额外工作 |
+| **网络工具** | `web_search`, `web_fetch` | 无 | **不在 Roadmap 中** — 游戏 AI 场景可能需要（查 wiki） |
+| **LSP** | `lsp`（跳转定义/引用/hover） | 无 | **不需要** — 游戏 AI 不写代码 |
+| **Notebook** | `notebook_edit` | 无 | **不需要** |
+| **Git** | `git_worktree` | 无 | **不需要**（但 evolve 模式下可能需要版本管理） |
+| **运行时切换** | `switch_persona`, `switch_session`, `switch_model` | 无 | **部分** — MineClaw 的 `soul.md` 热替换已设计（evolve 模式），但没有工具化；`switch_model` 未规划 |
+| **用户交互** | `ask_user` | 无（有 `stdin` 订阅） | **不同范式** — MineClaw 用事件订阅（stdin）而非工具化提问 |
+| **错题本** | `error_notebook` | 无 | **可以** — 对应 AGENTIC.md 的 `genes/` 基因库概念 |
+| **热重载** | `hot_reload` | 无 | **可以** — evolve 模式下自然需要，但未在 Roadmap 中 |
+| **休眠/等待** | `sleep` | 无（有 `heartbeat` 订阅） | **不同范式** — MineClaw 的 tick 制天然支持"做完就睡" |
+| **工作流** | `run_workflow` | 无 | **不在 Roadmap 中** — ScriptBrain 可替代部分需求 |
+
+---
+
+### 三、Skills 系统对比
+
+| 维度 | AgenticOS | MineClaw（Roadmap §5 完成后） |
+|------|-----------|---------------------------|
+| **加载机制** | 多目录发现（core > user），YAML frontmatter 解析 | 两层查找（脑内 > 全局），`.meta.json` 元数据 |
+| **注入方式** | 三层注入（system prompt 摘要 → skill 工具描述 → 按需全文） | 两层加载（system prompt 摘要 → `read_skill` 按需读取） |
+| **信任模型** | core（★）vs user（●），evolve 模式分权 | 脑内覆盖全局（类似 PATH） |
+| **脚本执行** | SkillExecutor 支持 ts/py/js 脚本 | **未规划** — Skill 定义为"知识单元"（BT 模板/策略/指南），不含脚本执行 |
+| **运行时创建** | `create_skill` 工具，热加载注册 | ReflectBrain 进化创建（审批制），Scheduler 重启后加载 |
+| **格式多样性** | 统一 SKILL.md + 可选脚本 | 多格式（.md/.json/.ts），更灵活但标准化更弱 |
+
+**结论：Roadmap §5 完成后，Skills 的基础功能可以对齐（发现 + 摘要 + 按需读取）。但 AgenticOS 的 SkillExecutor（脚本执行能力）和 `create_skill`（运行时创建）在 MineClaw 中没有直接对应。** 不过 MineClaw 的 evolve 模式 + ReflectBrain 提供了一种不同但更强大的进化机制——AI 可以自己创造和修改 Skill。
+
+---
+
+### 四、Roadmap 全部实现后的能力矩阵
+
+| AgenticOS 核心能力 | Roadmap 后 MineClaw 是否具备 | 说明 |
+|-------------------|--------------------------|------|
+| Agent Loop (`while tool_use`) | **已具备** | 架构一致 |
+| Session 持久化 + 三层压缩 | **§1 完成后具备** | 设计完全对齐 |
+| 多 Agent 通信 | **已具备**（BrainBus） | 对等模式 vs 层级模式，各有优势 |
+| 子 Agent 委托 | **§2 完成后部分具备** | `spawn_thought` 是轻量版，无独立 session |
+| 动态订阅管理 | **§3 完成后具备** | 对应 AgenticOS 的 TriggerQueue 配置 |
+| Slot 化 Prompt 组装 | **§4 完成后具备** | 比 AgenticOS 的硬编码注入点更灵活 |
+| Skills 系统 | **§5 完成后基础具备** | 缺脚本执行器和运行时创建 |
+| ScriptBrain（纯脚本脑） | **§6 完成后具备** | AgenticOS 没有对应概念（所有 agent 都走 LLM） |
+| 权限系统 | **已设计**（AGENTIC.md §7） | 未实现代码，但比 AgenticOS 更精细（per-brain 粒度） |
+| 上下文文件加载（AGENTIC.md/AGENTS.md） | **已具备**（指令系统） | 通过 Directive 实现 |
+| MCP 集成 | **未规划** | 需额外工作 |
+| Pipeline/Workflow 引擎 | **未规划** | ScriptBrain 可部分替代 |
+| 文件操作工具集 | **未规划** | 非核心需求，可按需添加 |
+| HTTP/CLI Channel | **部分**（stdin 订阅） | 缺 HTTP REST API + SSE |
+| Persona 热切换 | **已设计**（soul.md 热替换） | 未工具化 |
+| 看门狗守护进程 | **未规划** | 游戏场景不需要 |
+| 错题本/错误记忆 | **已设计**（genes/ 基因库） | 未实现 |
+
+---
+
+### 五、核心结论
+
+#### 1. Roadmap 实现后能否补全 AgenticOS 的所有 Agent 工具？
+
+**不能完全补全，也不需要。** 原因有三：
+
+- **定位不同**：MineClaw 是游戏 AI 框架，AgenticOS 是通用编程 Agent。约 40% 的 AgenticOS 工具（`read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`, `lsp`, `notebook_edit`, `git_worktree`）对游戏 AI 无意义。
+- **范式不同**：MineClaw 用"事件订阅"（stdin/heartbeat）替代了 AgenticOS 的"工具化交互"（`ask_user`/`sleep`）。用"对等多脑"替代了"Supervisor 层级"（`spawn_agent`/`agent_status`/`agent_kill`）。
+- **未规划的缺口**：MCP 集成、Pipeline/Workflow 引擎、HTTP Channel 三块在 Roadmap 中完全未涉及。如果未来要变成通用框架，这些需要额外规划。
+
+#### 2. Roadmap 实现后能否兼容 AgenticOS 的 Skills？
+
+**结构上可以兼容，但执行层不完整。**
+
+- MineClaw 的两层加载（摘要 + 按需读取）与 AgenticOS 的设计一致
+- MineClaw 的 Skill 可以读取 AgenticOS 格式的 `SKILL.md`（都是 Markdown + 元数据）
+- **但缺少 SkillExecutor**——AgenticOS 的 Skill 可以带 `scripts/run.ts` 脚本并执行，MineClaw 没有规划这个能力
+- **缺少 `create_skill`**——运行时创建 Skill 的能力未工具化（虽然 evolve 模式理论上可以）
+
+#### 3. Roadmap 实现后能否达到 AgenticOS 的对应功能？
+
+**在核心 Agent 循环层面可以对齐，但在工具生态和平台能力上有显著差距。**
+
+可以对齐的部分：
+- Agent Loop 核心循环（已对齐）
+- Session 管理 + 三层压缩（§1）
+- 多 Agent 通信和协作（已有 BrainBus，§2 补充子任务）
+- Prompt 组装的灵活性（§4 的 Slot 化甚至超越 AgenticOS）
+- Skills 基础能力（§5）
+- 权限系统（AGENTIC.md 已设计，更精细）
+
+MineClaw 独有优势：
+- **ScriptBrain**（§6）——AgenticOS 所有 agent 必须走 LLM，MineClaw 可以纯脚本（HTN/GOAP/BT），大幅降低 token 成本
+- **Slot + Tool 两原语**——比 AgenticOS 的硬编码注入点更优雅、可扩展
+- **对等多脑自治**——比 Supervisor 模式更灵活（每个脑有独立心跳、独立 model、独立订阅）
+- **evolve 进化模式**——AI 可以创造新脑、修改自身，这是 AgenticOS 的 `--evolve` 模式的超集
+
+无法对齐的差距：
+- **工具生态**：30+ vs 2（即使 Roadmap 全部完成也只增加 ~5 个）
+- **MCP 集成**：AgenticOS 有完整的 STDIO/SSE/HTTP 客户端 + 工具桥接
+- **Pipeline/Workflow**：AgenticOS 有 `defineStep()` DSL + PipelineMemory + 确定性编排
+- **通信渠道**：AgenticOS 有 CLI + HTTP REST API + SSE，MineClaw 只有 stdin
+- **看门狗/进程管理**：AgenticOS 有 watchdog + ProcessRegistry，MineClaw 没有
+
+---
+
+### 六、建议
+
+如果目标是让 MineClaw 在**游戏 AI 领域**成为完整框架，Roadmap 的 6 项已经足够。优先级建议保持不变：§4（Slot 化）→ §5（Skills）→ §1（Session）→ §6（ScriptBrain）→ §2/§3。
+
+如果目标是让 MineClaw 成为**通用 Agent 框架**并完全替代 AgenticOS，则需要在 Roadmap 之外补充：
+1. **MCP 集成**（复用 AgenticOS 的 `mcp/` 模块）
+2. **文件操作工具集**（`read_file`/`write_file`/`edit_file`/`glob`/`grep`）
+3. **Shell 执行工具**（`bash`）
+4. **HTTP Channel**（REST API + SSE）
+5. **SkillExecutor**（脚本执行能力）
+6. **Pipeline 引擎**（或让 ScriptBrain 承担确定性编排）
+[Tool call] TodoWrite
+  todos: [{"id":"4","content":"对比分析并输出结论","status":"completed"}]
+  merge: true
+
+[Tool result] TodoWrite
+
+assistant:
+总结一句话：**MineClaw 在架构层面比 AgenticOS 更优雅（Slot+Tool 两原语、对等多脑、ScriptBrain），但在工具生态和平台能力上差距显著。Roadmap 全部实现后可以补全核心 Agent 能力（Session、Skills、子任务、Slot 化 Prompt），但无法覆盖 AgenticOS 的全部工具集和 MCP/Pipeline/HTTP 等平台能力——这些需要额外规划，或者接受两者定位不同（游戏 AI vs 通用 Agent）的现实。**
+
+user:
+<user_query>
+并不会没有意义啊，怎么说呢，因为agent在玩游戏理论来说他也不是真的在玩游戏，而是在不断地管理自己能感知到的本地文件，然后通过编写brains和scripts来驱动自己游玩游戏，所以需要的基本工具还是有的。只不过范式上更是事件驱动的而已，其次是想对agenticOS中切换人格（可以理解为不同脑切换stdin的订阅），spawn_agent等操作进行进一步统一的抽象
+</user_query>
+
+assistant:
+[Thinking] The user is making an important point that I missed in my analysis. Let me reconsider:
+
+1. The MineClaw agent IS essentially managing local files - it writes brains, scripts, skills, state files, etc. So file operation tools (read_file, write_file, edit_file, glob, grep) ARE relevant and needed.
+
+2. The agent doesn't "play the game directly" - it manages its own brain directories, writes scripts, modifies configurations, etc. This is fundamentally similar to what agentic_os does (managing code/files).
+
+3. The user wants to think about how agentic_os concepts can be unified/abstracted in MineClaw's paradigm:
+   - `switch_persona` maps to switching which brain gets the stdin subscription (different brains = different personas)
+   - `spawn_agent` maps to creating a new brain directory or using spawn_thought
+   - Other operations should be abstracted into MineClaw's event-driven paradigm
+
+So the real insight is that MineClaw's agent needs file tools precisely because it's managing its own brain configurations, scripts, and state - and the user wants me to think about how agentic_os's operations can be unified within MineClaw's abstractions rather than treating them as separate paradigms.
+你说得对，我之前的分析有一个关键盲点。让我重新思考这个问题。
+
+MineClaw 的 Agent **本质上就是在管理本地文件系统**——它通过读写 `brains/`、`skills/`、`src/`、`state.json` 来驱动游戏，和 AgenticOS 管理代码仓库的模式是同构的。文件操作工具集绝非"无意义"。
+
+同时你提到的统一抽象非常关键——AgenticOS 的很多概念在 MineClaw 的事件驱动 + 多脑范式下其实有**更本质的表达**。让我重新展开分析。
+
+---
+
+## 重新认识：MineClaw Agent 的本质
+
+```
+AgenticOS Agent 做的事：读代码 → 理解 → 写代码 → 验证
+MineClaw Agent 做的事：读脑文件 → 理解 → 写脑文件/脚本 → 通过游戏验证
+
+两者的本质操作完全一致：管理本地文件系统
+```
+
+所以 MineClaw 的意识脑（尤其是 ReflectBrain、IntentBrain）**确实需要**完整的文件操作工具集。比如：
+
+- ReflectBrain 需要 `read_file` 读取失败日志、其他脑的 `src/` 代码
+- ReflectBrain 需要 `write_file` / `edit_file` 创建或修改 Skill、BT 模板
+- IntentBrain 需要 `read_file` 审阅 proposal 文件
+- 任何意识脑都可能需要 `glob` / `grep` 搜索 skills、genes、logs
+
+---
+
+## AgenticOS 操作到 MineClaw 原语的统一抽象
+
+这是更有意思的部分。AgenticOS 的很多独立机制，在 MineClaw 的多脑 + 事件驱动范式下可以用**更少的原语**统一表达：
+
+### 1. `switch_persona` → 切换 stdin 订阅
+
+AgenticOS 把 persona 切换做成一个运行时工具（替换 system prompt Layer 1）。但在 MineClaw 里，**每个 persona 本来就是一个独立的脑**，每个脑有自己的 `soul.md`。
+
+```
+AgenticOS:  一个 Agent + 多个 persona 文件 → switch_persona 工具热切换
+MineClaw:   多个 Brain（各自有 soul.md）→ 切换 stdin 订阅 = 切换"谁在说话"
+```
+
+这用 Roadmap §3 的 `manage_subscription` 工具就能统一：
+
+```typescript
+// "让 social 脑接管对话"
+manage_subscription({ action: "remove", name: "stdin" })           // 当前脑放弃 stdin
+manage_subscription({ action: "add", target: "social", name: "stdin" })  // social 脑接管
+```
+
+**不需要 `switch_persona` 工具**——切换 stdin 订阅就是切换人格。更好的是，MineClaw 的模式允许多个"人格"同时活跃（不同脑订阅不同事件源），AgenticOS 只能同时激活一个 persona。
+
+### 2. `spawn_agent` → 创建脑目录 + 启动
+
+AgenticOS 的 `spawn_agent` 有两种模式：
+
+| AgenticOS | MineClaw 统一抽象 |
+|-----------|-----------------|
+| **匿名 agent**（一次性子任务） | `spawn_thought` 工具（Roadmap §2，纯 Tool + BrainBus） |
+| **有名 teammate**（持久化 agent） | `create_brain` 工具 — 在 `brains/` 下创建目录 + brain.json + soul.md |
+
+对于有名 teammate，MineClaw 的方式更自然：
+
+```typescript
+// AgenticOS: spawn_agent({ name: "reviewer", task: "review this PR" })
+// MineClaw 等价操作:
+
+// 1. 写文件创建脑
+write_file("brains/reviewer/brain.json", { model: "gemini-2.5-flash", ... })
+write_file("brains/reviewer/soul.md", "你是代码审查专家...")
+write_file("brains/reviewer/state.json", { task: "review this PR" })
+
+// 2. Scheduler 热加载（或通过工具通知 Scheduler）
+manage_brain({ action: "start", id: "reviewer" })
+
+// 3. 通过 BrainBus 发送任务
+send_message({ to: "reviewer", content: "请审查这段代码..." })
+```
+
+**创建目录 = 长出新脑**——这是 MineClaw evolve 模式的核心理念，比 AgenticOS 的 `spawn_agent` 更强大（spawn 的 agent 是临时的，brain 是持久的）。
+
+### 3. `agent_status` / `agent_kill` → `manage_brain`
+
+```typescript
+// 统一为一个 manage_brain 工具
+manage_brain({ action: "list" })          // → 列出所有脑 + 状态
+manage_brain({ action: "status", id: "planner" })  // → 查看单个脑
+manage_brain({ action: "stop", id: "reviewer" })   // → 停止脑（保留目录）
+manage_brain({ action: "start", id: "reviewer" })  // → 启动脑
+manage_brain({ action: "remove", id: "reviewer" }) // → 删除脑目录
+```
+
+这直接对齐了 AGENTIC.md §7 的"自然选择"——ROI 低的脑休眠/删除。
+
+### 4. `switch_model` → 修改 `brain.json`
+
+```typescript
+// AgenticOS: switch_model("claude-4-sonnet")  ← 运行时替换当前 Agent 的 Provider
+// MineClaw: 直接编辑配置文件
+edit_file("brains/reflect/brain.json", { model: "claude-4-sonnet" })
+manage_brain({ action: "restart", id: "reflect" })
+```
+
+或者更优雅：让 `manage_brain` 支持 `update` action。
+
+### 5. `switch_session` → Session 文件管理
+
+MineClaw 的 Session 本来就在文件系统中（Roadmap §1 规划的 `brains/<id>/sessions/`），切换 session = 读取不同的 JSONL 文件：
+
+```typescript
+// 通过文件工具直接管理
+read_file("brains/social/sessions/")  // 列出所有 session
+// brain.json 或 state.json 中指定当前 session
+```
+
+---
+
+## 统一后的工具矩阵
+
+Roadmap 全部实现 + 补充文件操作后，MineClaw 需要的工具集：
+
+| 工具 | 来源 | 对应 AgenticOS |
+|------|------|--------------|
+| **文件操作** | | |
+| `read_file` | 需新增 | `read_file` |
+| `write_file` | 需新增 | `write_file` |
+| `edit_file` | 需新增 | `edit_file` |
+| `glob` | 需新增 | `glob` |
+| `grep` | 需新增 | `grep` |
+| `bash` | 需新增 | `bash` |
+| **脑管理**（统一抽象） | | |
+| `manage_brain` | 需新增 | `spawn_agent` + `agent_status` + `agent_kill` + `switch_persona` |
+| `manage_subscription` | Roadmap §3 | （AgenticOS 无对应） |
+| `spawn_thought` | Roadmap §2 | `spawn_agent`（匿名模式） |
+| **通信** | | |
+| `send_message` | 已有 | `send_message` |
+| `read_state` | 已有 | （AgenticOS 无对应，通过 file 读） |
+| **知识** | | |
+| `read_skill` | Roadmap §5 | `skill` |
+| `todo_write` | §4 后可做 | `todo_write` |
+| **上下文** | | |
+| `read_slot` / `write_slot` | Roadmap §4 | （AgenticOS 无对应，更灵活） |
+| `compact` | Roadmap §1 | `compact` |
+
+统计：约 **16 个工具**，通过更高层的抽象（`manage_brain` 统一了 AgenticOS 的 5 个工具），用更少的工具覆盖了更多的能力。
+
+---
+
+## 关键洞察：MineClaw 的抽象层次更高
+
+AgenticOS 因为是单 Agent + 子 Agent 的层级模式，需要为每个操作做独立工具：
+
+```
+switch_persona   — 改 system prompt 第一层
+switch_model     — 替换 Provider
+switch_session   — 加载历史上下文
+spawn_agent      — 创建子进程
+agent_status     — 查询子进程状态
+agent_kill       — 终止子进程
+```
+
+MineClaw 因为"目录即大脑"，这些操作都归结为**文件操作 + 脑管理**两个原语：
+
+```
+改 soul.md       = switch_persona
+改 brain.json    = switch_model
+改 sessions/     = switch_session
+创建 brains/x/   = spawn_agent
+读 state.json    = agent_status
+删目录/停心跳     = agent_kill
+```
+
+所以 MineClaw 真正需要补全的不是 AgenticOS 的 30 个工具，而是：
+
+1. **通用文件操作工具集**（6 个：read/write/edit/glob/grep/bash）—— 这是基础设施
+2. **`manage_brain` 工具**（1 个）—— 统一 spawn/status/kill/persona/model 切换
+3. **Roadmap 已规划的**（`manage_subscription`、`spawn_thought`、`read_skill`、`read_slot`/`write_slot`、`compact`）
+
+加上已有的 `send_message` + `read_state`，总共约 **16 个工具**，就能覆盖 AgenticOS 30+ 个工具的等价能力——因为 MineClaw 的抽象层次更高，"目录即大脑"让很多独立操作统一成了文件操作。
+
+---
+
+## 关于 Skills 兼容性
+
+既然 MineClaw Agent 本质上在管理文件系统，那 AgenticOS 的 Skills 格式（`SKILL.md` + 可选 `scripts/run.ts`）完全可以兼容：
+
+- `read_skill` 读取 `SKILL.md` → 格式一致，直接兼容
+- `scripts/run.ts` 执行 → MineClaw 有 `bash` 工具后，可以 `bash({ command: "npx tsx scripts/run.ts" })`，或专门做一个 SkillExecutor
+- `create_skill` → `write_file` + `mkdir` 即可
+
+**结论：补全文件操作工具 + `manage_brain` 后，MineClaw 可以用更少、更统一的原语实现 AgenticOS 的全部 Agent 能力，且 Skills 可以直接兼容。**
+
+user:
+<user_query>
+嗯嗯，把这种认知简单的补全到roadmap里，然后新增一个roadmap就是要补全当前缺失的工具。
+然后你再去平估一下state.json，我一直觉得这个东西有点乱，不知道他的职责是什么，模型当前会很主动的read_state，但是其实也读不到什么有用的信息，我甚至在想他和task_board(我改个名叫brain_board)，是不是重复了
+</user_query>
+
+assistant:
+[Thinking] The user wants me to:
+
+1. Update the roadmap with the new insights about tool unification and add a new roadmap item for missing tools
+2. Evaluate `state.json` - they feel it's messy, unclear in responsibility, and potentially overlapping with `task-board.md` (which they want to rename to `brain_board`)
+
+Let me first read the current state of relevant files to understand the state.json situation better.
+让我先深入看看 `state.json` 的实际使用情况，再一起更新 roadmap。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/brains/responder/state.json
+[Tool call] Grep
+  pattern: state\.json|state\b|readState|updateState|read_state
+  glob: *.ts
+  path: /home/aw/Desktop/gamer/mineclaw/src
+[Tool call] Grep
+  pattern: state\.json|state\b|readState|updateState|read_state
+  glob: *.ts
+  path: /home/aw/Desktop/gamer/mineclaw/tools
+
+[Tool result] Read
+
+[Tool result] Grep
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/brain.ts
+  offset: 140
+  limit: 55
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/context/context-engine.ts
+  offset: 40
+  limit: 65
+[Tool call] Glob
+  glob_pattern: brains/*/state.json
+  target_directory: /home/aw/Desktop/gamer/mineclaw
+
+[Tool result] Read
+
+[Tool result] Read
+
+[Tool result] Glob
+
+assistant:
+[Tool call] Glob
+  glob_pattern: **/state.json
+  target_directory: /home/aw/Desktop/gamer/mineclaw
+
+[Tool result] Glob
+
+assistant:
+[Tool call] Shell
+  command: find /home/aw/Desktop/gamer/mineclaw/brains -name "state.json" 2>/dev/null
+  description: 查找所有 state.json 文件
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/brains/listener/state.json
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/brains/responder/state.json
+
+[Tool result] Read
+
+[Tool result] Read
+
+assistant:
+[Thinking] Now I have a clear picture. Let me analyze the state.json situation:
+
+Current `state.json` contains:
+- `messagesForwarded`/`messagesHandled` — counter (set by LLM? or initial value?)
+- `lastTick` — timestamp, set by framework's `updateState()`
+- `lastTriggers` — what triggered this tick, but this is `eventSources` in code... wait, let me re-read
+- `sessionLength` — set by framework's `updateState()`
+- `noticesProcessed` — seems like it was set by something
+
+
+- `noticeKinds` — seems like it was set by something
+
+Looking at the `updateState()` implementation, the framework is actually writing `lastTick`, `eventsProcessed`, `eventSources`, and `sessionLength` to state. But the actual state.json file has completely different field names like `lastTriggers`, `noticesProcessed`, and `noticeKinds` — so either the code and files are out of sync, or there's something else populating these fields.
+
+Now I'm seeing the real issue: state.json is serving two conflicting purposes. The framework writes operational metadata like `lastTick` and `eventsProcessed` (what should appear on brain_board), while the LLM can also write semantic working memory fields like `messagesForwarded`. These two concerns are tangled together in one file, so when other brains read the state, they get a messy mix of framework stats and supposed working memory. The documentation describes state.json as working memory, but it's actually dominated by framework operational data.
+
+The solution is to separate these cleanly: `brain_board.md` becomes the framework-generated operational dashboard showing all brains' status (lastTick, eventsProcessed, sessionLength, model, etc.), while `state.json` becomes purely LLM-managed working memory for semantic state like goals and conversation context. I see the real issue now — state.json should only contain what each brain is actively thinking about, not operational metrics. The framework keeps polluting it with lastTick and eventsProcessed data when it should let the LLM decide what semantic state matters enough to persist. I need to separate concerns: brain_board handles all the operational tracking, while state.json becomes pure working memory that the LLM controls through explicit write operations.
+现在我完全理解问题了。让我分析一下 `state.json` 的现状。
+
+### state.json 的问题诊断
+
+当前 `updateState()` 框架自动写入的内容：
+
+```178:191:mineclaw/src/core/brain.ts
+  private async updateState(events: Event[]): Promise<void> {
+    const statePath = join(ROOT, "brains", this.id, "state.json");
+    let state: Record<string, unknown> = {};
+    try {
+      state = JSON.parse(await readFile(statePath, "utf-8"));
+    } catch { /* fresh state */ }
+
+    state.lastTick = Date.now();
+    state.eventsProcessed = events.length;
+    state.eventSources = [...new Set(events.map((e) => e.source))];
+    state.sessionLength = this.sessionHistory.length;
+
+    await writeFile(statePath, JSON.stringify(state, null, 2));
+  }
+```
+
+实际文件内容（listener）：
+
+```json
+{
+  "messagesForwarded": 0,
+  "lastTick": 1772185451421,
+  "lastTriggers": ["subscription"],
+  "sessionLength": 4,
+  "noticesProcessed": 1,
+  "noticeKinds": ["event"]
+}
+```
+
+问题一目了然——**state.json 里全是运营指标**（lastTick、eventsProcessed、sessionLength），没有任何语义信息。但 AGENTIC.md 设计的初衷是：
+
+> Intent | 当前意图、目标优先级队列、待审批提议列表
+> Social | 当前对话对象、最近交互摘要、关系状态
+
+一个文件被强行塞了两个职责，结果两个都没做好：模型 `read_state` 读到的全是时间戳和计数器，对理解"这个脑在想什么"毫无帮助。而这些运营指标本应属于 `brain_board`。
+
+**你的直觉是对的：state.json（当前实现）和 brain_board 确实重复了。**
+
+现在让我更新 roadmap，把这些认知都补进去。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+
+[Tool result] Read
+
+assistant:
+[Thinking] Now I need to:
+1. Analyze state.json vs brain_board overlap
+2. Update the roadmap with:
+   - New section about tool completion (file tools, manage_brain, etc.)
+   - Update about the unified abstraction insight (agenticOS operations → MineClaw primitives)
+   - New section or update about state.json cleanup + brain_board
+
+Let me write the updated roadmap. The key changes:
+
+1. Add a new section §7 about the tools gap - file operations + manage_brain unified abstraction
+2. Add a new section §8 (or fold into an existing one) about state.json redesign + brain_board
+
+
+3. Update the priority section
+
+I'm seeing the core issue now: state.json and brain_board are both trying to answer "what is the brain doing" but in different ways. The framework auto-writes operational metrics to state.json (lastTick, eventsProcessed, sessionLength) that the LLM never actually uses, while brain_board shows the operational status of all brains. The real solution is to make state.json pure LLM working memory where the framework stops writing those metrics, letting brain_board handle the operational tracking instead.
+
+But this opens up a bigger architectural question: should state.json even be a separate file, or could it just be a slot that the LLM writes to directly? And there's a dual-audience problem here — state.json needs to serve both the brain reading its own state into the system prompt each tick, and other brains that might want to read semantic state from it.
+
+A slot would work fine for the first use case, but files are better for cross-brain communication. So I'm settling on keeping state.json as a file that becomes LLM-owned semantic memory, while the framework handles operational data in brain_board.md instead. The LLM loads state.json into a slot on each process cycle and can update it via an update_state tool, while other brains read it through the read_state tool. For brain_board, I'm thinking a single auto-generated file that the framework maintains with all brains' operational status, readable by any brain and replacing the current scattered operational metrics.
+
+Now I'm drafting the roadmap update. I'll add two new sections: one clarifying the separation between state.json and brain_board responsibilities, and another for completing the missing general-purpose tools like file operations, brain management, and thought spawning.
+现在我对问题有完整的理解了。让我一次性更新 roadmap：新增 §7（state.json 与 brain_board 职责分离）和 §8（通用工具补全），并更新优先级。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: # MineClaw 路线图
+
+> 基于当前已完成的 agentic_os 风格 Agent Loop 架构，后续待做事项。
+
+---
+  new_string: # MineClaw 路线图
+
+> 基于当前已完成的 agentic_os 风格 Agent Loop 架构，后续待做事项。
+>
+> 核心认知：MineClaw Agent 的本质操作和 agentic_os 是同构的——都在管理本地文件系统。
+> Agent 不是"直接玩游戏"，而是通过读写 brains/、skills/、src/、state.json 来驱动游戏。
+> 因此 agentic_os 的大部分工具能力（文件操作、Shell、搜索）对 MineClaw 同样是刚需，
+> 只是驱动范式从"用户对话驱动"变成了"事件驱动"。
+>
+> agentic_os 的很多独立机制在 MineClaw 的多脑范式下有更统一的抽象：
+>
+> | agentic_os 操作 | MineClaw 统一抽象 |
+> |----------------|-----------------|
+> | `switch_persona` | 切换 stdin 订阅到另一个脑（每个脑 = 一个 persona） |
+> | `spawn_agent`（有名） | 创建 `brains/<id>/` 目录 + `manage_brain` 启动 |
+> | `spawn_agent`（匿名） | `spawn_thought` 工具（Tool + BrainBus） |
+> | `agent_status` / `agent_kill` | `manage_brain` list/status/stop |
+> | `switch_model` | 编辑 `brain.json` + 重启脑 |
+> | `switch_session` | Session 文件管理（§1） |
+
+---
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ## 优先级建议
+
+```
+§4 ContextSlot 化  ──→  §5 Skills 系统（依赖 slot）
+§6 ScriptBrain     ──→  独立，可并行
+§1 Session 管理    ──→  独立，可并行
+§2 工具发消息      ──→  基础已有，按需补充工具
+§3 动态订阅        ──→  独立，需 Scheduler 扩展
+```
+
+§4 是基础设施，§1/§5 依赖或受益于它，建议优先。§6 和 §2/§3 相对独立，可以穿插进行。
+  new_string: ## 7. state.json 与 brain_board 职责分离
+
+当前 `state.json` 存在严重的职责混乱：框架往里写运营指标（lastTick、eventsProcessed、sessionLength），
+LLM 读到的全是时间戳和计数器，对理解"这个脑在想什么"毫无帮助。
+
+AGENTIC.md 设计的 state.json 应该是脑的**语义状态**（当前意图、目标队列、对话摘要），
+而运营指标应该属于 `brain_board.md`（框架自动生成的全局看板）。
+
+### 问题根源
+
+```
+state.json 现在写的:        state.json 应该写的:
+─────────────────────       ─────────────────────
+lastTick: 1772185451421     currentGoal: "挖钻石"
+eventsProcessed: 3          conversationWith: "Steve"
+sessionLength: 4            pendingApprovals: [...]
+eventSources: ["stdin"]     recentInsight: "北方有村庄"
+```
+
+前者是 brain_board 的内容，后者才是"工作记忆"。
+
+### 需要做的
+
+- **framework 停止写 state.json**：`brain.ts` 的 `updateState()` 不再写入 lastTick 等运营指标
+- **state.json 由 LLM 拥有**：LLM 通过 agentic loop 的 tool call 或直接推理决定写什么
+  - 方式 A：process() 结束时让 LLM 选择性更新（在 system prompt 中加指令引导）
+  - 方式 B：提供 `update_state` 工具（更显式）
+  - 方式 C：future — Slot 化后通过 `writeSlot("state", ...)` 写入
+- **brain_board.md**（取代 task-board.md 概念）：框架自动生成的全局看板
+  ```markdown
+  # Brain Board
+  ## Active
+  - [▶ listener] model: gemini-2.5-flash | tick: 142 | session: 8 | subs: stdin
+  - [▶ responder] model: gemini-2.5-flash | tick: 89 | session: 4 | subs: (none)
+
+  ## Idle
+  - [⏸ planner] script brain | no events pending
+  ```
+- **brain_board 的数据来源**：Scheduler 维护运行时统计（Map<brainId, RuntimeStats>），
+  每次有脑 tick 结束后刷新文件。不经过 state.json。
+- **read_state 工具保留**：读另一个脑的 state.json — 但现在读到的是语义信息（有用了）
+- **brain_board 可通过 read_file 读取**：任何脑想看全局运营状况直接读文件
+
+### 涉及文件
+
+- `src/core/brain.ts` — 删除 `updateState()` 中的运营指标写入，改为 LLM 驱动
+- `src/core/scheduler.ts` — 新增 RuntimeStats 追踪 + brain_board.md 生成
+- `src/core/types.ts` — 新增 RuntimeStats 类型
+
+---
+
+## 8. 通用工具补全
+
+MineClaw Agent 的本质操作是管理本地文件系统（读写 brains/、skills/、src/ 来驱动游戏）。
+当前只有 2 个工具（send_message、read_state），需要补全基础工具集。
+
+### 认知基础
+
+agentic_os 有 30+ 工具，但 MineClaw 的多脑范式提供了更高的抽象层次：
+- agentic_os 的 `spawn_agent` + `agent_status` + `agent_kill` + `switch_persona` + `switch_model`
+  → MineClaw 用一个 `manage_brain` 统一
+- agentic_os 的 `switch_session` → Session 文件管理（§1）
+- agentic_os 的 `spawn_agent`（匿名模式）→ `spawn_thought`（§2）
+- agentic_os 的订阅/触发管理 → `manage_subscription`（§3）
+
+因此 MineClaw 用 ~16 个工具即可覆盖 agentic_os 30+ 工具的等价能力。
+
+### 需要补全的工具
+
+#### 8.1 文件操作（6 个）— 基础设施
+
+| 工具 | 对齐 agentic_os | 用途 |
+|------|---------------|------|
+| `read_file` | `read_file` | 读取任意文件（soul.md、skill 内容、日志、其他脑的代码） |
+| `write_file` | `write_file` | 创建/覆写文件（创建脑目录结构、写 skill、写 proposal） |
+| `edit_file` | `edit_file` | 字符串替换编辑（修改 brain.json、微调 soul.md、改 BT 模板） |
+| `glob` | `glob` | 文件模式匹配（发现 skills、搜索 brains/、扫描日志） |
+| `grep` | `grep` | 内容搜索（搜索日志中的错误、查找 skill 关键词） |
+| `bash` | `bash` | Shell 命令执行（运行脚本、查看进程、git 操作） |
+
+实现参考：可直接复用 agentic_os 的 `src/tools/` 实现，适配 MineClaw 的 ToolDefinition 接口。
+权限控制：结合 AGENTIC.md §7 的权限矩阵（默认模式 vs evolve 模式）。
+
+#### 8.2 脑管理（1 个）— 统一抽象
+
+**`manage_brain` 工具**：统一 agentic_os 的 spawn/status/kill/persona/model 五个操作。
+
+```
+manage_brain({ action: "list" })
+→ 列出所有脑 + 运行状态（从 Scheduler 运行时数据读取）
+
+manage_brain({ action: "status", id: "planner" })
+→ 单个脑详情（model、tick 数、session 长度、订阅列表）
+
+manage_brain({ action: "start", id: "reviewer" })
+→ 热启动一个脑（Scheduler 动态加载 brains/<id>/）
+
+manage_brain({ action: "stop", id: "reviewer" })
+→ 停止脑（保留目录，可恢复）
+
+manage_brain({ action: "restart", id: "reflect" })
+→ 重启脑（配置变更后生效）
+```
+
+创建新脑不需要专门 action — 用 `write_file` 创建 `brains/<id>/brain.json` + `soul.md` + `state.json`，
+然后 `manage_brain({ action: "start" })` 启动。**创建目录 = 长出新脑**。
+
+#### 8.3 子任务（1 个）— 已在 §2 规划
+
+`spawn_thought` — 见 §2 + architecture-deep-dive.md §3。
+
+#### 8.4 待定工具
+
+| 工具 | 优先级 | 说明 |
+|------|-------|------|
+| `todo_write` | §4 后 | 写入 `slot:todos`，需要 Slot 化完成 |
+| `update_state` | §7 同步 | 显式更新 state.json 的语义内容（或复用 write_file） |
+| `compact` | §1 同步 | 手动触发上下文压缩 |
+| `web_search` / `web_fetch` | 低 | 查 Minecraft Wiki 等，按需添加 |
+
+### 涉及文件
+
+- 新建 `tools/read_file.ts`
+- 新建 `tools/write_file.ts`
+- 新建 `tools/edit_file.ts`
+- 新建 `tools/glob.ts`
+- 新建 `tools/grep.ts`
+- 新建 `tools/bash.ts`
+- 新建 `tools/manage_brain.ts`
+- `src/core/scheduler.ts` — 暴露动态启动/停止脑的接口
+- `src/core/types.ts` — ToolContext 扩展（scheduler 引用）
+
+---
+
+## 优先级建议
+
+```
+§7 state.json 职责分离 ──→  基础认知修正，尽早做
+§8 通用工具补全        ──→  基础设施，解锁 Agent 自主文件管理能力
+§4 ContextSlot 化      ──→  §5 Skills 系统（依赖 slot）
+§6 ScriptBrain         ──→  独立，可并行
+§1 Session 管理        ──→  独立，可并行
+§2 工具发消息          ──→  基础已有，按需补充 spawn_thought
+§3 动态订阅            ──→  独立，需 Scheduler 扩展
+```
+
+建议执行顺序：
+
+1. **§7 + §8.1**（state.json 清理 + 文件操作工具）— 最紧急，修正当前设计问题 + 解锁基础能力
+2. **§8.2**（manage_brain）— 解锁多脑动态管理
+3. **§4**（Slot 化）— 基础设施，为 §5 铺路
+4. **§1 / §5 / §6**（Session / Skills / ScriptBrain）— 可并行推进
+5. **§2 / §3**（spawn_thought / 动态订阅）— 按需补充
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] ReadLints
+  paths: ["/home/aw/Desktop/gamer/mineclaw/docs/roadmap.md"]
+
+[Tool result] ReadLints
+
+assistant:
+现在让我确认最终文件是完整的。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: -50
+
+[Tool result] Read
+
+assistant:
+好，roadmap 已更新完毕。现在来回答关于 `state.json` 的分析。
+
+---
+
+## state.json 的问题剖析
+
+当前 `state.json` 的实际内容（responder 脑为例）：
+
+```json
+{
+  "messagesHandled": 0,
+  "lastTick": 1772177942965,
+  "lastTriggers": ["bus"],
+  "sessionLength": 4,
+  "noticesProcessed": 1,
+  "noticeKinds": ["bus"]
+}
+```
+
+对应 `brain.ts` 里 `updateState()` 的写入逻辑：
+
+```178:191:mineclaw/src/core/brain.ts
+  private async updateState(events: Event[]): Promise<void> {
+    const statePath = join(ROOT, "brains", this.id, "state.json");
+    // ...
+    state.lastTick = Date.now();
+    state.eventsProcessed = events.length;
+    state.eventSources = [...new Set(events.map((e) => e.source))];
+    state.sessionLength = this.sessionHistory.length;
+    await writeFile(statePath, JSON.stringify(state, null, 2));
+  }
+```
+
+然后 `context-engine.ts` 把它原封不动塞进 system prompt：
+
+```100:100:mineclaw/src/context/context-engine.ts
+    `## 当前状态\n\`\`\`json\n${JSON.stringify(state, null, 2)}\n\`\`\``,
+```
+
+**问题链条**：
+1. 框架往 state.json 写了一堆运营指标（lastTick、eventsProcessed...）
+2. context-engine 把这些指标注入 system prompt → LLM 看到一堆数字
+3. LLM 觉得"应该了解其他脑的状态" → 主动调 `read_state`
+4. 读到的还是一堆时间戳和计数器 → 浪费 token，毫无决策价值
+
+**和 brain_board 的重叠**：完全重叠。当前 state.json 里存的所有信息（lastTick、eventsProcessed、sessionLength）正是 brain_board 应该展示的运营数据。它们是**同一份数据的两种呈现**。
+
+### 职责分离方案
+
+分离后的职责边界：
+
+| | state.json（LLM 工作记忆） | brain_board.md（框架运营看板） |
+|---|---|---|
+| **谁写** | LLM 自己决定写什么 | 框架 Scheduler 自动生成 |
+| **内容** | 语义信息（目标、上下文、摘要） | 运营指标（tick 数、model、订阅、session 长度） |
+| **粒度** | 单脑 | 全局（所有脑） |
+| **谁读** | 自己（system prompt）+ 其他脑（read_state） | 任何脑（read_file） |
+| **例子** | `{ currentGoal: "挖钻石", insight: "北方有村庄" }` | `[▶ listener] tick:142 \| model:flash \| subs:stdin` |
+
+分离后，`read_state` 读另一个脑时能得到真正有用的信息——"这个脑在想什么、在做什么"，而不是"它上次 tick 是几点"。
+
+user:
+<user_query>
+是的，然后agent的进度是通过slots中的一个特别的位置通过工具去订阅的，这个可以理解把，比如一个agent给另一个brain发送了任务，那他的system_prompt对应的slots就能感知到这个部分的内容
+</user_query>
+
+assistant:
+[Thinking] The user is describing a design where:
+
+1. When brain A sends a task to brain B, brain A's system prompt (via a Slot) should be able to track/perceive the progress of that task
+2. This is done through a specific slot that can be "subscribed to" via a tool
+3. So brain A can see something like "brain B is working on task X, status: in progress" in its system prompt without having to actively poll
+
+This is essentially the `brain_board` concept but made more targeted - instead of seeing ALL brains' status, a brain subscribes to specific brains/tasks it cares about. This maps to:
+- agentic_os's `<running_agents>` injection in system prompt
+
+
+- The `slot:active_thoughts` concept from the architecture docs
+
+So the mechanism would be: when brain A delegates work via `send_message` or `spawn_thought`, a tool automatically writes to a tracked slot, and each tick brain A sees the current status of those delegated tasks in its system prompt. When brain B completes and sends results back through BrainBus, the slot updates with the completion status and result summary.
+
+Now I'm realizing the user means `brain_board` shouldn't be a manual file read—it should be a Slot that's subscription-based through tools. When you send a task to another brain, your system prompt automatically reflects that task's status via the slot. Each brain only sees tasks relevant to it, and the subscription happens automatically when you use `send_message` or through explicit subscription. This perfectly fits the Slot+Tool pattern where the slot holds the board state and tools manage the subscriptions.
+完全理解。你说的是 `brain_board` 不应该只是一个被动的文件，而是作为 Slot 系统中的一个位置，通过工具建立订阅关系后，自动出现在 system prompt 里。
+
+核心流程：
+
+```
+1. Brain A 通过 send_message 给 Brain B 发任务
+2. 框架自动在 Brain A 的 slot:brain_board 中注册一条追踪
+3. Brain A 每次 tick 时，system prompt 中自然能看到：
+
+   ## Brain Board
+   - [▶ planner] 任务: "分解挖钻石目标" | 状态: 执行中 | tick: 3
+   - [✓ reflect] 任务: "诊断上次失败" | 状态: 完成 | 结果摘要: "铁镐耐久不足"
+
+4. Brain B 完成后通过 BrainBus 回传结果 → 框架更新 slot 内容
+5. Brain A 下次 tick 就看到状态变化，无需主动 read_state
+```
+
+这样每个脑看到的是**它关心的视角**（它发出的任务、它订阅的脑），而不是全局运营数据。让我把这个认知更新到 roadmap 的 §7 里。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 257
+  limit: 80
+
+[Tool result] Read
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ## 7. state.json 与 brain_board 职责分离
+
+当前 `state.json` 存在严重的职责混乱：框架往里写运营指标（lastTick、eventsProcessed、sessionLength），
+LLM 读到的全是时间戳和计数器，对理解"这个脑在想什么"毫无帮助。
+
+AGENTIC.md 设计的 state.json 应该是脑的**语义状态**（当前意图、目标队列、对话摘要），
+而运营指标应该属于 `brain_board.md`（框架自动生成的全局看板）。
+
+### 问题根源
+
+```
+state.json 现在写的:        state.json 应该写的:
+─────────────────────       ─────────────────────
+lastTick: 1772185451421     currentGoal: "挖钻石"
+eventsProcessed: 3          conversationWith: "Steve"
+sessionLength: 4            pendingApprovals: [...]
+eventSources: ["stdin"]     recentInsight: "北方有村庄"
+```
+
+前者是 brain_board 的内容，后者才是"工作记忆"。
+
+### 需要做的
+
+- **framework 停止写 state.json**：`brain.ts` 的 `updateState()` 不再写入 lastTick 等运营指标
+- **state.json 由 LLM 拥有**：LLM 通过 agentic loop 的 tool call 或直接推理决定写什么
+  - 方式 A：process() 结束时让 LLM 选择性更新（在 system prompt 中加指令引导）
+  - 方式 B：提供 `update_state` 工具（更显式）
+  - 方式 C：future — Slot 化后通过 `writeSlot("state", ...)` 写入
+- **brain_board.md**（取代 task-board.md 概念）：框架自动生成的全局看板
+  ```markdown
+  # Brain Board
+  ## Active
+  - [▶ listener] model: gemini-2.5-flash | tick: 142 | session: 8 | subs: stdin
+  - [▶ responder] model: gemini-2.5-flash | tick: 89 | session: 4 | subs: (none)
+
+  ## Idle
+  - [⏸ planner] script brain | no events pending
+  ```
+- **brain_board 的数据来源**：Scheduler 维护运行时统计（Map<brainId, RuntimeStats>），
+  每次有脑 tick 结束后刷新文件。不经过 state.json。
+- **read_state 工具保留**：读另一个脑的 state.json — 但现在读到的是语义信息（有用了）
+- **brain_board 可通过 read_file 读取**：任何脑想看全局运营状况直接读文件
+
+### 涉及文件
+
+- `src/core/brain.ts` — 删除 `updateState()` 中的运营指标写入，改为 LLM 驱动
+- `src/core/scheduler.ts` — 新增 RuntimeStats 追踪 + brain_board.md 生成
+- `src/core/types.ts` — 新增 RuntimeStats 类型
+  new_string: ## 7. state.json 与 brain_board 职责分离
+
+当前 `state.json` 存在严重的职责混乱：框架往里写运营指标（lastTick、eventsProcessed、sessionLength），
+LLM 读到的全是时间戳和计数器，对理解"这个脑在想什么"毫无帮助。
+
+AGENTIC.md 设计的 state.json 应该是脑的**语义状态**（当前意图、目标队列、对话摘要），
+而运营指标应该属于 `brain_board`（Slot 化的任务追踪面板）。
+
+### 问题根源
+
+```
+state.json 现在写的:        state.json 应该写的:
+─────────────────────       ─────────────────────
+lastTick: 1772185451421     currentGoal: "挖钻石"
+eventsProcessed: 3          conversationWith: "Steve"
+sessionLength: 4            pendingApprovals: [...]
+eventSources: ["stdin"]     recentInsight: "北方有村庄"
+```
+
+前者是 brain_board 的内容，后者才是"工作记忆"。
+
+### 需要做的
+
+#### 7.1 framework 停止写 state.json
+
+`brain.ts` 的 `updateState()` 不再写入 lastTick 等运营指标。
+state.json 完全由 LLM 拥有——LLM 通过 agentic loop 决定记忆什么。
+
+#### 7.2 brain_board 作为 Slot
+
+brain_board **不是一个被动的文件**，而是每个脑 system prompt 中的一个 Slot（`slot:brain_board`）。
+每个脑看到的是**它关心的视角**——它委派的任务、它订阅的脑，而非全局运营数据。
+
+**订阅机制**：当工具产生跨脑关联时，框架自动建立追踪：
+
+```
+1. Brain A 调用 send_message({ to: "planner", content: "分解挖钻石目标" })
+   → 框架检测到这是一个任务委派
+   → 自动在 Brain A 的 slot:brain_board 中注册追踪条目
+
+2. Brain A 的下次 tick，system prompt 中自然看到:
+
+   ## Brain Board
+   - [▶ planner] 任务: "分解挖钻石目标" | 状态: 执行中 | tick: 3
+
+3. Planner 完成后通过 BrainBus 回传结果
+   → 框架更新 Brain A 的 slot:brain_board
+
+4. Brain A 再次 tick 时看到:
+
+   ## Brain Board
+   - [✓ planner] 任务: "分解挖钻石目标" | 完成 | 结果: "分解为3个子目标..."
+```
+
+同样，`spawn_thought` 产生的后台子任务也自动进入 slot:brain_board。
+
+**与 Slot 系统的关系**：
+
+```
+slot "brain_board"   order: 25   source: framework
+  ↑ 写入者: 框架（跨脑消息时自动注册追踪）
+  ↑ 读取者: LLM（每次 tick 的 system prompt）
+  ↑ 清理: 已完成任务在 N 个 tick 后自动移除
+```
+
+依赖 §4 ContextSlot 化完成后实现。在 §4 之前，可以用简化版：
+框架维护 per-brain 的 tracked tasks 列表，在 assemblePrompt 时渲染到 system prompt。
+
+#### 7.3 read_state 工具的语义升级
+
+state.json 清理后，`read_state` 读到的变成真正有用的语义信息：
+
+```
+read_state({ brain_id: "intent" })
+→ { currentGoal: "获取钻石装备", priority: "high", pendingApprovals: ["reflect-proposal-003"] }
+```
+
+模型不再需要无意义地 read_state 然后看到一堆时间戳。
+
+#### 7.4 全局视图（可选）
+
+如果某个脑需要看全局运营概况（比如 IntentBrain 做 ROI 审计），
+通过 `manage_brain({ action: "list" })` 获取全部脑的运行时状态，
+不需要单独的全局 brain_board 文件。
+
+### 涉及文件
+
+- `src/core/brain.ts` — 删除 `updateState()` 中的运营指标写入，改为 LLM 驱动
+- `src/core/brain.ts` — 新增 per-brain tracked tasks 列表（或等 §4 后用 SlotRegistry）
+- `src/core/scheduler.ts` — 新增 RuntimeStats 追踪（给 manage_brain list 用）
+- `src/core/types.ts` — 新增 TrackedTask 类型
+- `src/context/context-engine.ts` — assemblePrompt 渲染 brain_board 区域（§4 前的简化版）
+- `tools/send_message.ts` — 发送任务时注册追踪条目
+
+[Tool result] StrReplace
+
+assistant:
+现在更新 §4 的 Slot 表，把 brain_board 加进去，并更新优先级部分。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ```
+slot "soul"                  order: 0     source: file       ← soul.md
+slot "runtime"               order: 10    source: framework  ← 自动生成
+slot "state"                 order: 20    source: framework  ← state.json
+slot "tools"                 order: 30    source: loader     ← tool-loader
+slot "directive:identity"    order: 40    source: file       ← identity.ts + .md
+slot "directive:tool-usage"  order: 41    source: file       ← condition: hasTools
+slot "directive:brain-comm"  order: 42    source: file       ← condition: hasTools
+slot "skills"                order: 50    source: loader     ← skill-loader
+slot "todos"                 order: 60    source: tool       ← 工具可写
+slot "world"                 order: 70    source: framework  ← MineAvatar 推送
+```
+  new_string: ```
+slot "soul"                  order: 0     source: file       ← soul.md
+slot "runtime"               order: 10    source: framework  ← 自动生成
+slot "state"                 order: 20    source: llm        ← state.json（LLM 拥有的语义记忆）
+slot "brain_board"           order: 25    source: framework  ← 跨脑任务追踪（自动订阅）
+slot "tools"                 order: 30    source: loader     ← tool-loader
+slot "directive:identity"    order: 40    source: file       ← identity.ts + .md
+slot "directive:tool-usage"  order: 41    source: file       ← condition: hasTools
+slot "directive:brain-comm"  order: 42    source: file       ← condition: hasTools
+slot "skills"                order: 50    source: loader     ← skill-loader
+slot "todos"                 order: 60    source: tool       ← 工具可写
+slot "world"                 order: 70    source: framework  ← MineAvatar 推送
+```
+
+[Tool result] StrReplace
+
+assistant:
+现在更新优先级部分，反映 §7 对 §4 的依赖关系。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ## 优先级建议
+
+```
+§7 state.json 职责分离 ──→  基础认知修正，尽早做
+§8 通用工具补全        ──→  基础设施，解锁 Agent 自主文件管理能力
+§4 ContextSlot 化      ──→  §5 Skills 系统（依赖 slot）
+§6 ScriptBrain         ──→  独立，可并行
+§1 Session 管理        ──→  独立，可并行
+§2 工具发消息          ──→  基础已有，按需补充 spawn_thought
+§3 动态订阅            ──→  独立，需 Scheduler 扩展
+```
+
+建议执行顺序：
+
+1. **§7 + §8.1**（state.json 清理 + 文件操作工具）— 最紧急，修正当前设计问题 + 解锁基础能力
+2. **§8.2**（manage_brain）— 解锁多脑动态管理
+3. **§4**（Slot 化）— 基础设施，为 §5 铺路
+4. **§1 / §5 / §6**（Session / Skills / ScriptBrain）— 可并行推进
+5. **§2 / §3**（spawn_thought / 动态订阅）— 按需补充
+  new_string: ## 优先级建议
+
+```
+§8 通用工具补全        ──→  基础设施，解锁 Agent 自主文件管理能力
+§7a state.json 清理    ──→  可先做简化版（停止框架写运营指标）
+§4 ContextSlot 化      ──→  §5 Skills（依赖 slot）
+                       ──→  §7b brain_board slot（依赖 slot）
+§6 ScriptBrain         ──→  独立，可并行
+§1 Session 管理        ──→  独立，可并行
+§2 工具发消息          ──→  基础已有，按需补充 spawn_thought
+§3 动态订阅            ──→  独立，需 Scheduler 扩展
+```
+
+建议执行顺序：
+
+1. **§8.1 + §7a**（文件操作工具 + state.json 停止写运营指标）— 最紧急
+2. **§8.2**（manage_brain）— 解锁多脑动态管理
+3. **§4**（Slot 化）— 核心基础设施，解锁 brain_board slot、skills slot、todos slot
+4. **§7b**（brain_board 作为 Slot）— §4 完成后，跨脑任务追踪自动注入 system prompt
+5. **§1 / §5 / §6**（Session / Skills / ScriptBrain）— 可并行推进
+6. **§2 / §3**（spawn_thought / 动态订阅）— 按需补充
+
+[Tool result] StrReplace
+
+assistant:
+更新完毕。总结一下 brain_board 设计的核心思路：
+
+**brain_board 是一个 Slot，不是一个文件。** 区别在于：
+
+- **文件方式**（之前的设计）：框架生成一个全局 `brain_board.md`，脑需要主动 `read_file` 去看 → 被动、浪费 tool call
+- **Slot 方式**（现在的设计）：每个脑的 system prompt 中有 `slot:brain_board`，框架在跨脑交互时自动注册追踪 → 被动感知、零成本
+
+关键机制是**自动订阅**：当 `send_message` 或 `spawn_thought` 产生跨脑关联时，框架自动在发起方的 `slot:brain_board` 中写入追踪条目。脑不需要主动查询——它的 system prompt 里自然就有"我委派了哪些任务、它们现在什么状态"。这和 agentic_os 的 `<running_agents>` 注入是同一个思路，但通过 Slot 系统实现得更通用、更可扩展。
+
+user:
+<user_query>
+对，你可以继续完善下slots系统，保证它能足够的灵活，可组合可拓展和运行时组合的能力。然后再给rpadmap较前面的位置加一个fs-watcher的需求，我们这个系统有很强的热更新需求
+</user_query>
+
+assistant:
+[Thinking] The user wants me to:
+
+1. Further refine the Slots system (§4) to ensure it's flexible, composable, extensible, and supports runtime composition
+2. Add a new roadmap item for fs-watcher (file system watcher) near the front of the roadmap, since the system has strong hot-reload requirements
+
+Let me think about the Slots system more deeply first:
+
+Current design in §4 is a basic SlotRegistry with filter → sort → join. But for real flexibility, composability, and runtime dynamism, we need more:
+
+**Flexibility needs:**
+- Slots should support different content types (markdown, JSON rendered, dynamic functions)
+
+
+- Slots need to be nestable so they can reference or include other slots, and support partial updates rather than full rewrites each time
+
+**Runtime composition needs:**
+- Tools can add/remove/update slots at runtime
+- Slots can be conditionally rendered based on runtime state
+- Slot ordering can be adjusted dynamically
+- Slots from different sources (framework, tools, loaders, events) coexist
+
+**Composability needs:**
+- Multiple writers can contribute to the same logical slot (e.g., brain_board has entries from multiple sources)
+- Slots can have sub-slots or sections
+- Slot content can be templated or composed from multiple fragments
+
+**Hot-reload / fs-watcher needs:**
+The framework needs to watch for file changes in brains/, skills/, tools/, directives/ and reload them automatically, which enables evolve mode where ReflectBrain writes files and sees changes take effect immediately—soul.md updates trigger the soul slot, brain.json changes reconfigure the scheduler, and changes to skills/, tools/, or src/ trigger their respective loaders to rescan.
+让我先重新审视当前 §4 的设计，然后做全面增强。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 93
+  limit: 60
+
+[Tool result] Read
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 1
+  limit: 30
+
+[Tool result] Read
+
+assistant:
+现在让我也看一下完整的优先级部分。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 435
+
+[Tool result] Read
+
+assistant:
+好，现在我对全貌有清晰认识了。要做两件事：
+
+1. 全面增强 §4 Slot 系统——确保灵活、可组合、可扩展、运行时动态
+2. 在靠前位置新增 fs-watcher 需求
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ---
+
+## 1. Session 管理
+  new_string: ---
+
+## 0. 文件系统监听 (fs-watcher)
+
+MineClaw 的核心哲学是"目录即大脑"——所有状态都在文件系统中。
+evolve 模式下脑可以修改自身（soul.md、brain.json、skills/、src/），
+文件操作工具也会频繁读写 brains/ 目录。这些变更必须**实时生效**，不能靠重启。
+
+### 需求来源
+
+| 场景 | 变更的文件 | 期望行为 |
+|------|----------|---------|
+| ReflectBrain 修改 soul.md | `brains/reflect/soul.md` | 下次 tick slot:soul 自动用新内容 |
+| 通过 edit_file 改 brain.json | `brains/social/brain.json` | Scheduler 感知配置变化，可能需要重启脑 |
+| 创建新脑目录 | `brains/explorer/` | Scheduler 自动发现并启动 |
+| 新增/修改 Skill | `skills/mine_diamond.md` | skill-loader 重新扫描，slot:skills 更新 |
+| 新增/修改 Tool | `tools/navigate.ts` | tool-loader 重新扫描，脑下次 tick 可用新工具 |
+| 新增/修改 Directive | `directives/safety.md` | directive-loader 重新扫描 |
+| 修改 ScriptBrain 代码 | `brains/planner/src/index.ts` | ScriptBrain 重新加载脚本入口 |
+| 删除脑目录 | `brains/explorer/` (rm -rf) | Scheduler 停止并注销该脑 |
+
+### 核心设计
+
+**单一 Watcher，事件分发**：一个 FSWatcher 监听整个项目根目录，
+按路径前缀分发给不同的处理器。
+
+```typescript
+interface FSChangeEvent {
+  type: "create" | "modify" | "delete";
+  path: string;       // 相对项目根的路径
+  isDir: boolean;
+}
+
+interface FSHandler {
+  pattern: RegExp;     // 匹配的路径模式
+  handle: (event: FSChangeEvent) => void | Promise<void>;
+}
+```
+
+**处理器注册**：
+
+```
+brains/*/brain.json     → Scheduler.onBrainConfigChange()
+brains/*/soul.md        → SlotRegistry 标记 slot:soul 需重载
+brains/*/skills/*       → SkillLoader.invalidate(brainId)
+brains/*/tools/*        → ToolLoader.invalidate(brainId)
+brains/*/directives/*   → DirectiveLoader.invalidate(brainId)
+brains/*/src/*          → ScriptBrain.reload(brainId)
+brains/ (新目录)         → Scheduler.onBrainDiscovered(brainId)
+brains/ (删目录)         → Scheduler.onBrainRemoved(brainId)
+skills/*                → SkillLoader.invalidateGlobal()
+tools/*                 → ToolLoader.invalidateGlobal()
+directives/*            → DirectiveLoader.invalidateGlobal()
+key/*                   → Provider 重新加载密钥（安全敏感，可选）
+```
+
+**防抖**：文件写入可能触发多次 change 事件（write + rename），
+每个处理器 debounce 300ms，只处理最后一次。
+
+**与 Slot 系统联动**（§4 完成后）：
+
+文件变更 → Loader invalidate → 下次 assemblePrompt 时 Loader 重新填充对应 Slot。
+不需要立即重新加载——**懒加载，tick 时生效**。
+Slot 的 `content` 可以是 lazy getter（首次读取时加载，invalidate 后标记为 stale）。
+
+### 需要做的
+
+- **FSWatcher 类**：封装 `node:fs/watch`（recursive），路径过滤 + 防抖 + handler 分发
+- **Scheduler 集成**：启动时创建 Watcher，注册 brain 目录变更 handler
+- **Loader invalidate 协议**：各 Loader 暴露 `invalidate()` 方法，标记缓存失效
+- **debounce 策略**：默认 300ms，brain.json 变更可延长到 1s（防误触）
+
+### 涉及文件
+
+- 新建 `src/core/fs-watcher.ts` — FSWatcher 封装（~80 行）
+- `src/core/scheduler.ts` — 创建 Watcher + 注册 handler
+- `src/loaders/*.ts` — 各 Loader 新增 `invalidate()` 方法
+
+---
+
+## 1. Session 管理
+
+[Tool result] StrReplace
+
+assistant:
+现在全面增强 §4 Slot 系统。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ## 4. ContextSlot 化 PromptAssemble
+
+当前 `context-engine.ts` 用硬编码拼接 5 层 system prompt，不可扩展，events 重复出现在 system prompt 和 user message 中。
+
+### 核心设计：Directive 就是 Slot
+
+当前 directive 系统（`.ts` 配置 + `.md` 内容，有 order、condition、变量替换）和 slot 概念高度重叠。
+**Directive 不再是独立系统，而是 slot 的一种加载方式（file-based, condition-gated）。**
+
+所有 system prompt 内容统一为 slot：
+
+```
+slot "soul"                  order: 0     source: file       ← soul.md
+slot "runtime"               order: 10    source: framework  ← 自动生成
+slot "state"                 order: 20    source: llm        ← state.json（LLM 拥有的语义记忆）
+slot "brain_board"           order: 25    source: framework  ← 跨脑任务追踪（自动订阅）
+slot "tools"                 order: 30    source: loader     ← tool-loader
+slot "directive:identity"    order: 40    source: file       ← identity.ts + .md
+slot "directive:tool-usage"  order: 41    source: file       ← condition: hasTools
+slot "directive:brain-comm"  order: 42    source: file       ← condition: hasTools
+slot "skills"                order: 50    source: loader     ← skill-loader
+slot "todos"                 order: 60    source: tool       ← 工具可写
+slot "world"                 order: 70    source: framework  ← MineAvatar 推送
+```
+
+### 需要做的
+
+- **SlotRegistry**：每个脑持有一个 SlotRegistry，管理命名 slot 的有序集合
+  ```typescript
+  interface ContextSlot {
+    name: string;
+    order: number;
+    content: string;
+    source: "file" | "loader" | "tool" | "framework";
+    condition?: (ctx: DirectiveContext) => boolean;  // 渲染时检查
+  }
+  ```
+- **system prompt = slots 渲染**：
+  ```typescript
+  registry.all()
+    .filter(slot => !slot.condition || slot.condition(ctx))
+    .sort((a, b) => a.order - b.order)
+    .map(slot => slot.content)
+    .join("\n\n");
+  ```
+  context-engine 的 5 层硬编码全部消失，变成 filter → sort → join。
+- **Directive loader 变为 slot populator**：不再是独立系统，而是往 SlotRegistry 写入 `directive:*` slot
+- **events 仅进 user message**：从 system prompt 中移除 events 层
+- **ToolContext 扩展**：`readSlot(name)` / `writeSlot(name, content)` 让工具可以读写 slot
+
+### 涉及文件
+
+- `src/core/types.ts` — 新增 ContextSlot, ToolContext 加 readSlot/writeSlot
+- 新建 `src/context/slot-registry.ts` — SlotRegistry 类
+- `src/context/context-engine.ts` — 从硬编码改为 slot 迭代渲染
+- `src/loaders/directive-loader.ts` — 改为 slot populator，不再独立输出字符串
+- `src/core/brain.ts` — 持有 SlotRegistry, process 前刷新 state slot
+- `src/core/scheduler.ts` — 初始化时创建 SlotRegistry 并加载初始 slot
+  new_string: ## 4. ContextSlot 化 PromptAssemble
+
+当前 `context-engine.ts` 用硬编码拼接 5 层 system prompt，不可扩展，events 重复出现在 system prompt 和 user message 中。
+
+### 核心设计：Directive 就是 Slot
+
+当前 directive 系统（`.ts` 配置 + `.md` 内容，有 order、condition、变量替换）和 slot 概念高度重叠。
+**Directive 不再是独立系统，而是 slot 的一种加载方式（file-based, condition-gated）。**
+
+所有 system prompt 内容统一为 slot：
+
+```
+slot "soul"                  order: 0     source: file       ← soul.md
+slot "runtime"               order: 10    source: framework  ← 自动生成
+slot "state"                 order: 20    source: llm        ← state.json（LLM 拥有的语义记忆）
+slot "brain_board"           order: 25    source: framework  ← 跨脑任务追踪（自动订阅）
+slot "tools"                 order: 30    source: loader     ← tool-loader
+slot "directive:identity"    order: 40    source: file       ← identity.ts + .md
+slot "directive:tool-usage"  order: 41    source: file       ← condition: hasTools
+slot "directive:brain-comm"  order: 42    source: file       ← condition: hasTools
+slot "skills"                order: 50    source: loader     ← skill-loader
+slot "todos"                 order: 60    source: tool       ← 工具可写
+slot "world"                 order: 70    source: framework  ← MineAvatar 推送
+```
+
+### 4.1 SlotRegistry — 核心数据结构
+
+```typescript
+interface ContextSlot {
+  name: string;
+  order: number;
+  source: "file" | "loader" | "tool" | "framework";
+  condition?: (ctx: SlotContext) => boolean;
+
+  // --- 灵活内容 ---
+  // content 可以是静态字符串，也可以是惰性求值函数（每次渲染时调用）。
+  // 惰性求值实现按需加载：fs-watcher invalidate 后，下次渲染自动重新加载。
+  content: string | (() => string | Promise<string>);
+
+  // --- 可组合 ---
+  // 复合 slot 由多个子条目组成，渲染时拼接。
+  // 例如 slot:brain_board 由多条 TrackedTask 组成，
+  // slot:skills 由多个 skill 摘要组成。
+  // 单一内容的 slot 不需要 entries，直接用 content。
+  entries?: SlotEntry[];
+
+  // --- 生命周期 ---
+  stale?: boolean;       // fs-watcher 标记为脏，下次渲染时重新求值 content
+  ttl?: number;          // 自动过期（tick 数），过期后移除。用于 brain_board 的已完成任务
+  createdAt?: number;    // 创建时间戳
+}
+
+interface SlotEntry {
+  id: string;            // 条目唯一标识（如 tracked task ID、skill name）
+  content: string;
+  meta?: Record<string, unknown>;  // 任意元数据（状态、优先级等）
+}
+```
+
+### 4.2 SlotRegistry API
+
+```typescript
+class SlotRegistry {
+  // --- 基础 CRUD ---
+  set(slot: ContextSlot): void;              // 注册或覆写整个 slot
+  get(name: string): ContextSlot | undefined;
+  delete(name: string): void;
+  has(name: string): boolean;
+
+  // --- 子条目操作（复合 slot）---
+  addEntry(slotName: string, entry: SlotEntry): void;      // 添加子条目
+  updateEntry(slotName: string, entryId: string, patch: Partial<SlotEntry>): void;
+  removeEntry(slotName: string, entryId: string): void;
+  getEntries(slotName: string): SlotEntry[];
+
+  // --- 渲染 ---
+  render(ctx: SlotContext): Promise<string>;  // filter → sort → resolve → join
+
+  // --- 运行时动态 ---
+  invalidate(name: string): void;            // 标记 stale，下次渲染重新求值
+  invalidateByPattern(pattern: RegExp): void; // 批量 invalidate（如 /^directive:/)
+  gc(): void;                                 // 清理过期 slot（ttl 到期的）
+}
+```
+
+**渲染流程**：
+
+```typescript
+async render(ctx: SlotContext): Promise<string> {
+  this.gc();  // 清理过期 slot
+
+  const slots = this.all()
+    .filter(slot => !slot.condition || slot.condition(ctx))
+    .sort((a, b) => a.order - b.order);
+
+  const parts: string[] = [];
+  for (const slot of slots) {
+    // 如果 stale 且 content 是函数，重新求值
+    if (slot.stale && typeof slot.content === "function") {
+      slot.content = await slot.content();
+      slot.stale = false;
+    }
+
+    // 解析内容
+    let text = typeof slot.content === "function"
+      ? await slot.content()
+      : slot.content;
+
+    // 复合 slot：拼接 entries
+    if (slot.entries?.length) {
+      const entryTexts = slot.entries.map(e => e.content);
+      text = text ? text + "\n" + entryTexts.join("\n") : entryTexts.join("\n");
+    }
+
+    if (text) parts.push(text);
+  }
+
+  return parts.join("\n\n");
+}
+```
+
+context-engine 的 5 层硬编码全部消失，变成一次 `registry.render(ctx)`。
+
+### 4.3 灵活性机制
+
+#### 惰性求值 + fs-watcher 联动
+
+Slot 的 content 可以是函数，实现按需加载：
+
+```typescript
+// soul.md 作为惰性 slot
+registry.set({
+  name: "soul",
+  order: 0,
+  source: "file",
+  content: () => readFile(join(brainDir, "soul.md"), "utf-8"),
+});
+
+// fs-watcher 检测到 soul.md 变更时：
+registry.invalidate("soul");
+// → 下次 render() 时自动重新调用 content 函数，读到最新内容
+```
+
+不需要立即重载——**tick 时生效**，天然 debounce。
+
+#### 复合 slot（子条目模式）
+
+brain_board、skills 等 slot 是由多个独立条目组成的：
+
+```typescript
+// brain_board slot — 框架在 send_message 时添加追踪条目
+registry.addEntry("brain_board", {
+  id: "task_planner_001",
+  content: "- [▶ planner] 任务: \"分解挖钻石\" | 执行中",
+  meta: { targetBrain: "planner", status: "running", startTick: 142 },
+});
+
+// planner 完成后，框架更新条目
+registry.updateEntry("brain_board", "task_planner_001", {
+  content: "- [✓ planner] 任务: \"分解挖钻石\" | 完成 | 结果: \"3个子目标\"",
+  meta: { status: "completed" },
+});
+
+// 已完成任务 3 个 tick 后自动清理（通过 ttl 或 gc 策略）
+```
+
+#### 运行时注册
+
+工具和框架都可以在运行时动态添加 slot：
+
+```typescript
+// todo_write 工具在被调用时创建/更新 slot
+ctx.writeSlot("todos", todoList.map(t => `- [${t.done ? "x" : " "}] ${t.text}`).join("\n"));
+
+// MineAvatar WebSocket 连接建立后，框架注册 world slot
+registry.set({
+  name: "world",
+  order: 70,
+  source: "framework",
+  content: () => worldSnapshot.render(),  // 每次渲染时取最新快照
+});
+
+// 脑 A 通过工具给自己加一个临时 slot
+ctx.writeSlot("custom:analysis_result", "分析结论: ...", { ttl: 5 }); // 5 tick 后消失
+```
+
+#### 条件渲染
+
+Slot 的 condition 函数决定是否渲染——不同状态下脑看到不同的 system prompt：
+
+```typescript
+registry.set({
+  name: "directive:combat-rules",
+  order: 43,
+  source: "file",
+  content: () => readFile("directives/combat-rules.md", "utf-8"),
+  condition: (ctx) => ctx.worldState?.inCombat === true,  // 只在战斗中出现
+});
+```
+
+### 4.4 ToolContext 扩展
+
+```typescript
+interface ToolContext {
+  brainId: string;
+  emit: (event: Event) => void;
+  readState: (targetBrainId: string) => Promise<Record<string, unknown>>;
+
+  // --- Slot 操作 ---
+  readSlot(name: string): string | undefined;
+  writeSlot(name: string, content: string, opts?: { ttl?: number }): void;
+  addSlotEntry(slotName: string, entry: SlotEntry): void;
+  updateSlotEntry(slotName: string, entryId: string, patch: Partial<SlotEntry>): void;
+  removeSlotEntry(slotName: string, entryId: string): void;
+}
+```
+
+工具可以通过 ToolContext 读写 slot，实现"Tool 改变 LLM 下次看到的东西"：
+
+| 工具 | Slot 操作 | 效果 |
+|------|----------|------|
+| `todo_write` | `writeSlot("todos", ...)` | LLM 下次 tick 看到更新的 todo 列表 |
+| `send_message` | `addSlotEntry("brain_board", ...)` | LLM 下次 tick 看到委派任务的状态 |
+| `spawn_thought` | `addSlotEntry("brain_board", ...)` | LLM 下次 tick 看到后台子任务 |
+| `read_skill`（future） | 不写 slot（按需读取走 tool result） | — |
+| 自定义工具 | `writeSlot("custom:*", ...)` | 工具可以给 LLM 留"便签" |
+
+### 4.5 与 fs-watcher（§0）联动
+
+```
+文件变更 → FSWatcher 检测
+  → 按路径匹配 Handler
+  → Handler 调用 registry.invalidate("对应slot名")
+  → Slot 标记为 stale
+  → 下次 brain.process() 调用 registry.render()
+  → stale 的 slot 重新调用 content 函数
+  → LLM 看到最新内容
+```
+
+全程无阻塞，无主动重载——**所有热更新都是 tick 驱动的惰性生效**。
+
+### 4.6 迁移策略
+
+context-engine.ts 当前的 5 层硬编码逐步替换：
+
+| 当前层 | 迁移为 | 谁负责填充 |
+|-------|-------|-----------|
+| Layer 1: Soul | `slot:soul` (lazy file) | Scheduler 初始化时注册 |
+| Layer 2: State | `slot:state` (lazy file) | Scheduler 初始化时注册 |
+| Layer 3: Events | **移除**，events 仅进 user message | brain.ts process() |
+| Layer 4: Tools | `slot:tools` (loader) | ToolLoader 填充 |
+| Layer 5: Directives | `slot:directive:*` (loader) | DirectiveLoader 填充 |
+| 新增 | `slot:runtime` (framework) | Scheduler 初始化时注册 |
+| 新增 | `slot:brain_board` (framework + tool) | send_message/spawn_thought 追踪 |
+| 新增 | `slot:skills` (loader) | SkillLoader 填充（§5） |
+
+### 涉及文件
+
+- `src/core/types.ts` — 新增 ContextSlot, SlotEntry, SlotContext, ToolContext 扩展
+- 新建 `src/context/slot-registry.ts` — SlotRegistry 类（~150 行）
+- `src/context/context-engine.ts` — 从硬编码改为 `registry.render(ctx)`
+- `src/loaders/directive-loader.ts` — 改为 slot populator
+- `src/loaders/tool-loader.ts` — 改为 slot populator（生成工具描述写入 slot:tools）
+- `src/core/brain.ts` — 持有 SlotRegistry, ToolContext 注入 slot 操作
+- `src/core/scheduler.ts` — 初始化时创建 SlotRegistry + 注册初始 slot
+
+[Tool result] StrReplace
+
+assistant:
+最后更新优先级部分，把 §0 加进去。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ## 优先级建议
+
+```
+§8 通用工具补全        ──→  基础设施，解锁 Agent 自主文件管理能力
+§7a state.json 清理    ──→  可先做简化版（停止框架写运营指标）
+§4 ContextSlot 化      ──→  §5 Skills（依赖 slot）
+                       ──→  §7b brain_board slot（依赖 slot）
+§6 ScriptBrain         ──→  独立，可并行
+§1 Session 管理        ──→  独立，可并行
+§2 工具发消息          ──→  基础已有，按需补充 spawn_thought
+§3 动态订阅            ──→  独立，需 Scheduler 扩展
+```
+
+建议执行顺序：
+
+1. **§8.1 + §7a**（文件操作工具 + state.json 停止写运营指标）— 最紧急
+2. **§8.2**（manage_brain）— 解锁多脑动态管理
+3. **§4**（Slot 化）— 核心基础设施，解锁 brain_board slot、skills slot、todos slot
+4. **§7b**（brain_board 作为 Slot）— §4 完成后，跨脑任务追踪自动注入 system prompt
+5. **§1 / §5 / §6**（Session / Skills / ScriptBrain）— 可并行推进
+6. **§2 / §3**（spawn_thought / 动态订阅）— 按需补充
+  new_string: ## 优先级建议
+
+```
+§8 通用工具补全        ──→  基础设施，解锁 Agent 自主文件管理能力
+§7a state.json 清理    ──→  可先做简化版（停止框架写运营指标）
+§0 fs-watcher          ──→  热更新基础，§4 的惰性求值依赖它
+§4 ContextSlot 化      ──→  §5 Skills（依赖 slot）
+                       ──→  §7b brain_board slot（依赖 slot）
+                       ──→  与 §0 联动（invalidate）
+§6 ScriptBrain         ──→  独立，可并行
+§1 Session 管理        ──→  独立，可并行
+§2 工具发消息          ──→  基础已有，按需补充 spawn_thought
+§3 动态订阅            ──→  独立，需 Scheduler 扩展
+```
+
+建议执行顺序：
+
+1. **§8.1 + §7a**（文件操作工具 + state.json 停止写运营指标）— 最紧急，解锁基础能力
+2. **§0 + §4**（fs-watcher + Slot 化）— 一起做，Slot 的惰性求值 + invalidate 天然需要 fs-watcher
+3. **§8.2**（manage_brain）— 解锁多脑动态管理，与 §0 联动（新建脑目录自动发现）
+4. **§7b**（brain_board 作为 Slot）— §4 完成后，跨脑任务追踪自动注入 system prompt
+5. **§1 / §5 / §6**（Session / Skills / ScriptBrain）— 可并行推进
+6. **§2 / §3**（spawn_thought / 动态订阅）— 按需补充
+
+[Tool result] StrReplace
+
+assistant:
+让我验证一下最终文件的完整性。
+[Tool call] Shell
+  command: wc -l /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  description: 检查 roadmap 总行数
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: grep -n "^## " /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  description: 检查章节结构
+
+[Tool result] Shell
+
+assistant:
+结构完整。让我再快速扫一下 §4 的关键部分确保没问题。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 174
+  limit: 30
+
+[Tool result] Read
+
+assistant:
+一切就绪。总结一下这次更新的要点：
+
+---
+
+### 新增 §0 — fs-watcher
+
+解决热更新刚需。单一 Watcher 监听项目根目录，按路径前缀分发给不同 Handler。关键设计：
+- **防抖 300ms**，避免写入过程中多次触发
+- **与 Slot 系统联动**：文件变更 → `registry.invalidate()` → 下次 tick 惰性重载
+- **与 Scheduler 联动**：脑目录创建/删除 → 自动发现/注销
+
+### §4 Slot 系统全面增强
+
+三个核心能力：
+
+1. **惰性求值（Lazy Content）**：`content` 可以是函数而非字符串。fs-watcher invalidate 后标记为 `stale`，下次 `render()` 时自动重新调用。热更新全程不阻塞，tick 驱动生效。
+
+2. **复合 Slot（Entries 模式）**：brain_board、skills 等 slot 由多个子条目组成，通过 `addEntry` / `updateEntry` / `removeEntry` 独立管理。支持 `ttl` 自动过期（已完成任务 N tick 后消失）。
+
+3. **运行时动态注册**：工具通过 `ToolContext.writeSlot()` 在运行时创建/更新 slot。支持 `custom:*` 命名空间让工具给 LLM 留"便签"。支持 ttl 临时 slot。
+
+这三个能力组合起来，Slot 系统就成了一个**可观测、可组合、运行时可编程的 system prompt 管理器**——任何需要"让 LLM 下次看到某些东西"的场景，都归结为写 Slot。
+
+user:
+<user_query>
+slot "state"                 order: 20    source: llm        ← state.json（LLM 拥有的语义记忆）
+这个state不是说可以被brain_board替代么
+</user_query>
+
+assistant:
+[Thinking] The user is pointing out a contradiction. Earlier we discussed that state.json's operational metrics should be moved to brain_board, and state.json should become LLM-owned semantic memory. But the user is now questioning whether state.json (as a slot) is even needed at all if brain_board already exists as a slot.
+
+Let me think about this more carefully...
+
+The user said earlier: "我甚至在想他和task_board(我改个名叫brain_board)，是不是重复了"
+
+And now they're saying: this state slot - didn't we say it can be replaced by brain_board?
+
+Let me reconsider. What was state.json supposed to be?
+ 
+In §7 we said state.json should hold semantic memory like currentGoal and conversationWith, while brain_board tracks delegated tasks and their status. But the user's right to push back—if brain_board captures what the brain is doing and state.json captures what it's thinking, are these really separate concerns or just different views of the same thing?
+
+Looking at concrete examples: "my current goal is to mine diamonds" could fit either category, "I'm waiting for the planner's result" clearly belongs in brain_board, and "I found a village to the north last time" is pure memory. The distinction seems to hinge on whether something is operational (task status) versus reflective (internal state). Maybe the real insight is that the original state.json was bloated with operational metrics that should migrate to brain_board, leaving only the semantic layer behind.
+
+But then I'm questioning whether that semantic remainder even needs its own file. The system already has session history for conversation context, brain_board for task tracking, the memory directory for persistent knowledge, and slot:todos for action items. What would state.json uniquely contribute? Things like "currentGoal" or "conversationWith" could just live in session history or as brain_board entries. I think the user's right—state.json is getting squeezed out by the other slots that actually own these responsibilities. The operational metrics belong in brain_board, task tracking goes to the brain_board slot, short-term context lives in session history, long-term knowledge in the memory directory, and goals in slot:todos. Maybe state.json should just be removed and its functions distributed to the slots that naturally own them.
+
+Actually, I'm realizing state.json does have one distinct purpose: it's readable by other brains through read_state, making it a kind of public profile that shows what a brain wants other brains to know about its current state. But if brain_board already handles inter-brain task visibility and other brains can read files directly anyway, even that role seems redundant. I should just confirm with the user that we can absorb state into the existing slots—brain_board handles what other brains need to see, and session history covers the conversation context.
+你说得对。让我重新梳理一下——state.json 的职责确实被其他机制分解掉了：
+
+| 原本 state.json 想承担的 | 现在谁来做 |
+|------------------------|-----------|
+| 运营指标（lastTick 等） | `slot:brain_board` + `manage_brain` |
+| 跨脑任务追踪 | `slot:brain_board`（自动订阅） |
+| 短期记忆（这轮在想什么） | session history |
+| 长期记忆（重要发现） | `memory/` 目录（§1 记忆刷写） |
+| 目标/待办 | `slot:todos` |
+| 给其他脑看的"公开状态" | brain_board + `read_file` 直接读任意文件 |
+
+**state.json 被挤空了**——没有独属于它的职责。去掉它。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 183
+  limit: 16
+
+[Tool result] Read
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ```
+slot "soul"                  order: 0     source: file       ← soul.md
+slot "runtime"               order: 10    source: framework  ← 自动生成
+slot "state"                 order: 20    source: llm        ← state.json（LLM 拥有的语义记忆）
+slot "brain_board"           order: 25    source: framework  ← 跨脑任务追踪（自动订阅）
+slot "tools"                 order: 30    source: loader     ← tool-loader
+slot "directive:identity"    order: 40    source: file       ← identity.ts + .md
+slot "directive:tool-usage"  order: 41    source: file       ← condition: hasTools
+slot "directive:brain-comm"  order: 42    source: file       ← condition: hasTools
+slot "skills"                order: 50    source: loader     ← skill-loader
+slot "todos"                 order: 60    source: tool       ← 工具可写
+slot "world"                 order: 70    source: framework  ← MineAvatar 推送
+```
+  new_string: ```
+slot "soul"                  order: 0     source: file       ← soul.md
+slot "runtime"               order: 10    source: framework  ← 自动生成
+slot "brain_board"           order: 20    source: framework  ← 跨脑任务追踪（自动订阅）
+slot "tools"                 order: 30    source: loader     ← tool-loader
+slot "directive:identity"    order: 40    source: file       ← identity.ts + .md
+slot "directive:tool-usage"  order: 41    source: file       ← condition: hasTools
+slot "directive:brain-comm"  order: 42    source: file       ← condition: hasTools
+slot "skills"                order: 50    source: loader     ← skill-loader
+slot "todos"                 order: 60    source: tool       ← 工具可写
+slot "world"                 order: 70    source: framework  ← MineAvatar 推送
+```
+
+**注意：没有 `slot:state`。** state.json 的职责已被其他机制完全分解：
+- 运营指标 → `slot:brain_board` + `manage_brain`
+- 短期记忆 → session history
+- 长期记忆 → `memory/` 目录（§1 记忆刷写）
+- 目标/待办 → `slot:todos`
+- 跨脑任务追踪 → `slot:brain_board`
+- 公开状态 → brain_board + 任何脑可通过 `read_file` 直接读取文件
+
+[Tool result] StrReplace
+
+assistant:
+现在更新 §4.6 迁移策略表中的 state 行，以及 §7 的内容。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 440
+  limit: 30
+
+[Tool result] Read
+
+assistant:
+[Tool call] Grep
+  pattern: 迁移策略
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  -C: 2
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 422
+  limit: 25
+
+[Tool result] Read
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: | 当前层 | 迁移为 | 谁负责填充 |
+|-------|-------|-----------|
+| Layer 1: Soul | `slot:soul` (lazy file) | Scheduler 初始化时注册 |
+| Layer 2: State | `slot:state` (lazy file) | Scheduler 初始化时注册 |
+| Layer 3: Events | **移除**，events 仅进 user message | brain.ts process() |
+| Layer 4: Tools | `slot:tools` (loader) | ToolLoader 填充 |
+| Layer 5: Directives | `slot:directive:*` (loader) | DirectiveLoader 填充 |
+| 新增 | `slot:runtime` (framework) | Scheduler 初始化时注册 |
+| 新增 | `slot:brain_board` (framework + tool) | send_message/spawn_thought 追踪 |
+| 新增 | `slot:skills` (loader) | SkillLoader 填充（§5） |
+  new_string: | 当前层 | 迁移为 | 谁负责填充 |
+|-------|-------|-----------|
+| Layer 1: Soul | `slot:soul` (lazy file) | Scheduler 初始化时注册 |
+| Layer 2: State | **删除** — 职责分解到 brain_board / session / memory / todos | — |
+| Layer 3: Events | **移除**，events 仅进 user message | brain.ts process() |
+| Layer 4: Tools | `slot:tools` (loader) | ToolLoader 填充 |
+| Layer 5: Directives | `slot:directive:*` (loader) | DirectiveLoader 填充 |
+| 新增 | `slot:runtime` (framework) | Scheduler 初始化时注册 |
+| 新增 | `slot:brain_board` (framework + tool) | send_message/spawn_thought 追踪 |
+| 新增 | `slot:skills` (loader) | SkillLoader 填充（§5） |
+
+[Tool result] StrReplace
+
+assistant:
+现在更新 §7，把 state.json 的结论从"LLM 拥有"改为"删除"。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 553
+  limit: 100
+
+[Tool result] Read
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ## 7. state.json 与 brain_board 职责分离
+
+当前 `state.json` 存在严重的职责混乱：框架往里写运营指标（lastTick、eventsProcessed、sessionLength），
+LLM 读到的全是时间戳和计数器，对理解"这个脑在想什么"毫无帮助。
+
+AGENTIC.md 设计的 state.json 应该是脑的**语义状态**（当前意图、目标队列、对话摘要），
+而运营指标应该属于 `brain_board`（Slot 化的任务追踪面板）。
+
+### 问题根源
+
+```
+state.json 现在写的:        state.json 应该写的:
+─────────────────────       ─────────────────────
+lastTick: 1772185451421     currentGoal: "挖钻石"
+eventsProcessed: 3          conversationWith: "Steve"
+sessionLength: 4            pendingApprovals: [...]
+eventSources: ["stdin"]     recentInsight: "北方有村庄"
+```
+
+前者是 brain_board 的内容，后者才是"工作记忆"。
+
+### 需要做的
+
+#### 7.1 framework 停止写 state.json
+
+`brain.ts` 的 `updateState()` 不再写入 lastTick 等运营指标。
+state.json 完全由 LLM 拥有——LLM 通过 agentic loop 决定记忆什么。
+
+#### 7.2 brain_board 作为 Slot
+
+brain_board **不是一个被动的文件**，而是每个脑 system prompt 中的一个 Slot（`slot:brain_board`）。
+每个脑看到的是**它关心的视角**——它委派的任务、它订阅的脑，而非全局运营数据。
+
+**订阅机制**：当工具产生跨脑关联时，框架自动建立追踪：
+
+```
+1. Brain A 调用 send_message({ to: "planner", content: "分解挖钻石目标" })
+   → 框架检测到这是一个任务委派
+   → 自动在 Brain A 的 slot:brain_board 中注册追踪条目
+
+2. Brain A 的下次 tick，system prompt 中自然看到:
+
+   ## Brain Board
+   - [▶ planner] 任务: "分解挖钻石目标" | 状态: 执行中 | tick: 3
+
+3. Planner 完成后通过 BrainBus 回传结果
+   → 框架更新 Brain A 的 slot:brain_board
+
+4. Brain A 再次 tick 时看到:
+
+   ## Brain Board
+   - [✓ planner] 任务: "分解挖钻石目标" | 完成 | 结果: "分解为3个子目标..."
+```
+
+同样，`spawn_thought` 产生的后台子任务也自动进入 slot:brain_board。
+
+**与 Slot 系统的关系**：
+
+```
+slot "brain_board"   order: 25   source: framework
+  ↑ 写入者: 框架（跨脑消息时自动注册追踪）
+  ↑ 读取者: LLM（每次 tick 的 system prompt）
+  ↑ 清理: 已完成任务在 N 个 tick 后自动移除
+```
+
+依赖 §4 ContextSlot 化完成后实现。在 §4 之前，可以用简化版：
+框架维护 per-brain 的 tracked tasks 列表，在 assemblePrompt 时渲染到 system prompt。
+
+#### 7.3 read_state 工具的语义升级
+
+state.json 清理后，`read_state` 读到的变成真正有用的语义信息：
+
+```
+read_state({ brain_id: "intent" })
+→ { currentGoal: "获取钻石装备", priority: "high", pendingApprovals: ["reflect-proposal-003"] }
+```
+
+模型不再需要无意义地 read_state 然后看到一堆时间戳。
+
+#### 7.4 全局视图（可选）
+
+如果某个脑需要看全局运营概况（比如 IntentBrain 做 ROI 审计），
+通过 `manage_brain({ action: "list" })` 获取全部脑的运行时状态，
+不需要单独的全局 brain_board 文件。
+
+### 涉及文件
+
+- `src/core/brain.ts` — 删除 `updateState()` 中的运营指标写入，改为 LLM 驱动
+- `src/core/brain.ts` — 新增 per-brain tracked tasks 列表（或等 §4 后用 SlotRegistry）
+- `src/core/scheduler.ts` — 新增 RuntimeStats 追踪（给 manage_brain list 用）
+- `src/core/types.ts` — 新增 TrackedTask 类型
+- `src/context/context-engine.ts` — assemblePrompt 渲染 brain_board 区域（§4 前的简化版）
+- `tools/send_message.ts` — 发送任务时注册追踪条目
+  new_string: ## 7. 删除 state.json，brain_board 统一接管
+
+### 问题
+
+当前 `state.json` 存在两个问题：
+1. **内容无用**：框架往里写运营指标（lastTick、eventsProcessed），模型 read_state 读到一堆时间戳
+2. **职责被掏空**：state.json 原本想做的每一件事，都已有更好的归属
+
+```
+state.json 想做的:           现在谁做:
+─────────────────────        ─────────────────────
+运营指标                      → slot:brain_board + manage_brain
+跨脑任务追踪                  → slot:brain_board（自动订阅）
+短期记忆                      → session history
+长期记忆                      → memory/ 目录（§1 记忆刷写）
+目标/待办                     → slot:todos
+公开状态（给其他脑看）          → brain_board + read_file
+```
+
+**结论：删除 state.json。** 它不再是脑的必须文件。
+脑的最小文件集从 `brain.json` + `state.json` + `soul.md` 变为 `brain.json` + `soul.md`。
+
+### 需要做的
+
+#### 7.1 删除 state.json 相关代码
+
+- 删除 `brain.ts` 的 `updateState()` 方法
+- 删除 `context-engine.ts` 中 Layer 2 (State) 的读取和注入
+- 删除 `read_state` 工具（用 `read_file` + `manage_brain` 替代）
+- 删除 `ToolContext.readState` 方法
+
+#### 7.2 brain_board 作为 Slot
+
+brain_board 是每个脑 system prompt 中的一个 Slot（`slot:brain_board`）。
+每个脑看到的是**它关心的视角**——它委派的任务、它追踪的脑，而非全局数据。
+
+**自动订阅机制**：当工具产生跨脑关联时，框架自动建立追踪：
+
+```
+1. Brain A 调用 send_message({ to: "planner", content: "分解挖钻石目标" })
+   → 框架自动在 Brain A 的 slot:brain_board 中注册追踪条目
+
+2. Brain A 的下次 tick，system prompt 中自然看到:
+
+   ## Brain Board
+   - [▶ planner] 任务: "分解挖钻石目标" | 状态: 执行中 | tick: 3
+
+3. Planner 完成后通过 BrainBus 回传结果
+   → 框架更新 Brain A 的 slot:brain_board
+
+4. Brain A 再次 tick 时看到:
+
+   ## Brain Board
+   - [✓ planner] 任务: "分解挖钻石目标" | 完成 | 结果: "分解为3个子目标..."
+```
+
+`spawn_thought` 产生的后台子任务也自动进入 slot:brain_board。
+
+**实现方式**：brain_board 是一个复合 Slot（§4.1 的 entries 模式）：
+
+```
+slot "brain_board"   order: 20   source: framework
+  ↑ 写入者: 框架（send_message/spawn_thought 时自动注册 entry）
+  ↑ 更新者: 框架（BrainBus 收到回传时更新 entry）
+  ↑ 清理: 已完成任务通过 ttl 自动过期
+```
+
+依赖 §4 ContextSlot 化。§4 之前可用简化版：
+框架维护 per-brain 的 tracked tasks 数组，assemblePrompt 时渲染到 system prompt。
+
+#### 7.3 全局视图
+
+脑需要看全局运营概况时（比如 IntentBrain 做 ROI 审计），
+通过 `manage_brain({ action: "list" })` 获取，不需要独立文件或 slot。
+
+### 涉及文件
+
+- `src/core/brain.ts` — 删除 `updateState()`，新增 per-brain tracked tasks
+- `src/core/types.ts` — 删除 `ToolContext.readState`，新增 TrackedTask 类型
+- `src/context/context-engine.ts` — 删除 Layer 2 (State)，添加 brain_board 渲染
+- `tools/read_state.ts` — 删除（功能由 read_file + manage_brain 替代）
+- `tools/send_message.ts` — 发送任务时注册追踪条目
+- `src/core/scheduler.ts` — 新增 RuntimeStats（给 manage_brain list 用）
+
+[Tool result] StrReplace
+
+assistant:
+同步更新 AGENTIC.md 中关于 `state.json` 必须存在的约定，改一下引用。
+[Tool call] Grep
+  pattern: state\.json
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  -C: 1
+
+[Tool result] Grep
+
+assistant:
+几处残留引用需要清理。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: > Agent 不是"直接玩游戏"，而是通过读写 brains/、skills/、src/、state.json 来驱动游戏。
+  new_string: > Agent 不是"直接玩游戏"，而是通过读写 brains/、skills/、src/ 来驱动游戏。
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: 创建新脑不需要专门 action — 用 `write_file` 创建 `brains/<id>/brain.json` + `soul.md` + `state.json`，
+然后 `manage_brain({ action: "start" })` 启动。**创建目录 = 长出新脑**。
+  new_string: 创建新脑不需要专门 action — 用 `write_file` 创建 `brains/<id>/brain.json` + `soul.md`，
+然后 `manage_brain({ action: "start" })` 启动。**创建目录 = 长出新脑**。
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: | `todo_write` | §4 后 | 写入 `slot:todos`，需要 Slot 化完成 |
+| `update_state` | §7 同步 | 显式更新 state.json 的语义内容（或复用 write_file） |
+| `compact` | §1 同步 | 手动触发上下文压缩 |
+  new_string: | `todo_write` | §4 后 | 写入 `slot:todos`，需要 Slot 化完成 |
+| `compact` | §1 同步 | 手动触发上下文压缩 |
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: §8 通用工具补全        ──→  基础设施，解锁 Agent 自主文件管理能力
+§7a state.json 清理    ──→  可先做简化版（停止框架写运营指标）
+§0 fs-watcher          ──→  热更新基础，§4 的惰性求值依赖它
+§4 ContextSlot 化      ──→  §5 Skills（依赖 slot）
+                       ──→  §7b brain_board slot（依赖 slot）
+                       ──→  与 §0 联动（invalidate）
+§6 ScriptBrain         ──→  独立，可并行
+§1 Session 管理        ──→  独立，可并行
+§2 工具发消息          ──→  基础已有，按需补充 spawn_thought
+§3 动态订阅            ──→  独立，需 Scheduler 扩展
+```
+
+建议执行顺序：
+
+1. **§8.1 + §7a**（文件操作工具 + state.json 停止写运营指标）— 最紧急，解锁基础能力
+2. **§0 + §4**（fs-watcher + Slot 化）— 一起做，Slot 的惰性求值 + invalidate 天然需要 fs-watcher
+3. **§8.2**（manage_brain）— 解锁多脑动态管理，与 §0 联动（新建脑目录自动发现）
+4. **§7b**（brain_board 作为 Slot）— §4 完成后，跨脑任务追踪自动注入 system prompt
+5. **§1 / §5 / §6**（Session / Skills / ScriptBrain）— 可并行推进
+6. **§2 / §3**（spawn_thought / 动态订阅）— 按需补充
+  new_string: §7 删除 state.json     ──→  立即可做，删代码
+§8 通用工具补全        ──→  基础设施，解锁 Agent 自主文件管理能力
+§0 fs-watcher          ──→  热更新基础，§4 的惰性求值依赖它
+§4 ContextSlot 化      ──→  §5 Skills（依赖 slot）
+                       ──→  §7 brain_board slot（依赖 slot）
+                       ──→  与 §0 联动（invalidate）
+§6 ScriptBrain         ──→  独立，可并行
+§1 Session 管理        ──→  独立，可并行
+§2 工具发消息          ──→  基础已有，按需补充 spawn_thought
+§3 动态订阅            ──→  独立，需 Scheduler 扩展
+```
+
+建议执行顺序：
+
+1. **§7 + §8.1**（删除 state.json + 文件操作工具）— 最紧急，清理错误设计 + 解锁基础能力
+2. **§0 + §4**（fs-watcher + Slot 化）— 一起做，Slot 的惰性求值 + invalidate 天然需要 fs-watcher
+3. **§8.2 + §7 brain_board**（manage_brain + brain_board 作为 Slot）— §4 完成后实现
+4. **§1 / §5 / §6**（Session / Skills / ScriptBrain）— 可并行推进
+5. **§2 / §3**（spawn_thought / 动态订阅）— 按需补充
+
+[Tool result] StrReplace
+
+assistant:
+确认最终文件完整性。
+[Tool call] Shell
+  command: grep -n "^## " /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md && echo "---" && wc -l /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  description: 检查最终结构和行数
+
+[Tool result] Shell
+
+assistant:
+完整、干净。总结一下这次修改：
+
+**state.json 彻底删除**，不再是脑的必须文件。它的职责被完全分解：
+
+| 原 state.json 的职责 | 接管者 |
+|---|---|
+| 运营指标 | `manage_brain({ action: "list" })` 从 Scheduler RuntimeStats 读取 |
+| 跨脑任务追踪 | `slot:brain_board`（复合 Slot，自动订阅） |
+| 短期记忆 | session history |
+| 长期记忆 | `memory/` 目录 |
+| 目标/待办 | `slot:todos` |
+
+脑的最小文件集从 `brain.json` + `state.json` + `soul.md` 简化为 `brain.json` + `soul.md`。`read_state` 工具也一并删除——用 `read_file`（读任意文件）和 `manage_brain`（查运行状态）替代，功能更通用。
+
+user:
+<user_query>
+slot里面的应该不是brain_board，这个是公开地，slot你的是slot_board，用派发任务的工具会自动订阅对应agent的消息到system_prompt去
+</user_query>
+
+assistant:
+[Thinking] The user is making a distinction:
+
+- **brain_board** = a public/global place (like a shared bulletin board) that shows all brains' status, accessible via `manage_brain({ action: "list" })` or a public file
+- **slot_board** = a per-brain private slot in system prompt, that automatically subscribes to messages from agents you've dispatched tasks to
+
+The naming matters: the slot in system prompt isn't a "brain board" (that implies a global dashboard). It's a "slot board" - a personal inbox/tracker that shows the status of tasks you've dispatched. When you use `send_message` or `spawn_thought`, the framework automatically subscribes the relevant agent's responses into your `slot:slot_board`.
+
+
+Now I'm clarifying the distinction further and updating the roadmap to reflect this more precise naming—`slot:slot_board` is my personal task tracker that gets automatically populated when I dispatch work, while `brain_board` is the public operational dashboard showing all brains' status.
+理解了，这是两个不同的概念：
+
+- **brain_board**（公开）= 全局看板，所有脑的运营状态，通过 `manage_brain({ action: "list" })` 访问
+- **slot_board**（私有 Slot）= 每个脑自己的 system prompt 里的追踪面板，派发任务时自动订阅目标脑的回传消息
+
+命名上更精确——slot_board 是"我派出去的任务回来了没"，不是全局大盘。让我更新所有引用。
+[Tool call] Grep
+  pattern: brain_board|brain board|Brain Board
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  -n: true
+  output_mode: content
+
+[Tool result] Grep
+
+assistant:
+引用很多，让我批量替换，同时明确区分两个概念。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: slot "brain_board"           order: 20    source: framework  ← 跨脑任务追踪（自动订阅）
+  new_string: slot "slot_board"             order: 20    source: framework  ← 派发任务时自动订阅目标脑的回传
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: **注意：没有 `slot:state`。** state.json 的职责已被其他机制完全分解：
+- 运营指标 → `slot:brain_board` + `manage_brain`
+- 短期记忆 → session history
+- 长期记忆 → `memory/` 目录（§1 记忆刷写）
+- 目标/待办 → `slot:todos`
+- 跨脑任务追踪 → `slot:brain_board`
+- 公开状态 → brain_board + 任何脑可通过 `read_file` 直接读取文件
+  new_string: **注意：没有 `slot:state`。** state.json 的职责已被其他机制完全分解：
+- 运营指标 → `manage_brain({ action: "list" })`（公开的 brain_board）
+- 短期记忆 → session history
+- 长期记忆 → `memory/` 目录（§1 记忆刷写）
+- 目标/待办 → `slot:todos`
+- 派发任务追踪 → `slot:slot_board`（私有，自动订阅）
+- 公开状态 → `manage_brain` + 任何脑可通过 `read_file` 直接读取文件
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string:   // 例如 slot:brain_board 由多条 TrackedTask 组成，
+  new_string:   // 例如 slot:slot_board 由多条 TrackedTask 组成，
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string:   ttl?: number;          // 自动过期（tick 数），过期后移除。用于 brain_board 的已完成任务
+  new_string:   ttl?: number;          // 自动过期（tick 数），过期后移除。用于 slot_board 的已完成任务
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: brain_board、skills 等 slot 是由多个独立条目组成的：
+
+```typescript
+// brain_board slot — 框架在 send_message 时添加追踪条目
+registry.addEntry("brain_board", {
+  id: "task_planner_001",
+  content: "- [▶ planner] 任务: \"分解挖钻石\" | 执行中",
+  meta: { targetBrain: "planner", status: "running", startTick: 142 },
+});
+
+// planner 完成后，框架更新条目
+registry.updateEntry("brain_board", "task_planner_001", {
+  content: "- [✓ planner] 任务: \"分解挖钻石\" | 完成 | 结果: \"3个子目标\"",
+  meta: { status: "completed" },
+});
+  new_string: slot_board、skills 等 slot 是由多个独立条目组成的：
+
+```typescript
+// slot_board — 框架在 send_message 时自动订阅目标脑的回传
+registry.addEntry("slot_board", {
+  id: "task_planner_001",
+  content: "- [▶ planner] 任务: \"分解挖钻石\" | 执行中",
+  meta: { targetBrain: "planner", status: "running", startTick: 142 },
+});
+
+// planner 完成后通过 BrainBus 回传，框架自动更新条目
+registry.updateEntry("slot_board", "task_planner_001", {
+  content: "- [✓ planner] 任务: \"分解挖钻石\" | 完成 | 结果: \"3个子目标\"",
+  meta: { status: "completed" },
+});
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: | `send_message` | `addSlotEntry("brain_board", ...)` | LLM 下次 tick 看到委派任务的状态 |
+| `spawn_thought` | `addSlotEntry("brain_board", ...)` | LLM 下次 tick 看到后台子任务 |
+  new_string: | `send_message` | `addSlotEntry("slot_board", ...)` | LLM 下次 tick 看到委派任务的状态 |
+| `spawn_thought` | `addSlotEntry("slot_board", ...)` | LLM 下次 tick 看到后台子任务 |
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: | Layer 2: State | **删除** — 职责分解到 brain_board / session / memory / todos | — |
+  new_string: | Layer 2: State | **删除** — 职责分解到 slot_board / session / memory / todos | — |
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: | 新增 | `slot:brain_board` (framework + tool) | send_message/spawn_thought 追踪 |
+  new_string: | 新增 | `slot:slot_board` (framework) | send_message/spawn_thought 自动订阅追踪 |
+
+[Tool result] StrReplace
+
+assistant:
+现在更新 §7 的大段内容。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ## 7. 删除 state.json，brain_board 统一接管
+
+### 问题
+
+当前 `state.json` 存在两个问题：
+1. **内容无用**：框架往里写运营指标（lastTick、eventsProcessed），模型 read_state 读到一堆时间戳
+2. **职责被掏空**：state.json 原本想做的每一件事，都已有更好的归属
+
+```
+state.json 想做的:           现在谁做:
+─────────────────────        ─────────────────────
+运营指标                      → slot:brain_board + manage_brain
+跨脑任务追踪                  → slot:brain_board（自动订阅）
+短期记忆                      → session history
+长期记忆                      → memory/ 目录（§1 记忆刷写）
+目标/待办                     → slot:todos
+公开状态（给其他脑看）          → brain_board + read_file
+```
+
+**结论：删除 state.json。** 它不再是脑的必须文件。
+脑的最小文件集从 `brain.json` + `state.json` + `soul.md` 变为 `brain.json` + `soul.md`。
+
+### 需要做的
+
+#### 7.1 删除 state.json 相关代码
+
+- 删除 `brain.ts` 的 `updateState()` 方法
+- 删除 `context-engine.ts` 中 Layer 2 (State) 的读取和注入
+- 删除 `read_state` 工具（用 `read_file` + `manage_brain` 替代）
+- 删除 `ToolContext.readState` 方法
+
+#### 7.2 brain_board 作为 Slot
+
+brain_board 是每个脑 system prompt 中的一个 Slot（`slot:brain_board`）。
+每个脑看到的是**它关心的视角**——它委派的任务、它追踪的脑，而非全局数据。
+
+**自动订阅机制**：当工具产生跨脑关联时，框架自动建立追踪：
+
+```
+1. Brain A 调用 send_message({ to: "planner", content: "分解挖钻石目标" })
+   → 框架自动在 Brain A 的 slot:brain_board 中注册追踪条目
+
+2. Brain A 的下次 tick，system prompt 中自然看到:
+
+   ## Brain Board
+   - [▶ planner] 任务: "分解挖钻石目标" | 状态: 执行中 | tick: 3
+
+3. Planner 完成后通过 BrainBus 回传结果
+   → 框架更新 Brain A 的 slot:brain_board
+
+4. Brain A 再次 tick 时看到:
+
+   ## Brain Board
+   - [✓ planner] 任务: "分解挖钻石目标" | 完成 | 结果: "分解为3个子目标..."
+```
+
+`spawn_thought` 产生的后台子任务也自动进入 slot:brain_board。
+
+**实现方式**：brain_board 是一个复合 Slot（§4.1 的 entries 模式）：
+
+```
+slot "brain_board"   order: 20   source: framework
+  ↑ 写入者: 框架（send_message/spawn_thought 时自动注册 entry）
+  ↑ 更新者: 框架（BrainBus 收到回传时更新 entry）
+  ↑ 清理: 已完成任务通过 ttl 自动过期
+```
+
+依赖 §4 ContextSlot 化。§4 之前可用简化版：
+框架维护 per-brain 的 tracked tasks 数组，assemblePrompt 时渲染到 system prompt。
+
+#### 7.3 全局视图
+
+脑需要看全局运营概况时（比如 IntentBrain 做 ROI 审计），
+通过 `manage_brain({ action: "list" })` 获取，不需要独立文件或 slot。
+
+### 涉及文件
+
+- `src/core/brain.ts` — 删除 `updateState()`，新增 per-brain tracked tasks
+- `src/core/types.ts` — 删除 `ToolContext.readState`，新增 TrackedTask 类型
+- `src/context/context-engine.ts` — 删除 Layer 2 (State)，添加 brain_board 渲染
+- `tools/read_state.ts` — 删除（功能由 read_file + manage_brain 替代）
+- `tools/send_message.ts` — 发送任务时注册追踪条目
+- `src/core/scheduler.ts` — 新增 RuntimeStats（给 manage_brain list 用）
+  new_string: ## 7. 删除 state.json，slot_board + brain_board 分工
+
+### 问题
+
+当前 `state.json` 存在两个问题：
+1. **内容无用**：框架往里写运营指标（lastTick、eventsProcessed），模型 read_state 读到一堆时间戳
+2. **职责被掏空**：state.json 原本想做的每一件事，都已有更好的归属
+
+```
+state.json 想做的:           现在谁做:
+─────────────────────        ─────────────────────
+运营指标                      → brain_board（公开，manage_brain 查询）
+派发任务追踪                  → slot_board（私有 Slot，自动订阅）
+短期记忆                      → session history
+长期记忆                      → memory/ 目录（§1 记忆刷写）
+目标/待办                     → slot:todos
+```
+
+**结论：删除 state.json。** 它不再是脑的必须文件。
+脑的最小文件集从 `brain.json` + `state.json` + `soul.md` 变为 `brain.json` + `soul.md`。
+
+### 两个概念的区分
+
+| | slot_board（私有 Slot） | brain_board（公开查询） |
+|---|---|---|
+| **是什么** | 每个脑 system prompt 中的 `slot:slot_board` | `manage_brain({ action: "list" })` 返回的全局数据 |
+| **谁看** | 只有自己看（在 system prompt 里） | 任何脑主动查询 |
+| **内容** | "我派出去的任务回来了没" | "所有脑的运行状态" |
+| **写入方式** | 框架自动：派发任务时订阅，回传时更新 | Scheduler 维护 RuntimeStats |
+| **典型内容** | `[▶ planner] 挖钻石 \| 执行中` | `planner: running, tick:142, model:flash` |
+| **存在形式** | Slot（§4 的 entries 模式） | 运行时数据，通过工具查询 |
+
+### 需要做的
+
+#### 7.1 删除 state.json 相关代码
+
+- 删除 `brain.ts` 的 `updateState()` 方法
+- 删除 `context-engine.ts` 中 Layer 2 (State) 的读取和注入
+- 删除 `read_state` 工具（用 `read_file` + `manage_brain` 替代）
+- 删除 `ToolContext.readState` 方法
+
+#### 7.2 slot_board — 私有 Slot（自动订阅）
+
+`slot:slot_board` 是每个脑 system prompt 中的一个复合 Slot。
+派发任务的工具（send_message、spawn_thought）调用时，框架自动订阅目标脑的回传消息到发起方的 slot_board。
+
+**自动订阅流程**：
+
+```
+1. Brain A 调用 send_message({ to: "planner", content: "分解挖钻石目标" })
+   → 框架自动在 Brain A 的 slot:slot_board 中注册追踪条目
+
+2. Brain A 的下次 tick，system prompt 中自然看到:
+
+   ## Slot Board
+   - [▶ planner] 任务: "分解挖钻石目标" | 执行中
+
+3. Planner 通过 BrainBus 回传结果
+   → 框架自动更新 Brain A 的 slot:slot_board 对应条目
+
+4. Brain A 再次 tick 时看到:
+
+   ## Slot Board
+   - [✓ planner] 任务: "分解挖钻石目标" | 完成 | 结果: "3个子目标..."
+```
+
+**实现方式**：复合 Slot（§4.1 的 entries 模式）：
+
+```
+slot "slot_board"   order: 20   source: framework
+  ↑ 写入: 派发任务工具自动注册 entry
+  ↑ 更新: BrainBus 收到回传时自动更新 entry
+  ↑ 清理: 已完成条目通过 ttl 自动过期
+```
+
+依赖 §4 ContextSlot 化。§4 之前可用简化版：
+框架维护 per-brain 的 tracked tasks 数组，assemblePrompt 时渲染到 system prompt。
+
+#### 7.3 brain_board — 公开查询
+
+全局运营数据不进 slot（避免污染 system prompt），通过工具主动查询：
+
+```
+manage_brain({ action: "list" })
+→ [
+    { id: "listener", model: "gemini-2.5-flash", status: "running", tickCount: 142, subs: ["stdin"] },
+    { id: "planner", model: null, status: "running", tickCount: 89, type: "script" },
+    ...
+  ]
+```
+
+数据来源：Scheduler 维护 `Map<brainId, RuntimeStats>`。
+用途：IntentBrain 做 ROI 审计、ReflectBrain 分析系统健康度。
+
+### 涉及文件
+
+- `src/core/brain.ts` — 删除 `updateState()`，新增 per-brain tracked tasks
+- `src/core/types.ts` — 删除 `ToolContext.readState`，新增 TrackedTask 类型
+- `src/context/context-engine.ts` — 删除 Layer 2 (State)，添加 slot_board 渲染
+- `tools/read_state.ts` — 删除（功能由 read_file + manage_brain 替代）
+- `tools/send_message.ts` — 发送任务时自动注册 slot_board 追踪条目
+- `src/core/scheduler.ts` — 新增 RuntimeStats（给 manage_brain list 用）
+
+[Tool result] StrReplace
+
+assistant:
+更新优先级部分的引用。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string:                        ──→  §7 brain_board slot（依赖 slot）
+  new_string:                        ──→  §7 slot_board（依赖 slot）
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: 3. **§8.2 + §7 brain_board**（manage_brain + brain_board 作为 Slot）— §4 完成后实现
+  new_string: 3. **§8.2 + §7 slot_board**（manage_brain + slot_board 作为 Slot）— §4 完成后实现
+
+[Tool result] StrReplace
+
+assistant:
+验证一下没有遗漏的 brain_board 引用。
+[Tool call] Grep
+  pattern: brain_board
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  -n: true
+
+[Tool result] Grep
+
+assistant:
+剩下的 `brain_board` 引用都是作为"公开查询"概念使用的，这是正确的。确认完成。
+[Tool call] Shell
+  command: grep -n "^## " /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  description: 最终章节结构确认
+
+[Tool result] Shell
+
+assistant:
+清晰了。两个概念现在完全分开：
+
+| | **slot_board**（私有） | **brain_board**（公开） |
+|---|---|---|
+| 位置 | 每个脑的 `slot:slot_board`，在 system prompt 里 | Scheduler 运行时数据，通过 `manage_brain` 查询 |
+| 触发 | 派发任务工具自动订阅 → 回传时自动更新 | Scheduler 自动维护 |
+| 可见性 | 只有自己看到 | 任何脑主动查询 |
+| 内容 | "我发出去的任务状态" | "所有脑的运行指标" |
+
+核心是 **slot_board 是一个订阅机制**：你用 `send_message` 或 `spawn_thought` 派发任务时，框架自动把目标脑的回传消息订阅到你的 system prompt 里。你不需要主动 `read_state`——下次 tick 自动就看到了。
+
+user:
+<user_query>
+顺便帮我调研下a gen ti OS里有heartbeat的概念么，还是纯粹的用户交付范式的
+</user_query>
+
+assistant:
+[Tool call] Grep
+  pattern: heartbeat|Heartbeat
+  path: /home/aw/Desktop/gamer/agentic_os/src
+  output_mode: files_with_matches
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/agentic_os/src/core/heartbeat.ts
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/agentic_os/src/core/trigger-queue.ts
+
+[Tool result] Read
+
+[Tool result] Read
+
+assistant:
+[Tool call] Grep
+  pattern: heartbeat|triggerQueue|TriggerQueue
+  path: /home/aw/Desktop/gamer/agentic_os/src/core/agent-loop.ts
+  -C: 3
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Grep
+  pattern: heartbeat|Heartbeat|triggerQueue|TriggerQueue
+  path: /home/aw/Desktop/gamer/agentic_os/src/agent-session.ts
+  -C: 5
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Grep
+  pattern: heartbeat|triggerQueue\.push|trigger\.source
+  path: /home/aw/Desktop/gamer/agentic_os/src/cli.tsx
+  -C: 3
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Grep
+  pattern: heartbeat|onHeartbeat|monitorLoop
+  path: /home/aw/Desktop/gamer/agentic_os/src/ui
+  -C: 5
+
+[Tool result] Grep
+
+assistant:
+调研完毕。AgenticOS **确实有 heartbeat 机制**，而且是一个相当精巧的设计。
+
+---
+
+## AgenticOS 的 Heartbeat 机制
+
+AgenticOS 不是纯粹的用户交互范式。它有三种触发源，通过 `TriggerQueue` 统一排队：
+
+```typescript
+type TriggerSource = 'user' | 'agent_message' | 'heartbeat';
+
+const PRIORITY = {
+  user: 0,          // 最高优先
+  agent_message: 1, // 子 Agent 回传
+  heartbeat: 2,     // 最低优先
+};
+```
+
+### Heartbeat 做什么
+
+`Heartbeat` 类每 60 秒 tick 一次，逻辑很简单：
+
+```1:76:agentic_os/src/core/heartbeat.ts
+// 核心 tick 逻辑
+private tick(): void {
+  if (!this.config.enableAutonomous) return;  // 可关闭
+  if (!this.isHumanActive) return;            // 人走了就不跑
+
+  const hasPendingMessages = this.messageBus.pending('team-lead') > 0;
+
+  if (hasPendingMessages) {
+    // 有子 Agent 消息待处理 → 以 agent_message 优先级触发
+    this.triggerQueue.push('agent_message', 'Sub-agent messages pending');
+  } else {
+    // 无消息 → 以 heartbeat 低优先级触发
+    this.triggerQueue.push('heartbeat', 'Periodic check-in');
+  }
+}
+```
+
+### 关键设计点
+
+1. **人类活跃检测**：`humanIdleThresholdSec` 默认 3600s（1 小时）。如果用户超过 1 小时没有交互，heartbeat 停止触发——避免人走了 Agent 还在烧 token。
+
+2. **智能触发抑制**：heartbeat 不是无脑唤醒。它检查 MessageBus 是否有待处理的子 Agent 消息。有消息就以更高优先级（`agent_message`）触发，没有才以最低优先级（`heartbeat`）触发。
+
+3. **与 monitorLoop 配合**：`AgentSession.monitorLoop()` 是核心循环：
+
+```typescript
+while (!this.closed) {
+  this.heartbeat.start();                    // 开始心跳
+  const trigger = await triggerQueue.waitForNext();  // 阻塞等待
+  this.heartbeat.stop();                     // 收到触发，停心跳
+
+  if (trigger.source === 'agent_message') {
+    // 子 Agent 消息 → 回调处理
+  } else if (trigger.source === 'heartbeat') {
+    // 心跳 → 回调处理
+  } else if (trigger.source === 'user') {
+    // 用户输入 → 回调处理
+  }
+}
+```
+
+4. **UI 层决定怎么处理 heartbeat**：在 `App.tsx` 中，收到 heartbeat 回调后，只在有 pending 子 Agent 消息时才真正触发一轮 Agent 运行：
+
+```typescript
+session.onHeartbeat(() => {
+  if (busyRef.current) return;
+  const pending = session.messageBus.pending('team-lead');
+  if (pending > 0) {
+    runTurn(
+      `<system_reminder>Heartbeat check-in. You have ${pending} pending message(s).</system_reminder>`,
+      'heartbeat',
+    );
+  }
+});
+```
+
+### 与 MineClaw 的对比
+
+| | AgenticOS Heartbeat | MineClaw Heartbeat |
+|---|---|---|
+| **定位** | 辅助机制，主驱动仍是用户输入 | 核心驱动之一（事件驱动范式） |
+| **触发频率** | 60s 一次（可配置） | 由 `brain.json` 配置（可以是秒级） |
+| **触发条件** | 人类活跃 + 自动模式开启 | 无条件（订阅即触发） |
+| **智能抑制** | 检查 MessageBus 是否有 pending | 无（priority 排序处理） |
+| **谁消费** | 单一 Agent（team-lead） | 每个脑独立订阅 |
+| **实现** | 独立类，注入 TriggerQueue | 订阅源（subscriptions/heartbeat.ts） |
+
+AgenticOS 的 heartbeat 主要用途是**捡漏**——万一子 Agent 完成了但没有用户交互来触发消费，heartbeat 确保 lead 不会漏掉子 Agent 的消息。它不是真正的自主循环驱动，更像是一个安全网。
+
+MineClaw 的 heartbeat 则是正经的自主驱动——游戏 AI 需要持续自主行动，不能等用户说话才动。
+
+user:
+<user_query>
+我有个问题，当前mineclaw的实现是参考了agenticOS的triggerQueue的，这保证了所有触发事件都不会被抛弃，那我在想会不会有类似的事情需要被跳过的情况，比如一些heartbeat可能可以被忽略？不过你评估下，可能暂时也不似很需要考虑这个问题
+</user_query>
+
+assistant:
+[Thinking] The user is asking about whether MineClaw's EventQueue (which was inspired by AgenticOS's TriggerQueue) should have some kind of event suppression/skipping mechanism, particularly for heartbeat events that might be redundant.
+
+Let me think about this:
+
+1. Current MineClaw EventQueue has a max capacity of 50, and drops oldest events when full - so there IS a basic overflow protection
+2. AgenticOS's Heartbeat has smart suppression - it checks if there are pending messages before deciding what to push
+3. The question is: in MineClaw's event-driven model, could heartbeat events accumulate unnecessarily?
+
+Let me think about scenarios:
+- If a brain is doing a long LLM call (could take 10-30 seconds), heartbeat events could queue up
+
+
+- But MineClaw already has `coalesceMs` which batches events together, and the `drain()` method returns all queued events at once, so multiple heartbeats just appear as a single batch
+- The queue cap of 50 prevents unbounded growth, and heartbeats have low priority (2) so they're processed after more important events anyway
+
+So the current design actually handles this well - the brain sees multiple heartbeat events as one batch, which is harmless noise, and the priority system ensures they don't interfere with critical events.
+
+I think the user's right that this isn't urgent. The real concern would be if heartbeat processing triggers expensive LLM calls, but that's more of a soul.md issue than a framework problem. The EventQueue design is solid as-is.
+这个问题挺好的，让我快速看一下当前 EventQueue 的实现。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/event-queue.ts
+
+[Tool result] Read
+
+assistant:
+当前设计其实已经**自然地处理了大部分问题**，暂时不需要额外机制。原因：
+
+**1. `drain()` 是批处理的**
+
+脑醒来后 `drain()` 把所有事件一次性拿走。假设积了 5 个 heartbeat + 1 条 bus 消息，LLM 看到的是一批 6 个事件——它自然会忽略重复的 heartbeat，只处理 bus 消息。不会触发 5 次 LLM 调用。
+
+**2. `coalesceMs` 合并窗口**
+
+priority > 0 的事件触发唤醒后还会等一个合并窗口（默认 300ms），让后续到达的事件也被收进同一批。heartbeat（priority: 2）天然被合并。
+
+**3. MAX_EVENTS = 50 兜底**
+
+队列超过 50 就丢最旧的。heartbeat 是最低优先级（2），如果真的积压了，drain 排序后它们排在最后面，LLM 处理时自然优先看重要的。
+
+**4. 真正可能需要跳过的场景**
+
+唯一需要注意的是：如果脑正在做一个很长的 LLM 调用（比如 30 秒），期间来了 3 个 heartbeat，调用结束后 `drain()` 拿到这 3 个——但因为是一批处理，LLM 不会被唤醒 3 次，只是看到 3 个 heartbeat 事件而已，开销就是多几行 system prompt。
+
+如果未来发现 heartbeat 真的造成噪音（比如游戏场景下每秒一个 heartbeat，积了几十个），可以在 `drain()` 里加一行去重：
+
+```typescript
+// 未来可选：同 source+type 的事件只保留最新一个
+const deduped = deduplicateBySourceType(batch);
+```
+
+但现在不需要。当前的 batch + priority + MAX_EVENTS 组合已经足够健壮。**这个问题可以留到性能实测时再决定。**
+
+user:
+<user_query>
+2. coalesceMs 合并窗口
+priority > 0 的事件触发唤醒后还会等一个合并窗口（默认 300ms），让后续到达的事件也被收进同一批。heartbeat（priority: 2）天然被合并
+这个设计很有意思，可以仔细讲讲吗，以及这个实现是参考了 @agenticos的还是openclaw的，里调研下
+</user_query>
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/brain.ts
+
+[Tool result] Read
+
+assistant:
+现在来调研 AgenticOS 和 openclaw 有没有类似的 coalesce 机制。
+[Tool call] Grep
+  pattern: coalesce|coalesc|debounce|batch|drain|merge.*event|merge.*trigger
+  -i: true
+  path: /home/aw/Desktop/gamer/agentic_os/src/core
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Grep
+  pattern: waitForNext|wait.*trigger|wait.*event|wait.*message
+  path: /home/aw/Desktop/gamer/agentic_os/src/core
+  -C: 5
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Grep
+  pattern: coalesce|coalesc|debounce|batch|merge.*event
+  -i: true
+  path: /home/aw/Desktop/gamer/agentic_os/src
+  output_mode: files_with_matches
+
+[Tool result] Grep
+
+assistant:
+AgenticOS 没有 coalesce 机制。再看看 openclaw。
+[Tool call] Glob
+  glob_pattern: **/openclaw/**/*.ts
+  target_directory: /home/aw/Desktop/gamer
+
+[Tool result] Glob
+
+assistant:
+[Tool call] Grep
+  pattern: coalesce|coalesc|debounce|batch.*event|merge.*event|wait.*drain
+  -i: true
+  path: /home/aw/Desktop/gamer/openclaw/src/infra
+
+[Tool result] Grep
+
+assistant:
+openclaw 有很完整的 coalesce 机制。让我深入看看。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/openclaw/src/infra/heartbeat-wake.ts
+
+[Tool result] Read
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/openclaw/src/infra/heartbeat-runner.ts
+  offset: 1120
+  limit: 60
+
+[Tool result] Read
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/openclaw/src/infra/heartbeat-runner.ts
+  offset: 1280
+  limit: 100
+
+[Tool result] Read
+
+assistant:
+调研完毕。三个框架的 coalesce 机制对比非常清晰。
+
+---
+
+## Coalesce（合并窗口）机制详解
+
+### MineClaw 的实现
+
+核心代码就在 `brain.ts` 的 `run()` 方法里，只有 3 行：
+
+```56:79:mineclaw/src/core/brain.ts
+  async run(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted) {
+      // ① 阻塞等待：队列空时挂起，直到有非 silent 事件到来
+      let trigger: Event;
+      try {
+        trigger = await this.eventQueue.waitForEvent(signal);
+      } catch { break; }
+
+      // ② 合并窗口：如果触发事件不是 immediate（priority > 0），等一小段时间
+      if ((trigger.priority ?? 1) > 0 && this.coalesceMs > 0) {
+        await sleep(this.coalesceMs);
+      }
+
+      // ③ 批量取出：把合并窗口内积累的所有事件一次性拿走
+      const events = this.eventQueue.drain();
+      if (events.length === 0) continue;
+
+      // ④ 处理整批
+      await this.process(events);
+    }
+  }
+```
+
+**时序图**：
+
+```
+时间轴 →
+
+事件到达:  [stdin消息]         [heartbeat]  [bus消息]
+           ↓                    ↓            ↓
+           t=0                  t=100ms      t=200ms
+
+脑的行为:  waitForEvent 唤醒
+           ↓
+           priority=1 > 0 → sleep(300ms)
+           ↓
+           t=300ms: drain() → 拿到 3 个事件
+           ↓
+           process([stdin消息, heartbeat, bus消息])  ← 一次 LLM 调用处理全部
+```
+
+**关键行为**：
+
+1. **priority 0 跳过合并**：`(trigger.priority ?? 1) > 0` 这个条件意味着 `priority: 0`（immediate）的事件**不等待**，立即 drain + process。典型场景：`send_message` 发的跨脑消息是 priority 0，收到后立即处理。
+
+2. **合并窗口期间新来的事件自动入队**：`sleep(300ms)` 期间 EventQueue 的 `push()` 仍在工作，后来的事件默默入队。300ms 后 `drain()` 一次性全拿走。
+
+3. **drain 按 priority 排序**：拿出来后先排序再交给 LLM。priority 0 排前面，heartbeat（priority 2）排最后。LLM 自然先处理重要的。
+
+### 三方对比
+
+| | AgenticOS | openclaw | MineClaw |
+|---|---|---|---|
+| **有 coalesce 吗** | **没有** | **有，250ms 默认** | **有，300ms 默认** |
+| **实现方式** | TriggerQueue 取一个处理一个 | `setTimeout` + 合并窗口 + pending Map | `sleep(coalesceMs)` + `drain()` |
+| **复杂度** | 最简单（~60 行） | 最复杂（~260 行），含 retry/generation/targeted wake | 极简（3 行逻辑） |
+| **priority 跳过** | 有（user > agent_message > heartbeat） | 有（`coalesceMs: 0` 立即触发） | 有（priority 0 跳过 sleep） |
+| **批处理** | 不是——每次只取一个 Trigger | 是——`pendingWakes` Map 批量处理 | 是——`drain()` 全部取出 |
+| **去重** | 不去重 | 同 target 只保留最高优先级 | 不去重（但批处理+排序自然降噪） |
+
+### AgenticOS 为什么不需要 coalesce
+
+AgenticOS 是**用户对话驱动**的。它的 `TriggerQueue.waitForNext()` 每次只取一个 Trigger：
+
+```typescript
+async waitForNext(): Promise<Trigger> {
+  if (this.queue.length > 0) return this.queue.shift()!;
+  return new Promise(resolve => { this.resolver = resolve; });
+}
+```
+
+取一个，跑一轮完整的 Agent Loop（可能几十秒），跑完再取下一个。不存在"短时间内大量事件涌入"的场景——用户打字没那么快，heartbeat 60 秒才一次。
+
+而且 AgenticOS 的 heartbeat 本身就有**智能抑制**——它检查 MessageBus 有没有 pending 消息，没有的话 heartbeat 事件在 UI 层直接被忽略（不触发 `runTurn`）。所以 AgenticOS 把"该不该处理"的判断放在了**push 侧**和**消费侧**，而非用合并窗口。
+
+### openclaw 的 coalesce 为什么这么复杂
+
+openclaw 是**多 Agent 服务端框架**（gateway 模式），有很多并发的信号源：
+
+- 多个 Agent 各自有 heartbeat interval
+- state.json 文件变更（chokidar 监听）触发即时 heartbeat
+- 重启请求可能连续触发多次
+- 每个 Agent 有独立的 wake target
+
+所以 openclaw 的 coalesce 需要：
+- **per-target 去重**：`pendingWakes` 是一个 Map，key 是 `agentId::sessionKey`。同一个 Agent 的多次 wake 请求只保留最高优先级的那个
+- **timer 抢占**：新请求比已排定的 timer 更紧急时，取消旧 timer 换上新的
+- **retry 保护**：retry 类型的 timer 不可被普通请求抢占（防止退避被破坏）
+- **generation 防腐**：handler 换代后旧的 disposer 不会误清新 handler
+
+### MineClaw 的设计来源
+
+MineClaw 的 coalesce 不是照搬哪一个，而是**取了 openclaw 的思想 + 极简化实现**：
+
+- **思想来自 openclaw**：合并窗口 + 批处理 + priority 跳过
+- **实现参考 AgenticOS 的简洁性**：不搞 Map/timer/generation，一个 `sleep` 搞定
+
+这是因为 MineClaw 的场景处于两者之间——它是事件驱动的（不像 AgenticOS 那么闲），但每个脑是独立循环（不像 openclaw 那样有 gateway 级并发）。所以 `sleep(coalesceMs) + drain()` 刚好够用：
+
+```
+openclaw 的复杂度：处理多 Agent × 多信号源 × 服务端并发
+MineClaw 的复杂度：单脑 × 多事件源 × 进程内
+AgenticOS 的复杂度：单 Agent × 用户输入 × 偶尔 heartbeat
+```
+
+MineClaw 的 3 行 coalesce 在它的复杂度级别上是最优解——足够处理事件合并，又不引入 openclaw 那套 timer 管理的复杂度。
+
+user:
+<user_query>
+mineclaw的coalesce的逻辑主要是怎么样的
+</user_query>
+
+assistant:
+[Thinking] The user wants me to explain MineClaw's coalesce logic in detail. Let me re-read the relevant code and explain it clearly.
+MineClaw 的 coalesce 逻辑极简，整个机制就靠 `run()` 里的三步配合：
+
+```56:79:mineclaw/src/core/brain.ts
+  async run(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted) {
+      // ① 阻塞挂起，等待第一个非 silent 事件
+      let trigger: Event;
+      try {
+        trigger = await this.eventQueue.waitForEvent(signal);
+      } catch { break; }
+
+      // ② 合并窗口
+      if ((trigger.priority ?? 1) > 0 && this.coalesceMs > 0) {
+        await sleep(this.coalesceMs);
+      }
+
+      // ③ 一次性取走全部
+      const events = this.eventQueue.drain();
+      if (events.length === 0) continue;
+
+      await this.process(events);
+    }
+  }
+```
+
+**一句话总结：被唤醒后故意多等一会儿，让后面的事件也挤进来，然后一起处理。**
+
+逐步拆解：
+
+**第一步：阻塞等待**
+
+脑在 `waitForEvent()` 处挂起，什么都不做，零 CPU。直到 EventQueue 收到一个 `silent: false` 的事件，才唤醒。
+
+**第二步：决定等不等**
+
+唤醒后看触发事件的 priority：
+- `priority: 0`（immediate）→ **不等**，跳过 sleep，直接 drain。用于紧急事件，比如 `send_message` 发来的跨脑消息。
+- `priority: 1`（normal）或 `priority: 2`（low）→ **等 300ms**。这 300ms 就是合并窗口。
+
+**第三步：sleep 期间发生什么**
+
+脑在 sleep，但 EventQueue 没有 sleep——外部事件照常 push 进来：
+
+```
+t=0ms    stdin 消息到达 (priority:1) → 唤醒脑 → 开始 sleep(300ms)
+t=50ms   heartbeat 到达 (priority:2) → push 入队（脑在 sleep，不管）
+t=120ms  bus 消息到达 (priority:0)   → push 入队（脑在 sleep，不管）
+t=250ms  又一个 heartbeat (priority:2)→ push 入队
+t=300ms  sleep 结束 → drain() 取出全部 4 个事件
+```
+
+**第四步：drain 排序**
+
+`drain()` 取出后按 priority 排序：
+
+```typescript
+drain(): Event[] {
+  const batch = [...this.queue];
+  this.queue.length = 0;
+  batch.sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1) || a.ts - b.ts);
+  return batch;
+}
+```
+
+排序结果：`[bus消息(0), stdin消息(1), heartbeat(2), heartbeat(2)]`
+
+LLM 在 system prompt 里看到的事件顺序就是按重要性排列的——最重要的在前面。
+
+**核心巧妙之处：用 sleep 的"不作为"实现了合并。** 不需要 timer 管理、不需要 pending Map、不需要去重逻辑。因为脑的 agent loop 是线性的（一次只处理一批），sleep 期间自然积累，drain 自然批处理。
+
+user:
+<user_query>
+但是很多消息应该都是userMessage把，如果按优先级排列会不会反而破坏了时序性？还是说不会
+</user_query>
+
+assistant:
+[Thinking] The user raises a good point. If multiple user messages arrive during the coalesce window, sorting them by priority could break their chronological order. Let me think about this...
+
+Looking at the drain sort:
+```typescript
+batch.sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1) || a.ts - b.ts);
+```
+
+The sort is: first by priority, then by timestamp (`a.ts - b.ts`). So events with the SAME priority are sorted by time (chronological order preserved). Events with DIFFERENT priorities get reordered.
+
+For user messages (stdin), they all come from the same subscription source with the same priority (probably priority 1, which is the default). 
+
+So multiple user messages within the same coalesce window would maintain their chronological order. The reordering only happens between different priority levels—immediate messages (priority 0) go first, normal messages (priority 1) in the middle, and low-priority ones like heartbeats (priority 2) go last. Within each priority tier, the timestamp comparison preserves time order. But I should consider whether mixing priorities could actually cause problems in practice.
+
+Looking at a concrete example: if a stdin message comes in, then a bus message, then another stdin message, after sorting they'd be reordered as bus first, then both stdin messages in their original order. The LLM would see the bus event before the user messages. But these aren't conversational messages—they're events grouped by source in the context engine, so the ordering shouldn't break anything.
+好问题。来看一下排序规则的细节：
+
+```typescript
+batch.sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1) || a.ts - b.ts);
+```
+
+**同 priority 的事件之间时序是保留的**——排序是先 priority，再 `a.ts - b.ts`（时间戳升序）。所以：
+
+```
+3 条 stdin 消息（都是 priority 1）：
+  t=0ms   "先做A"
+  t=50ms  "然后做B" 
+  t=100ms "最后做C"
+
+drain 后排序结果：["先做A", "然后做B", "最后做C"]  ← 时序完整保留
+```
+
+**跨 priority 才会重排**：
+
+```
+t=0ms    stdin: "先做A"          (priority 1)
+t=50ms   bus: "planner 完成了X"   (priority 0)  
+t=100ms  stdin: "然后做B"        (priority 1)
+
+drain 后：[bus:X(0), stdin:A(1), stdin:B(1)]
+```
+
+但这不是破坏时序——这是**按重要性分类**。而且看 `context-engine.ts` 里事件是**按 source 分组**渲染的：
+
+```53:69:mineclaw/src/context/context-engine.ts
+  // Layer 3: Events — grouped by source
+  const grouped = new Map<string, Event[]>();
+  for (const e of events) {
+    const list = grouped.get(e.source) ?? [];
+    list.push(e);
+    grouped.set(e.source, list);
+  }
+
+  for (const [source, evts] of grouped) {
+    runtimeLines.push(`## 来自 ${source}`);
+    for (const e of evts) {
+      runtimeLines.push(`- [${e.type}] ${renderEventDisplay(e)}`);
+    }
+  }
+```
+
+LLM 实际看到的是：
+
+```markdown
+## 来自 bus
+- [message] planner 完成了X
+
+## 来自 stdin  
+- [message] 先做A
+- [message] 然后做B
+```
+
+每个 source 内部的顺序就是 drain 出来的顺序——同 source 同 priority，时序完全保留。不同 source 之间是分组展示的，priority 排序只影响分组的先后顺序（bus 组在 stdin 组前面），但不影响组内的时序。
+
+**所以不会破坏时序。** priority 排序做的事是"哪个 source 的事件组排在前面让 LLM 先看到"，而不是把不同 source 的消息交叉混排。
+
+user:
+<user_query>
+未来这个是不是要和slots的概念融合
+</user_query>
+
+assistant:
+[Thinking] The user is asking whether the event rendering in context-engine (currently hard-coded as Layer 3, grouped by source) should be integrated with the Slots system in the future.
+
+Looking at the current roadmap §4, it says:
+- "events 仅进 user message：从 system prompt 中移除 events 层"
+
+So events are already planned to be moved out of system prompt and into user message only. But the user is asking about a deeper question - should events themselves become slots or interact with slots?
+
+Let me think about this...
+
+Currently events are rendered in two places:
+1. System prompt (Layer 3) - grouped by source
+2. User message - the actual content
+
+
+The roadmap correctly distinguishes between events (incremental, ephemeral) and slots (persistent state), placing them in different layers. But there's a potential middle ground where certain events might want to persist as slots—like a bus message that carries forward across ticks.
+
+The key insight is that events and slots serve different purposes, but specific events can trigger slot updates as a side effect. So the framework should route events to both the user message (for immediate context) and to relevant slots (for persistent tracking), which is already implicit in how the slot_board handles task completion messages.
+对，但不是"事件变成 Slot"——而是**事件触发 Slot 更新，两者是不同的时间尺度**。
+
+当前 roadmap §4 已经规划了"events 仅进 user message"，从 system prompt 中移除。这是对的，因为：
+
+| | Slot | Event |
+|---|---|---|
+| **时间尺度** | 持久的，跨 tick 存在 | 瞬时的，这一批用完就没了 |
+| **位置** | system prompt（每次 tick 都能看到） | user message（只在当前 tick 出现） |
+| **内容** | "我是谁、我在追踪什么、我有什么工具" | "刚刚发生了什么" |
+
+但关键在于：**某些事件应该在进入 user message 的同时，作为副作用更新对应的 Slot。** 这就是融合的方式：
+
+```
+事件到达
+  ↓
+  ├── 所有事件 → user message（本 tick 的输入上下文）
+  │
+  └── 特定事件 → 触发 Slot 更新（持久化到 system prompt）
+      ├── bus 消息 "planner 完成了任务" → 更新 slot:slot_board 对应条目
+      ├── world 事件 "血量降到 5" → 更新 slot:world 快照
+      ├── agent 消息 "reflect 发来审批请求" → 添加 slot:slot_board 条目
+      └── heartbeat → 不更新任何 slot（纯瞬时，用完即弃）
+```
+
+这样 LLM 看到的是两层信息：
+
+```markdown
+── system prompt（Slots 渲染，持久上下文）──
+
+## Soul
+你是 Social Brain...
+
+## Slot Board
+- [✓ planner] 挖钻石任务 | 完成 | 结果: "3个子目标"    ← 之前的 bus 事件沉淀下来的
+- [▶ reflect] 诊断失败 | 执行中                        ← 持久追踪
+
+## Tools
+- send_message, read_file, ...
+
+── user message（Events 渲染，本 tick 输入）──
+
+## 来自 bus
+- [message] reflect: "诊断完成，建议更换铁镐"           ← 刚到的新事件
+
+## 来自 stdin
+- [message] "去挖钻石"                                  ← 刚到的用户消息
+```
+
+LLM 既能看到**持久状态**（Slot Board 里已经追踪了一段时间的任务），又能看到**刚发生的事**（本 tick 的新事件）。两者不混淆。
+
+所以融合的方式不是把事件塞进 Slot，而是在 EventQueue → Brain 的管道中加一个**事件路由层**：
+
+```typescript
+// brain.ts process() 开始时
+for (const event of events) {
+  // 路由到 Slot（副作用）
+  if (event.source === "bus" && isTaskCompletion(event)) {
+    this.slotRegistry.updateEntry("slot_board", event.payload.taskId, {
+      content: `[✓ ${event.source}] ${event.payload.summary}`,
+      meta: { status: "completed" },
+    });
+  }
+  if (event.source === "world") {
+    this.slotRegistry.set({ name: "world", content: event.payload.snapshot, ... });
+  }
+}
+
+// 然后所有事件照常进 user message
+```
+
+这个路由逻辑可以是框架内置的（bus 消息自动更新 slot_board），也可以是 Directive 配置的（哪些事件源映射到哪个 slot），但核心原则不变：**Event 是流水，Slot 是沉淀。事件流过后留下痕迹在 Slot 里。**
+
+user:
+<user_query>
+等下，但是我们不是说slot里有system_prompt分chunk和增量消息两种定义么，还是说你觉得有更好的定义方式？
+</user_query>
+
+assistant:
+[Thinking] The user is challenging my separation of "Slots = system prompt" and "Events = user message". They're pointing out that in the architecture-deep-dive.md, there was a distinction made:
+
+1. Slots = persistent chunks in system prompt
+2. Incremental messages = not persistent, goes into conversation messages
+
+But the user is asking: shouldn't Slots encompass BOTH? That is, shouldn't the Slot system handle both the persistent system prompt chunks AND the incremental event messages?
+
+This is actually a deeper question about the Slot abstraction. Let me reconsider...
+
+If we think about it from the LLM's perspective, everything it sees is either:
+
+
+- System prompt (persistent across turns)
+- Conversation messages (user/assistant/tool messages)
+
+Events currently go into user messages. But maybe Slots should be a more general concept that handles both persistent slots (rendered into system prompt, surviving across ticks) and ephemeral slots (rendered into user message, only existing for this tick). This would make the Slot system the single abstraction for "everything the LLM can see", with the distinction being just a property of whether the slot persists or is ephemeral.
+
+This is actually quite elegant—instead of two separate systems, I'd have one unified system where each slot declares its target location. I'm defining a structure where slots can specify whether they render into the system prompt or the user message, then the rendering logic pulls all "system" target slots for the prompt and all "message" target slots for the current turn's user message.
+
+Defining the rendering logic...
+
+But actually, I'm second-guessing whether this is overcomplicating things. The user's point might be simpler—events are already a type of slot content, just the incremental kind rather than persistent. So I don't need to treat them as a separate concept outside the slot system at all.
+
+The real question is whether to have two slot types (persistent and ephemeral) unified under one abstraction, or keep slots and events as separate concerns. I think unifying them makes more sense architecturally—it's one consistent abstraction rather than two parallel systems.
+你说得对，我前面的回答把 Event 和 Slot 硬拆成了两套东西，但其实不需要。
+
+如果 Slot 本身就分两种渲染目标——**持久块（system prompt）** 和 **增量消息（user message）**——那 Event 就是 Slot 的一种，不需要独立存在：
+
+```typescript
+interface ContextSlot {
+  name: string;
+  order: number;
+  source: "file" | "loader" | "tool" | "framework";
+  
+  target: "system" | "message";  // 渲染到哪里
+  ephemeral?: boolean;           // true = 渲染后清空（增量消息的默认行为）
+
+  content: string | (() => string | Promise<string>);
+  entries?: SlotEntry[];
+  condition?: (ctx: SlotContext) => boolean;
+  // ...
+}
+```
+
+这样 **一切 LLM 能看到的东西都是 Slot**，只是渲染位置不同：
+
+```
+target: "system"（持久，在 system prompt 中）
+──────────────────────────────────
+slot "soul"              持久     ← soul.md
+slot "runtime"           持久     ← 框架自动生成
+slot "slot_board"        持久     ← 跨脑任务追踪
+slot "tools"             持久     ← tool-loader
+slot "directive:*"       持久     ← 指令模块
+slot "skills"            持久     ← skill 摘要
+slot "todos"             持久     ← 工具可写
+slot "world"             持久     ← MineAvatar 快照
+
+target: "message"（增量，在 user message 中，渲染后清空）
+──────────────────────────────────
+slot "events:stdin"      增量     ← stdin 订阅推入的消息
+slot "events:bus"        增量     ← BrainBus 收到的消息
+slot "events:heartbeat"  增量     ← 心跳事件
+slot "events:world"      增量     ← MineAvatar 实时事件
+```
+
+渲染时 `registry.render()` 变成两次调用：
+
+```typescript
+// system prompt
+const system = await registry.render({ target: "system" });
+
+// user message
+const user = await registry.render({ target: "message" });
+// 渲染完后，ephemeral slot 自动清空 entries
+```
+
+这样做的好处：
+
+**1. 一套 API 管一切**
+
+不再有"事件走 EventQueue 的 drain + context-engine 的分组渲染"和"Slot 走 SlotRegistry 的 render"两条路径。工具和框架只需要跟 SlotRegistry 打交道：
+
+```typescript
+// 事件到达时，框架直接写 slot
+registry.addEntry("events:bus", {
+  id: `evt_${Date.now()}`,
+  content: `[message] planner: "分解完成，3个子目标"`,
+  meta: { source: "bus", type: "message" },
+});
+
+// 同时如果是任务完成，也更新持久 slot
+registry.updateEntry("slot_board", "task_planner_001", {
+  content: "- [✓ planner] 完成",
+  meta: { status: "completed" },
+});
+```
+
+**2. 事件也能用 Slot 的全部能力**
+
+条件渲染、order 排序、子条目管理——增量消息 slot 天然继承：
+
+```typescript
+// heartbeat 事件只在没有其他事件时才显示（避免噪音）
+registry.set({
+  name: "events:heartbeat",
+  target: "message",
+  ephemeral: true,
+  order: 90,  // 排最后
+  condition: (ctx) => ctx.otherEventCount === 0,  // 只在没别的事件时显示
+  // ...
+});
+```
+
+**3. 事件沉淀到持久 Slot 变成同一套操作**
+
+"bus 消息到达" → 写 `events:bus`（增量 slot，本 tick 可见）+ 更新 `slot_board`（持久 slot，跨 tick 可见）。两个操作都是 `registry.addEntry` / `registry.updateEntry`，统一的 API。
+
+**4. EventQueue 的职责更纯粹**
+
+EventQueue 只负责**唤醒 + 合并窗口 + 优先级排序**——它是调度层。drain 出来的事件交给框架路由到对应的 Slot，EventQueue 不再关心渲染。
+
+```
+EventQueue（调度层）
+  push → waitForEvent → sleep(coalesce) → drain
+  ↓
+事件路由（框架层）
+  event.source === "stdin" → registry.addEntry("events:stdin", ...)
+  event.source === "bus"   → registry.addEntry("events:bus", ...)
+                           → registry.updateEntry("slot_board", ...) // 如果是任务回传
+  ↓
+SlotRegistry.render（渲染层）
+  target: "system" → system prompt
+  target: "message" → user message → 渲染后清空 ephemeral entries
+```
+
+这比我之前说的"Event 是流水，Slot 是沉淀"更干净——**没有"流水"这个独立概念，只有"短暂的 Slot"和"持久的 Slot"。** 要不要更新到 roadmap §4 里？
+
+user:
+<user_query>
+你的意思是什么，可以解释下吗，感觉把slot和event揉在一起也有点奇怪，但是确实他们之前互相有影响。
+但我认同你的这个说法：
+4. EventQueue 的职责更纯粹
+EventQueue 只负责唤醒 + 合并窗口 + 优先级排序——它是调度层。drain 出来的事件交给框架路由到对应的 Slot，EventQueue 不再关心渲染。
+</user_query>
+
+assistant:
+[Thinking] The user feels that merging Slots and Events into one concept is a bit weird, even though they influence each other. They do agree with the point about EventQueue being purely a scheduling layer.
+
+Let me reconsider. The user is right - Slots and Events are conceptually different things:
+- Slots = what the LLM sees (perception layer)
+- Events = what happened (signals/triggers)
+
+Making Events a "type of Slot" conflates the signal with its rendering. A cleaner design keeps them separate but has a well-defined routing layer between them:
+
+1. EventQueue: scheduling (wake, coalesce, drain, priority sort)
+2. Event Router: maps events to Slot updates (some events update persistent slots, some become ephemeral content in user message)
+
+
+3. SlotRegistry: rendering (system prompt + user message assembly)
+
+The Event Router is the bridge. Events flow through it and the router decides what each event does - whether it updates a persistent slot like slot_board, appends to the user message, or both. The brain's process() function is where events get routed to their slot updates and side effects.
+
+I think the cleaner approach is to keep events and slots as separate concepts with a clear routing layer connecting them. The user message rendering doesn't need to be a slot itself - it's just the events formatted as user input, which is simpler and avoids forcing everything into the slot abstraction.
+你说得对，硬把 Event 塞进 Slot 的类型体系确实别扭——它们是不同层面的东西。让我理清楚。
+
+## 三层各司其职
+
+```
+EventQueue（调度层）
+  职责：唤醒、合并窗口、优先级排序
+  不关心：事件内容是什么、怎么渲染
+  输出：drain() → Event[]
+
+        ↓
+
+Event Router（路由层）← 这是缺的一层
+  职责：把事件分发到它该去的地方
+  规则：
+    bus 消息且是任务回传 → 更新 slot:slot_board（持久 Slot）
+    world 快照          → 更新 slot:world（持久 Slot）
+    所有事件            → 组装成 user message（本次输入）
+
+        ↓
+
+SlotRegistry（渲染层）
+  职责：管理 system prompt 中的命名区域
+  不关心：事件是什么、怎么来的
+  输出：render() → system prompt 字符串
+```
+
+**Event 和 Slot 不是同一个东西，但 Event 可以影响 Slot。** 中间靠 Router 连接。
+
+## Event 是信号，Slot 是状态
+
+```
+Event = "刚刚发生了什么"  → 瞬时的，用完就没
+Slot  = "当前世界是什么样" → 持久的，跨 tick 存在
+```
+
+一个 Event 可能同时产生两个效果：
+
+```
+bus 消息 "planner 完成了挖钻石任务"
+  ↓
+  效果 1：作为 user message 的一部分（LLM 本 tick 看到"刚刚发生了什么"）
+  效果 2：更新 slot:slot_board（LLM 以后每次 tick 都能看到"任务已完成"）
+```
+
+效果 1 是事件的本职——传递信号。效果 2 是副作用——沉淀状态。两者不需要是同一个抽象。
+
+## 代码层面
+
+```typescript
+// brain.ts process()
+async process(events: Event[]) {
+  // ① Event Router：事件路由到 Slot（副作用）
+  this.routeEventsToSlots(events);
+
+  // ② Slot 渲染：生成 system prompt
+  const systemPrompt = await this.slotRegistry.render(ctx);
+
+  // ③ 事件渲染：生成 user message（事件自己的渲染逻辑，不走 Slot）
+  const userMessage = renderEvents(events);
+
+  // ④ 组装 messages 发给 LLM
+  const messages = [
+    { role: "system", content: systemPrompt },
+    ...this.sessionHistory,
+    { role: "user", content: userMessage },
+  ];
+  
+  // ⑤ LLM 推理 + tool loop...
+}
+
+routeEventsToSlots(events: Event[]) {
+  for (const event of events) {
+    // bus 任务回传 → 更新 slot_board
+    if (event.source === "bus" && event.payload?.taskId) {
+      this.slotRegistry.updateEntry("slot_board", event.payload.taskId, {
+        content: `[✓] ${event.payload.summary}`,
+        meta: { status: "completed" },
+      });
+    }
+    // world 快照 → 更新 world slot
+    if (event.source === "world" && event.type === "snapshot") {
+      this.slotRegistry.set({ name: "world", ..., content: event.payload.snapshot });
+    }
+    // heartbeat → 不更新任何 slot（纯信号）
+  }
+}
+```
+
+**Event Router 可以是配置化的**——哪些事件源映射到哪个 Slot，可以在 `brain.json` 或 Directive 中声明，而不是硬编码。但这是未来的事。
+
+## 总结
+
+不把 Event 和 Slot 揉在一起。保持三层分离：
+
+| 层 | 是什么 | 管什么 |
+|---|---|---|
+| **EventQueue** | 调度器 | 唤醒、合并、排序 |
+| **Event Router** | 桥梁 | 事件 → Slot 更新（副作用） + 事件 → user message（渲染） |
+| **SlotRegistry** | 状态管理器 | system prompt 中的命名区域 |
+
+Event Router 是连接两者的桥——它知道"这个事件应该沉淀到哪个 Slot"，但 Event 和 Slot 各自保持独立的概念身份。
+
+user:
+<user_query>
+为什么事件渲染药饵和Slot渲染分隔开了。这里的意图是可以解释下吗
+</user_query>
+
+user:
+<user_query>
+大部分事件肯定不放system_prompt里，特别是增量事件，但有些感知信息与长线信息链条可能就可以在system_prompt里。这个还是要区分的，只不过我是在想在概念上能直接给slots分两种，一种固定槽位，第二种是增量槽（分为user槽，assistant槽与工具槽，并且工具槽有对应的限制，可能是assistant槽的附带，因为模型厂商通常要球tools和userMessage要有对应的限制）
+</user_query>
+
+user:
+<user_query>
+是这个意思，可以更新文档对齐对应的想法吗
+</user_query>
+
+assistant:
+[Tool call] TodoWrite
+  todos: [{"id":"1","content":"重新设计 §4 Slot 系统：固定槽 + 增量槽（user/assistant/tool），对齐 LLM message 结构","status":"in_progress"}]
+  merge: false
+
+[Tool result] TodoWrite
+
+assistant:
+让我先看清楚当前 §4 的完整内容，然后重写。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 174
+  limit: 275
+
+[Tool result] Read
+
+assistant:
+好，现在我完全理解你的设计意图了。Slot 分两大类：
+
+1. **固定槽（System Slot）**→ 在 system prompt 中，跨 tick 持久
+2. **增量槽（Message Slot）**→ 对齐 LLM 的 message 结构（user / assistant / tool），本 tick 用完清空
+
+增量槽必须尊重 LLM API 的 message 结构约束。让我重写 §4。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ## 4. ContextSlot 化 PromptAssemble
+
+当前 `context-engine.ts` 用硬编码拼接 5 层 system prompt，不可扩展，events 重复出现在 system prompt 和 user message 中。
+
+### 核心设计：Directive 就是 Slot
+
+当前 directive 系统（`.ts` 配置 + `.md` 内容，有 order、condition、变量替换）和 slot 概念高度重叠。
+**Directive 不再是独立系统，而是 slot 的一种加载方式（file-based, condition-gated）。**
+
+所有 system prompt 内容统一为 slot：
+
+```
+slot "soul"                  order: 0     source: file       ← soul.md
+slot "runtime"               order: 10    source: framework  ← 自动生成
+slot "slot_board"             order: 20    source: framework  ← 派发任务时自动订阅目标脑的回传
+slot "tools"                 order: 30    source: loader     ← tool-loader
+slot "directive:identity"    order: 40    source: file       ← identity.ts + .md
+slot "directive:tool-usage"  order: 41    source: file       ← condition: hasTools
+slot "directive:brain-comm"  order: 42    source: file       ← condition: hasTools
+slot "skills"                order: 50    source: loader     ← skill-loader
+slot "todos"                 order: 60    source: tool       ← 工具可写
+slot "world"                 order: 70    source: framework  ← MineAvatar 推送
+```
+
+**注意：没有 `slot:state`。** state.json 的职责已被其他机制完全分解：
+- 运营指标 → `manage_brain({ action: "list" })`（公开的 brain_board）
+- 短期记忆 → session history
+- 长期记忆 → `memory/` 目录（§1 记忆刷写）
+- 目标/待办 → `slot:todos`
+- 派发任务追踪 → `slot:slot_board`（私有，自动订阅）
+- 公开状态 → `manage_brain` + 任何脑可通过 `read_file` 直接读取文件
+
+### 4.1 SlotRegistry — 核心数据结构
+
+```typescript
+interface ContextSlot {
+  name: string;
+  order: number;
+  source: "file" | "loader" | "tool" | "framework";
+  condition?: (ctx: SlotContext) => boolean;
+
+  // --- 灵活内容 ---
+  // content 可以是静态字符串，也可以是惰性求值函数（每次渲染时调用）。
+  // 惰性求值实现按需加载：fs-watcher invalidate 后，下次渲染自动重新加载。
+  content: string | (() => string | Promise<string>);
+
+  // --- 可组合 ---
+  // 复合 slot 由多个子条目组成，渲染时拼接。
+  // 例如 slot:slot_board 由多条 TrackedTask 组成，
+  // slot:skills 由多个 skill 摘要组成。
+  // 单一内容的 slot 不需要 entries，直接用 content。
+  entries?: SlotEntry[];
+
+  // --- 生命周期 ---
+  stale?: boolean;       // fs-watcher 标记为脏，下次渲染时重新求值 content
+  ttl?: number;          // 自动过期（tick 数），过期后移除。用于 slot_board 的已完成任务
+  createdAt?: number;    // 创建时间戳
+}
+
+interface SlotEntry {
+  id: string;            // 条目唯一标识（如 tracked task ID、skill name）
+  content: string;
+  meta?: Record<string, unknown>;  // 任意元数据（状态、优先级等）
+}
+```
+
+### 4.2 SlotRegistry API
+
+```typescript
+class SlotRegistry {
+  // --- 基础 CRUD ---
+  set(slot: ContextSlot): void;              // 注册或覆写整个 slot
+  get(name: string): ContextSlot | undefined;
+  delete(name: string): void;
+  has(name: string): boolean;
+
+  // --- 子条目操作（复合 slot）---
+  addEntry(slotName: string, entry: SlotEntry): void;      // 添加子条目
+  updateEntry(slotName: string, entryId: string, patch: Partial<SlotEntry>): void;
+  removeEntry(slotName: string, entryId: string): void;
+  getEntries(slotName: string): SlotEntry[];
+
+  // --- 渲染 ---
+  render(ctx: SlotContext): Promise<string>;  // filter → sort → resolve → join
+
+  // --- 运行时动态 ---
+  invalidate(name: string): void;            // 标记 stale，下次渲染重新求值
+  invalidateByPattern(pattern: RegExp): void; // 批量 invalidate（如 /^directive:/)
+  gc(): void;                                 // 清理过期 slot（ttl 到期的）
+}
+```
+
+**渲染流程**：
+
+```typescript
+async render(ctx: SlotContext): Promise<string> {
+  this.gc();  // 清理过期 slot
+
+  const slots = this.all()
+    .filter(slot => !slot.condition || slot.condition(ctx))
+    .sort((a, b) => a.order - b.order);
+
+  const parts: string[] = [];
+  for (const slot of slots) {
+    // 如果 stale 且 content 是函数，重新求值
+    if (slot.stale && typeof slot.content === "function") {
+      slot.content = await slot.content();
+      slot.stale = false;
+    }
+
+    // 解析内容
+    let text = typeof slot.content === "function"
+      ? await slot.content()
+      : slot.content;
+
+    // 复合 slot：拼接 entries
+    if (slot.entries?.length) {
+      const entryTexts = slot.entries.map(e => e.content);
+      text = text ? text + "\n" + entryTexts.join("\n") : entryTexts.join("\n");
+    }
+
+    if (text) parts.push(text);
+  }
+
+  return parts.join("\n\n");
+}
+```
+
+context-engine 的 5 层硬编码全部消失，变成一次 `registry.render(ctx)`。
+
+### 4.3 灵活性机制
+
+#### 惰性求值 + fs-watcher 联动
+
+Slot 的 content 可以是函数，实现按需加载：
+
+```typescript
+// soul.md 作为惰性 slot
+registry.set({
+  name: "soul",
+  order: 0,
+  source: "file",
+  content: () => readFile(join(brainDir, "soul.md"), "utf-8"),
+});
+
+// fs-watcher 检测到 soul.md 变更时：
+registry.invalidate("soul");
+// → 下次 render() 时自动重新调用 content 函数，读到最新内容
+```
+
+不需要立即重载——**tick 时生效**，天然 debounce。
+
+#### 复合 slot（子条目模式）
+
+slot_board、skills 等 slot 是由多个独立条目组成的：
+
+```typescript
+// slot_board — 框架在 send_message 时自动订阅目标脑的回传
+registry.addEntry("slot_board", {
+  id: "task_planner_001",
+  content: "- [▶ planner] 任务: \"分解挖钻石\" | 执行中",
+  meta: { targetBrain: "planner", status: "running", startTick: 142 },
+});
+
+// planner 完成后通过 BrainBus 回传，框架自动更新条目
+registry.updateEntry("slot_board", "task_planner_001", {
+  content: "- [✓ planner] 任务: \"分解挖钻石\" | 完成 | 结果: \"3个子目标\"",
+  meta: { status: "completed" },
+});
+
+// 已完成任务 3 个 tick 后自动清理（通过 ttl 或 gc 策略）
+```
+
+#### 运行时注册
+
+工具和框架都可以在运行时动态添加 slot：
+
+```typescript
+// todo_write 工具在被调用时创建/更新 slot
+ctx.writeSlot("todos", todoList.map(t => `- [${t.done ? "x" : " "}] ${t.text}`).join("\n"));
+
+// MineAvatar WebSocket 连接建立后，框架注册 world slot
+registry.set({
+  name: "world",
+  order: 70,
+  source: "framework",
+  content: () => worldSnapshot.render(),  // 每次渲染时取最新快照
+});
+
+// 脑 A 通过工具给自己加一个临时 slot
+ctx.writeSlot("custom:analysis_result", "分析结论: ...", { ttl: 5 }); // 5 tick 后消失
+```
+
+#### 条件渲染
+
+Slot 的 condition 函数决定是否渲染——不同状态下脑看到不同的 system prompt：
+
+```typescript
+registry.set({
+  name: "directive:combat-rules",
+  order: 43,
+  source: "file",
+  content: () => readFile("directives/combat-rules.md", "utf-8"),
+  condition: (ctx) => ctx.worldState?.inCombat === true,  // 只在战斗中出现
+});
+```
+
+### 4.4 ToolContext 扩展
+
+```typescript
+interface ToolContext {
+  brainId: string;
+  emit: (event: Event) => void;
+  readState: (targetBrainId: string) => Promise<Record<string, unknown>>;
+
+  // --- Slot 操作 ---
+  readSlot(name: string): string | undefined;
+  writeSlot(name: string, content: string, opts?: { ttl?: number }): void;
+  addSlotEntry(slotName: string, entry: SlotEntry): void;
+  updateSlotEntry(slotName: string, entryId: string, patch: Partial<SlotEntry>): void;
+  removeSlotEntry(slotName: string, entryId: string): void;
+}
+```
+
+工具可以通过 ToolContext 读写 slot，实现"Tool 改变 LLM 下次看到的东西"：
+
+| 工具 | Slot 操作 | 效果 |
+|------|----------|------|
+| `todo_write` | `writeSlot("todos", ...)` | LLM 下次 tick 看到更新的 todo 列表 |
+| `send_message` | `addSlotEntry("slot_board", ...)` | LLM 下次 tick 看到委派任务的状态 |
+| `spawn_thought` | `addSlotEntry("slot_board", ...)` | LLM 下次 tick 看到后台子任务 |
+| `read_skill`（future） | 不写 slot（按需读取走 tool result） | — |
+| 自定义工具 | `writeSlot("custom:*", ...)` | 工具可以给 LLM 留"便签" |
+
+### 4.5 与 fs-watcher（§0）联动
+
+```
+文件变更 → FSWatcher 检测
+  → 按路径匹配 Handler
+  → Handler 调用 registry.invalidate("对应slot名")
+  → Slot 标记为 stale
+  → 下次 brain.process() 调用 registry.render()
+  → stale 的 slot 重新调用 content 函数
+  → LLM 看到最新内容
+```
+
+全程无阻塞，无主动重载——**所有热更新都是 tick 驱动的惰性生效**。
+
+### 4.6 迁移策略
+
+context-engine.ts 当前的 5 层硬编码逐步替换：
+
+| 当前层 | 迁移为 | 谁负责填充 |
+|-------|-------|-----------|
+| Layer 1: Soul | `slot:soul` (lazy file) | Scheduler 初始化时注册 |
+| Layer 2: State | **删除** — 职责分解到 slot_board / session / memory / todos | — |
+| Layer 3: Events | **移除**，events 仅进 user message | brain.ts process() |
+| Layer 4: Tools | `slot:tools` (loader) | ToolLoader 填充 |
+| Layer 5: Directives | `slot:directive:*` (loader) | DirectiveLoader 填充 |
+| 新增 | `slot:runtime` (framework) | Scheduler 初始化时注册 |
+| 新增 | `slot:slot_board` (framework) | send_message/spawn_thought 自动订阅追踪 |
+| 新增 | `slot:skills` (loader) | SkillLoader 填充（§5） |
+
+### 涉及文件
+
+- `src/core/types.ts` — 新增 ContextSlot, SlotEntry, SlotContext, ToolContext 扩展
+- 新建 `src/context/slot-registry.ts` — SlotRegistry 类（~150 行）
+- `src/context/context-engine.ts` — 从硬编码改为 `registry.render(ctx)`
+- `src/loaders/directive-loader.ts` — 改为 slot populator
+- `src/loaders/tool-loader.ts` — 改为 slot populator（生成工具描述写入 slot:tools）
+- `src/core/brain.ts` — 持有 SlotRegistry, ToolContext 注入 slot 操作
+- `src/core/scheduler.ts` — 初始化时创建 SlotRegistry + 注册初始 slot
+  new_string: ## 4. ContextSlot 化 — 统一的 LLM 上下文管理
+
+当前 `context-engine.ts` 用硬编码拼接 5 层 system prompt，不可扩展。
+需要一个统一的抽象来管理 LLM 能看到的一切——system prompt 和 conversation messages 都包含在内。
+
+### 核心设计：两类 Slot
+
+Slot 是 LLM 上下文中的一个**命名区域**。所有 LLM 能看到的内容都是 Slot，分为两类：
+
+**固定槽（System Slot）**：渲染到 system prompt，跨 tick 持久存在。
+
+```
+[固定槽] "soul"              order: 0     ← soul.md
+[固定槽] "runtime"           order: 10    ← 框架自动生成
+[固定槽] "slot_board"        order: 20    ← 派发任务时自动订阅
+[固定槽] "tools"             order: 30    ← tool-loader
+[固定槽] "directive:*"       order: 40+   ← 指令模块（条件加载）
+[固定槽] "skills"            order: 50    ← skill 摘要
+[固定槽] "todos"             order: 60    ← 工具可写
+[固定槽] "world"             order: 70    ← MineAvatar 快照
+```
+
+**增量槽（Message Slot）**：渲染到 conversation messages，本 tick 用完清空。
+增量槽对齐 LLM API 的 message 结构，分三种 role：
+
+| 增量槽 role | 对应 LLM message | 约束 | 典型内容 |
+|------------|-----------------|------|---------|
+| `user` | `{ role: "user" }` | 自由 | stdin 消息、BrainBus 收到的消息、heartbeat 信号 |
+| `assistant` | `{ role: "assistant" }` | 后面必须跟 user 或 tool | LLM 上一轮的回复（session history 管理） |
+| `tool` | `{ role: "tool", toolCallId }` | 必须紧跟对应的 assistant tool_call | 工具执行结果 |
+
+`tool` 槽是 `assistant` 槽的附属——模型厂商要求 tool message 必须跟在对应的 assistant tool_call 后面，
+不能独立存在。这个约束由 SlotRegistry 的渲染逻辑保证。
+
+### 为什么这样分
+
+```
+LLM API 要求的 message 结构：
+┌─────────────────────────────────────────────┐
+│ system: "..."                               │ ← 固定槽渲染
+│                                             │
+│ messages: [                                 │ ← 增量槽渲染 + session history
+│   { role: "user", content: "..." },         │    ← user 增量槽
+│   { role: "assistant", content: "...",       │    ← session history
+│     tool_calls: [...] },                    │
+│   { role: "tool", content: "...",           │    ← tool 增量槽（附属于上面的 assistant）
+│     tool_call_id: "..." },                  │
+│   { role: "assistant", content: "..." },    │    ← session history
+│   { role: "user", content: "..." },         │    ← user 增量槽（本 tick 事件）
+│ ]                                           │
+└─────────────────────────────────────────────┘
+```
+
+固定槽管 system prompt（"你是谁、你能做什么、你在追踪什么"）。
+增量槽管 conversation（"刚才发生了什么"），必须遵守 LLM API 的 role 顺序约束。
+
+### 4.1 类型定义
+
+```typescript
+type SlotKind = "system" | "user" | "assistant" | "tool";
+
+interface ContextSlot {
+  name: string;
+  kind: SlotKind;
+  order: number;                   // 同 kind 内的排序
+  source: "file" | "loader" | "tool" | "framework" | "event-router";
+  condition?: (ctx: SlotContext) => boolean;
+
+  content: string | (() => string | Promise<string>);
+  entries?: SlotEntry[];           // 复合 slot（slot_board、skills 等）
+
+  // 生命周期
+  ephemeral?: boolean;             // true = 渲染后清空（增量槽默认 true）
+  stale?: boolean;                 // fs-watcher 标记脏
+  ttl?: number;                    // tick 数后过期
+}
+
+interface SlotEntry {
+  id: string;
+  content: string;
+  meta?: Record<string, unknown>;
+}
+
+// tool 增量槽的额外约束
+interface ToolMessageSlot extends ContextSlot {
+  kind: "tool";
+  toolCallId: string;              // 必须关联到对应的 assistant tool_call
+}
+```
+
+固定槽（`kind: "system"`）默认 `ephemeral: false`，跨 tick 持久。
+增量槽（`kind: "user" | "assistant" | "tool"`）默认 `ephemeral: true`，渲染后清空。
+
+### 4.2 SlotRegistry API
+
+```typescript
+class SlotRegistry {
+  // --- 基础 CRUD ---
+  set(slot: ContextSlot): void;
+  get(name: string): ContextSlot | undefined;
+  delete(name: string): void;
+  has(name: string): boolean;
+
+  // --- 子条目操作（复合 slot）---
+  addEntry(slotName: string, entry: SlotEntry): void;
+  updateEntry(slotName: string, entryId: string, patch: Partial<SlotEntry>): void;
+  removeEntry(slotName: string, entryId: string): void;
+
+  // --- 渲染 ---
+  renderSystem(ctx: SlotContext): Promise<string>;         // 固定槽 → system prompt
+  renderMessages(ctx: SlotContext): Promise<LLMMessage[]>;  // 增量槽 → message 数组
+  flush(): void;                                            // 清空 ephemeral slots
+
+  // --- 运行时 ---
+  invalidate(name: string): void;
+  invalidateByPattern(pattern: RegExp): void;
+  gc(): void;
+}
+```
+
+**两个渲染入口**，对应 LLM API 的两个部分：
+
+```typescript
+// renderSystem: 固定槽 → system prompt 字符串
+async renderSystem(ctx: SlotContext): Promise<string> {
+  this.gc();
+  const systemSlots = this.allByKind("system")
+    .filter(s => !s.condition || s.condition(ctx))
+    .sort((a, b) => a.order - b.order);
+
+  const parts: string[] = [];
+  for (const slot of systemSlots) {
+    const text = await this.resolveContent(slot);
+    if (text) parts.push(text);
+  }
+  return parts.join("\n\n");
+}
+
+// renderMessages: 增量槽 → LLMMessage[]
+async renderMessages(ctx: SlotContext): Promise<LLMMessage[]> {
+  const messages: LLMMessage[] = [];
+
+  // user 增量槽：合并为一条 user message
+  const userSlots = this.allByKind("user")
+    .filter(s => !s.condition || s.condition(ctx))
+    .sort((a, b) => a.order - b.order);
+
+  if (userSlots.length > 0) {
+    const parts: string[] = [];
+    for (const slot of userSlots) {
+      const text = await this.resolveContent(slot);
+      if (text) parts.push(text);
+    }
+    messages.push({ role: "user", content: parts.join("\n\n") });
+  }
+
+  // tool 增量槽保持独立（每个 toolCallId 一条 message）
+  // assistant 增量槽通常由 session history 管理，不在这里渲染
+
+  return messages;
+}
+
+// flush: 清空所有 ephemeral slot
+flush(): void {
+  for (const slot of this.all()) {
+    if (slot.ephemeral) {
+      if (slot.entries) slot.entries = [];
+      else this.delete(slot.name);
+    }
+  }
+}
+```
+
+### 4.3 Event Router — 事件到 Slot 的桥梁
+
+EventQueue 是调度层（唤醒 + 合并 + 排序），drain 出来的事件交给 Event Router，
+Router 决定每个事件写入哪些 Slot：
+
+```typescript
+function routeEvents(events: Event[], registry: SlotRegistry): void {
+  for (const event of events) {
+    // 所有事件 → user 增量槽（按 source 分组）
+    const slotName = `events:${event.source}`;
+    if (!registry.has(slotName)) {
+      registry.set({
+        name: slotName,
+        kind: "user",
+        order: sourceOrder(event.source),
+        source: "event-router",
+        ephemeral: true,
+        entries: [],
+      });
+    }
+    registry.addEntry(slotName, {
+      id: `${event.source}_${event.ts}`,
+      content: `[${event.type}] ${renderEventDisplay(event)}`,
+    });
+
+    // 特定事件 → 固定槽更新（副作用）
+    if (event.source === "bus" && event.payload?.taskId) {
+      registry.updateEntry("slot_board", event.payload.taskId, {
+        content: `[✓] ${event.payload.summary}`,
+        meta: { status: "completed" },
+      });
+    }
+    if (event.source === "world" && event.type === "snapshot") {
+      registry.set({
+        name: "world", kind: "system", order: 70,
+        source: "framework", content: event.payload.snapshot,
+      });
+    }
+  }
+}
+```
+
+**三层职责**：
+
+```
+EventQueue（调度层）
+  push → waitForEvent → sleep(coalesce) → drain → Event[]
+  不关心内容和渲染
+
+Event Router（路由层）
+  Event[] → 写入对应 Slot
+  决定"这个事件该进哪些槽"
+
+SlotRegistry（渲染层）
+  renderSystem() → system prompt
+  renderMessages() → LLMMessage[]
+  flush() → 清空增量槽
+  不关心事件从哪来
+```
+
+### 4.4 brain.ts 中的完整流程
+
+```typescript
+async process(events: Event[]) {
+  // ① 事件路由到 Slot
+  routeEvents(events, this.slotRegistry);
+
+  // ② 渲染固定槽 → system prompt
+  const systemPrompt = await this.slotRegistry.renderSystem(ctx);
+
+  // ③ 渲染增量槽 → 本 tick 的 message
+  const newMessages = await this.slotRegistry.renderMessages(ctx);
+
+  // ④ 组装完整 messages
+  const messages: LLMMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...this.sessionHistory,
+    ...newMessages,
+  ];
+
+  // ⑤ LLM 推理 + tool loop
+  // （tool loop 中产生的 assistant/tool messages 由 brain.ts 直接管理，
+  //   不走 SlotRegistry——它们是实时的对话流，不是 Slot）
+  // ...
+
+  // ⑥ 清空增量槽（本 tick 的事件已处理）
+  this.slotRegistry.flush();
+}
+```
+
+### 4.5 固定槽的灵活性
+
+固定槽保留之前设计的全部能力：
+
+**惰性求值 + fs-watcher 联动**：
+
+```typescript
+registry.set({
+  name: "soul", kind: "system", order: 0, source: "file",
+  content: () => readFile(join(brainDir, "soul.md"), "utf-8"),
+});
+// fs-watcher 变更时 → registry.invalidate("soul") → 下次渲染重新读取
+```
+
+**复合 slot（子条目模式）**：
+
+```typescript
+// slot_board — 派发任务时自动注册追踪条目
+registry.addEntry("slot_board", {
+  id: "task_planner_001",
+  content: "- [▶ planner] 任务: \"分解挖钻石\" | 执行中",
+  meta: { status: "running" },
+});
+```
+
+**条件渲染**：
+
+```typescript
+registry.set({
+  name: "directive:combat-rules", kind: "system", order: 43, source: "file",
+  content: () => readFile("directives/combat-rules.md", "utf-8"),
+  condition: (ctx) => ctx.worldState?.inCombat === true,
+});
+```
+
+**运行时注册**：
+
+```typescript
+ctx.writeSlot("todos", todoContent);
+ctx.writeSlot("custom:note", "临时便签...", { ttl: 5 });
+```
+
+### 4.6 ToolContext 扩展
+
+```typescript
+interface ToolContext {
+  brainId: string;
+  emit: (event: Event) => void;
+
+  // 固定槽操作（影响下次 tick 的 system prompt）
+  readSlot(name: string): string | undefined;
+  writeSlot(name: string, content: string, opts?: { ttl?: number }): void;
+  addSlotEntry(slotName: string, entry: SlotEntry): void;
+  updateSlotEntry(slotName: string, entryId: string, patch: Partial<SlotEntry>): void;
+  removeSlotEntry(slotName: string, entryId: string): void;
+}
+```
+
+工具只操作固定槽。增量槽由 Event Router 和 brain.ts 管理，工具不直接写。
+
+### 4.7 迁移策略
+
+| 当前层 | 迁移为 | 类型 |
+|-------|-------|------|
+| Layer 1: Soul | `slot:soul` | 固定槽 |
+| Layer 2: State | **删除** — 职责分解到 slot_board / session / memory / todos | — |
+| Layer 3: Events | 增量槽 `events:stdin`, `events:bus` 等 | user 增量槽 |
+| Layer 4: Tools | `slot:tools` | 固定槽 |
+| Layer 5: Directives | `slot:directive:*` | 固定槽 |
+| 新增 | `slot:runtime` | 固定槽 |
+| 新增 | `slot:slot_board` | 固定槽 |
+| 新增 | `slot:skills` | 固定槽 |
+
+### 涉及文件
+
+- `src/core/types.ts` — 新增 ContextSlot, SlotEntry, SlotKind, SlotContext
+- 新建 `src/context/slot-registry.ts` — SlotRegistry 类
+- 新建 `src/context/event-router.ts` — 事件路由到 Slot 的桥梁
+- `src/context/context-engine.ts` — 改为调用 `registry.renderSystem()` + `renderMessages()`
+- `src/loaders/directive-loader.ts` — 改为固定槽 populator
+- `src/loaders/tool-loader.ts` — 改为固定槽 populator
+- `src/core/brain.ts` — 持有 SlotRegistry，process() 中调用 Event Router + 渲染 + flush
+- `src/core/scheduler.ts` — 初始化时创建 SlotRegistry + 注册初始固定槽
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] Shell
+  command: grep -n "^## \|^### " /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md | head -30
+  description: 检查更新后的章节结构
+
+[Tool result] Shell
+
+assistant:
+[Tool call] TodoWrite
+  todos: [{"id":"1","content":"重新设计 §4 Slot 系统：固定槽 + 增量槽（user/assistant/tool），对齐 LLM message 结构","status":"completed"}]
+  merge: true
+
+[Tool result] TodoWrite
+
+assistant:
+§4 已经完全重写。核心变化：
+
+**Slot 分两类，统管 LLM 能看到的一切**：
+
+| | 固定槽（System Slot） | 增量槽（Message Slot） |
+|---|---|---|
+| **渲染到** | system prompt | conversation messages |
+| **生命周期** | 跨 tick 持久 | 本 tick 用完清空（`flush()`） |
+| **kind** | `"system"` | `"user"` / `"assistant"` / `"tool"` |
+| **内容** | 身份、工具、指令、slot_board... | 事件、消息、工具结果 |
+
+**增量槽对齐 LLM API 的 message 约束**：
+- `user` 槽自由使用
+- `assistant` 槽后面必须跟 user 或 tool
+- `tool` 槽是 `assistant` 的附属，必须有 `toolCallId` 关联到对应的 assistant tool_call
+
+**三层分离**：EventQueue（调度）→ Event Router（路由，决定事件进哪些 Slot）→ SlotRegistry（渲染，不关心事件从哪来）。Event Router 是新增的一层，它是事件和 Slot 之间的桥梁——事件可以同时写入增量槽（本 tick 的 user message）和更新固定槽（持久的 slot_board），两个效果通过同一个 Router 完成。
+
+user:
+<user_query>
+差不多这种意识，具体合不合理我们到时候再看，你能不能拉一下claude code与gemini cli的源码到references文件夹下，我等会儿要开始参考这些列todolist了
+</user_query>
+
+assistant:
+[Tool call] Shell
+  command: ls /home/aw/Desktop/gamer/mineclaw/
+  description: 查看 mineclaw 目录结构
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: mkdir -p /home/aw/Desktop/gamer/mineclaw/references
+  description: 创建 references 目录
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+
+[Tool result] Shell
+
+user:
+<agent_transcripts>
+Agent transcripts (past chats) live in /home/aw/.cursor/projects/home-aw-Desktop-gamer/agent-transcripts. They have names like <uuid>.jsonl, cite them to the user as [<title for chat <=6 words>](<uuid excluding .jsonl>). NEVER cite subagent transcripts/IDs; you can only cite parent uuids. Don't discuss the folder structure.
+</agent_transcripts>
+
+<agent_skills>
+When users ask you to perform tasks, check if any of the available skills below can help complete the task more effectively. Skills provide specialized capabilities and domain knowledge. To use a skill, read the skill file at the provided absolute path using the Read tool, then follow the instructions within. When a skill is relevant, read and follow it IMMEDIATELY as your first action. NEVER just announce or mention a skill without actually reading and following it. Only use skills listed below.
+
+<available_skills description="Skills the agent can use. Use the Read tool with the provided absolute path to fetch full contents.">
+<agent_skill fullPath="/home/aw/.cursor/skills-cursor/create-rule/SKILL.md">Create Cursor rules for persistent AI guidance. Use when the user wants to create a rule, add coding standards, set up project conventions, configure file-specific patterns, create RULE.md files, or asks about .cursor/rules/ or AGENTS.md.</agent_skill>
+
+<agent_skill fullPath="/home/aw/.cursor/skills-cursor/create-skill/SKILL.md">Guides users through creating effective Agent Skills for Cursor. Use when the user wants to create, write, or author a new skill, or asks about skill structure, best practices, or SKILL.md format.</agent_skill>
+
+<agent_skill fullPath="/home/aw/.cursor/skills-cursor/update-cursor-settings/SKILL.md">Modify Cursor/VSCode user settings in settings.json. Use when the user wants to change editor settings, preferences, configuration, themes, font size, tab size, format on save, auto save, keybindings, or any settings.json values.</agent_skill>
+</available_skills>
+</agent_skills>
+
+user:
+<user_query>
+@references 这里
+</user_query>
+
+assistant:
+[Tool call] WebSearch
+  search_term: claude code CLI github repository source code 2026
+  explanation: 查找 Claude Code CLI 的 GitHub 仓库地址
+[Tool call] WebSearch
+  search_term: gemini CLI github repository source code 2025 2026
+  explanation: 查找 Gemini CLI 的 GitHub 仓库地址
+
+[Tool result] WebSearch
+
+[Tool result] WebSearch
+
+assistant:
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw/references && git clone --depth 1 https://github.com/anthropics/claude-code.git
+  description: 克隆 claude-code 源码（shallow）
+  block_until_ms: 120000
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw/references && git clone --depth 1 https://github.com/google-gemini/gemini-cli.git
+  description: 克隆 gemini-cli 源码（shallow）
+  block_until_ms: 120000
+
+[Tool result] Shell
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: ls -la /home/aw/Desktop/gamer/mineclaw/ | grep ref
+  description: 检查 references 目录是否存在
+
+[Tool result] Shell
+
+assistant:
+看来之前 mkdir 在旧 shell 里执行的，当前 shell 没有。重新创建再克隆。
+[Tool call] Shell
+  command: mkdir -p /home/aw/Desktop/gamer/mineclaw/references && ls -d /home/aw/Desktop/gamer/mineclaw/references
+  description: 创建 references 目录并确认
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw/references && git clone --depth 1 https://github.com/anthropics/claude-code.git
+  description: 克隆 claude-code 源码
+  block_until_ms: 180000
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw/references && git clone --depth 1 https://github.com/google-gemini/gemini-cli.git
+  description: 克隆 gemini-cli 源码
+  block_until_ms: 180000
+
+[Tool result] Shell
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: echo "=== claude-code ===" && du -sh /home/aw/Desktop/gamer/mineclaw/references/claude-code && ls /home/aw/Desktop/gamer/mineclaw/references/claude-code && echo "" && echo "=== gemini-cli ===" && du -sh /home/aw/Desktop/gamer/mineclaw/references/gemini-cli && ls /home/aw/Desktop/gamer/mineclaw/references/gemini-cli
+  description: 查看两个仓库的内容概况
+
+[Tool result] Shell
+
+assistant:
+[Thinking] Both repos are cloned. Let me check their structure a bit more - claude-code seems to be mostly shell scripts and examples (no full TS source?), while gemini-cli has the full TypeScript source in packages/.
+
+Let me check claude-code more carefully - it might have source in a different structure.
+两个仓库都已成功克隆到 `/home/aw/Desktop/gamer/mineclaw/references/` 下：
+
+- **claude-code** (~24M) — 注意 Claude Code 的源码主要是 Shell 脚本和 Python 包装，核心 TypeScript 代码是编译后发布的（npm 包内），仓库里暴露的是 `scripts/`、`plugins/`、`examples/` 等。
+- **gemini-cli** (~33M) — 完整的 TypeScript 源码，核心代码在 `packages/` 目录下，结构非常清晰，还有 `ROADMAP.md`、`evals/`、`schemas/` 等参考资料。
+
+你可以随时开始参考它们来列 todolist 了。
+
+user:
+<user_query>
+然后我认为工具集是分得越多好点呢，还是一个工具能干更多好呢？
+里调研下当前的reference里的实现@references （注意我移动了gamer目录下），看看是多好还是集成好
+</user_query>
+
+assistant:
+[Thinking] The user wants me to research how Claude Code and Gemini CLI organize their tools - whether they use many small focused tools or fewer integrated multi-purpose tools. They also mentioned they moved the references to the gamer directory level. Let me check the actual location first.
+好的，让我先确认 references 的实际位置，然后深入调研两个框架的工具组织方式。
+[Tool call] Shell
+  command: find /home/aw/Desktop/gamer -maxdepth 2 -type d -name references
+  description: 查找 references 目录实际位置
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: find /home/aw/Desktop/gamer -maxdepth 3 -type d -name references
+  description: 更深层查找 references 目录
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: ls /home/aw/Desktop/gamer/
+  description: 查看 gamer 目录结构
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: ls -la /home/aw/Desktop/gamer/
+  description: 查看 gamer 目录详细内容
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Glob
+  glob_pattern: **/references/*
+
+[Tool result] Glob
+
+assistant:
+看到了，references 在工作区根目录下。现在让我并行调研两个框架的工具定义方式。
+[Tool call] Task
+  subagent_type: explore
+  description: 调研 Gemini CLI 工具组织
+  prompt: 我需要深入调研 Gemini CLI 的工具（tools）组织方式。仓库在 /home/aw/Desktop/gamer/references/gemini-cli/
+
+核心问题：Gemini CLI 的工具是拆分成很多小工具，还是合并成少量大工具？每个工具的职责边界是什么？
+
+请做以下事情：
+1. 找到所有 tool 的定义文件（可能在 packages/ 目录下的某个 tools 文件夹里）
+2. 列出所有工具名称
+3. 分析每个工具的粒度 — 是单一职责还是多功能合一
+4. 看看有没有使用 action/subcommand 模式（即一个工具通过参数区分不同操作）
+5. 注意工具参数的设计 — 参数是简洁还是复杂
+6. 如果有 tool registry 或 tool manager，看看它是怎么注册和管理工具的
+
+请返回：
+- 完整的工具列表（工具名 + 简短描述）
+- 工具的组织模式（多而细 vs 少而全）
+- 每个工具的参数结构概要
+- 是否有 action 模式的例子
+- tool 注册/管理机制
+- 总体设计哲学的总结
+
+搜索要非常彻底（very thorough），确保不遗漏任何工具定义。
+[Tool call] Task
+  subagent_type: explore
+  description: 调研 Claude Code 工具组织
+  prompt: 我需要深入调研 Claude Code 的工具（tools）组织方式。仓库在 /home/aw/Desktop/gamer/references/claude-code/
+
+核心问题：Claude Code 的工具是拆分成很多小工具，还是合并成少量大工具？每个工具的职责边界是什么？
+
+请做以下事情：
+1. 找到所有 tool 的定义文件（可能在 scripts/、plugins/ 等目录下）
+2. Claude Code 的源码可能不完全开源（核心是编译后的 npm 包），但从 README、文档、plugins 系统、examples 中可以推断出工具集
+3. 列出所有能找到的工具名称
+4. 分析每个工具的粒度 — 是单一职责还是多功能合一
+5. 看看有没有使用 action/subcommand 模式（即一个工具通过参数区分不同操作）
+6. 注意工具参数的设计
+7. 如果有 tool 注册机制或插件系统的工具定义模式，也要分析
+
+请返回：
+- 完整的工具列表（工具名 + 简短描述）
+- 工具的组织模式（多而细 vs 少而全）
+- 每个工具的参数结构概要
+- 是否有 action 模式的例子
+- tool 注册/管理机制
+- 总体设计哲学的总结
+
+搜索要非常彻底（very thorough），确保不遗漏。
+
+[Tool result] Task
+
+[Tool result] Task
+
+assistant:
+[Thinking] Great, I now have detailed research on both Claude Code and Gemini CLI tool organization. Let me synthesize the findings and present a clear comparison to the user, answering their core question: "是分得越多好点呢，还是一个工具能干更多好呢？" (Is it better to have many small tools or fewer multi-purpose tools?)
+
+Both frameworks clearly favor the "many small tools" (fine-grained) approach. Let me present this analysis clearly.
+## 调研结论：两大框架都选择了「多而细」
+
+两个主流 AI 编程框架在工具设计上高度一致，都采用了 **细粒度、单一职责** 的工具拆分方式，而非合并成少量大工具。
+
+---
+
+### 对比一览
+
+| 维度 | Gemini CLI | Claude Code |
+|------|-----------|-------------|
+| 内置工具数量 | **17 个** | **~13 个** |
+| 粒度风格 | 单一职责，每个工具只做一件事 | 单一职责，每个工具只做一件事 |
+| 文件读取 | `read_file` + `read_many_files`（拆两个） | `Read`（一个） |
+| 文件写入 | `write_file`（完整写）+ `replace`（局部编辑） | `Write`（创建/覆盖）+ `Edit`（局部替换）+ `MultiEdit`（批量替换） |
+| 搜索 | `grep_search`（内容）+ `glob`（文件名）+ `list_directory`（目录） | `Grep`（内容）+ `Glob`（文件名） |
+| Shell | `run_shell_command` | `Bash`（+ 命令过滤 `Bash(git:*)`） |
+| 是否使用 action 参数 | **否** | **否** |
+| 参数复杂度 | 多数 1-4 个参数 | 多数 1-3 个参数 |
+
+---
+
+### 关键发现：没有人用 action/subcommand 模式
+
+两个框架 **都没有** 采用 `tool(action: "read" | "write" | "delete", ...)` 这种合并模式。原因总结如下：
+
+**1. 对 LLM 更友好**
+
+细粒度工具让模型的 **tool_choice 决策更简单**。模型只需选「用哪个工具」，而不是先选工具再选 action。减少一层决策 = 减少出错概率。
+
+**2. 参数 schema 更清晰**
+
+`read_file` 只需要 `file_path`，而 `write_file` 需要 `file_path` + `content`。如果合成一个工具，参数变成条件必填（action=read 时 content 可选，action=write 时 content 必填），LLM 容易搞混。
+
+**3. 权限控制天然细粒度**
+
+Claude Code 能做到「这个命令只允许 Read + Grep」而禁止 Write，如果合并成一个 `file_tool`，就无法细粒度限权。Gemini CLI 也支持 `excludeTools` 排除特定工具。
+
+**4. 工具描述更聚焦**
+
+每个工具的 description 可以写得很精确，LLM 更容易理解何时该用。合并后 description 会变长、变模糊。
+
+---
+
+### 但也有 「适度合并」 的例子
+
+两个框架并非完全不合并，有一些微妙的合并点：
+
+| 合并场景 | 框架 | 做法 |
+|---------|------|------|
+| 单文件读取 vs 批量读取 | Gemini | 拆成 `read_file` + `read_many_files` |
+| 单处编辑 vs 多处编辑 | Claude | 拆成 `Edit` + `MultiEdit` |
+| Bash 命令过滤 | Claude | `Bash` 一个工具，通过命令模式 `Bash(git:*)` 控制 |
+| 网页抓取的两种模式 | Gemini | `web_fetch` 一个工具，参数区分标准/实验模式 |
+
+可见：**当操作的核心语义相同、只是参数维度不同时**，可以考虑合并；但 **当操作语义不同（读 vs 写 vs 删）时，一定拆开**。
+
+---
+
+### 对 MineClaw 的建议
+
+结合两个框架的实践，MineClaw 的工具设计应该：
+
+**文件操作 — 拆开：**
+- `read_file` — 读文件
+- `write_file` — 写文件（创建/覆盖）
+- `edit_file` — 局部编辑（old_string → new_string）
+- `glob` — 按模式查找文件
+- `grep` — 搜索文件内容
+- `bash` — 执行 shell 命令
+
+**Brain 管理 — 可以适度合并：**
+
+这里是 MineClaw 特有的领域，`manage_brain` 这种 action 模式在这个场景下是合理的，因为：
+- brain 的操作（list / spawn / kill / status）**共享相同的上下文**（brain 系统）
+- 参数结构高度重叠（都需要 brain_name）
+- 操作数量有限（4-5 个 action），不会让参数 schema 过于复杂
+- 这更像是一个 **领域 API**，而非通用文件操作
+
+```typescript
+// 通用工具 — 拆细
+read_file, write_file, edit_file, glob, grep, bash
+
+// 领域工具 — 可适度合并
+manage_brain({ action: "list" | "spawn" | "kill" | "status", ... })
+manage_subscription({ action: "subscribe" | "unsubscribe" | "list", ... })
+```
+
+**核心原则：通用操作拆细，领域操作可合并。**
+
+user:
+<user_query>
+更新下brain操作，并且删除过时的status的访问，而且文件读写可以原生的对brain的路径更有好的支持，用brain_name(id)来区分不同的brain路径而非用纯路径。 @references/agent_fcos/ 你可以看下这里面workspace的设计理念，我觉得这里面这个设计得挺好的，可以适度参考，当然这两个项目的工程目的不太一样
+</user_query>
+
+assistant:
+[Thinking] The user wants me to:
+1. Update the brain management tool design in the roadmap
+2. Remove outdated state.json access
+3. Make file read/write tools brain-path-friendly (using brain_name/id instead of raw paths)
+4. Look at the references/agent_fcos/ directory for workspace design patterns
+
+Let me first check where agent_fcos is and what it contains, then read the current roadmap section that needs updating.
+[Tool call] Task
+  subagent_type: explore
+  description: 调研 agent_fcos workspace 设计
+  prompt: 我需要深入调研 agent_fcos 项目中的 workspace 设计理念。项目可能在以下位置之一：
+- /home/aw/Desktop/gamer/references/agent_fcos/
+- 或者在 /home/aw/Desktop/gamer/ 下的某个目录
+
+请做以下事情：
+1. 先找到 agent_fcos 的实际位置（用 glob 搜索 **/agent_fcos*）
+2. 找到后，深入分析其 workspace 设计：
+   - workspace 是如何定义的？
+   - 文件路径是如何管理的？是用绝对路径还是相对于 workspace 的路径？
+   - 工具（tools）是如何感知 workspace 上下文的？
+   - 有没有类似 "项目/工作区" 的抽象层，让文件操作自动在正确的目录下执行？
+3. 看看工具定义中路径参数的设计
+4. 分析 workspace 概念如何影响工具的设计
+
+请返回：
+- workspace 的核心设计理念
+- 路径管理机制的具体实现
+- 工具如何利用 workspace 上下文
+- 对 MineClaw brain 路径友好化设计的启发
+
+搜索要非常彻底（very thorough）。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 669
+  limit: 170
+
+[Tool result] Task
+
+[Tool result] Read
+
+assistant:
+[Thinking] Now let me also read the earlier sections of the roadmap to get full context, and see the current tool design sections.
+现在让我读一下 roadmap 的前半部分，确认所有需要更新的区域。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 733
+  limit: 80
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  offset: 1
+  limit: 50
+
+[Tool result] Read
+
+[Tool result] Read
+
+assistant:
+[Thinking] Now I have full context. The user wants me to:
+
+1. Update brain management tool (`manage_brain`) - remove outdated `status` action access (since state.json is being deleted)
+2. Make file read/write tools brain-path friendly - use `brain_name`/`id` to reference brain paths instead of raw paths
+3. Reference the agent_fcos workspace design for inspiration
+
+The key insight from agent_fcos is the `[workspace:]zone/path` pattern. For MineClaw, this could translate to:
+- File tools accept `brain` parameter as a shortcut to resolve paths relative to `brains/<brain_name>/`
+
+
+- Instead of `read_file({ path: "brains/responder/soul.md" })`, I could do `read_file({ path: "soul.md", brain: "responder" })` or use a path prefix like `@responder/soul.md`
+
+Now I need to figure out exactly what to update: the file operations section to add brain-aware path resolution, and the manage_brain section to remove the `status` action since state.json is being deleted anyway.
+
+Actually, wait—I'm second-guessing myself on the status action. The user said to remove outdated status access, which probably means removing the `read_state` tool pattern and state.json references from the workflow, but the `status` action itself could still work if it pulls from runtime scheduler data instead. Let me reconsider whether `status` is truly redundant with `list` or if it serves a different purpose like returning detailed info about a single brain.
+
+Looking at the requirements again, the main changes are: simplify the `manage_brain` status action since state.json is being removed, and add a `brain` parameter to file tools so they can work with brain-specific paths using brain_name(id) instead of raw file paths.
+
+I'm thinking through how to implement this—similar to how agent_fcos uses workspace zones, I could add a `brain` parameter to `read_file` and `write_file` that resolves to the brain's directory, and allow cross-brain access by specifying which brain to read from. Now I'm drafting the updated roadmap section to reflect these changes.
+好的，我已经充分了解了 agent_fcos 的 workspace 设计和当前 roadmap 的内容。现在来更新。
+[Tool call] TodoWrite
+  todos: [{"id":"1","content":"更新 §8.1 文件操作工具 — 加入 brain-aware 路径解析","status":"in_progress"},{"id":"2","content":"更新 §8.2 manage_brain — 删除 status action，简化为 list/start/stop/restart","status":"pending"},{"id":"3","content":"清理 roadmap 中所有过时的 read_state / state.json 引用","status":"pending"}]
+  merge: false
+
+[Tool result] TodoWrite
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: #### 8.1 文件操作（6 个）— 基础设施
+
+| 工具 | 对齐 agentic_os | 用途 |
+|------|---------------|------|
+| `read_file` | `read_file` | 读取任意文件（soul.md、skill 内容、日志、其他脑的代码） |
+| `write_file` | `write_file` | 创建/覆写文件（创建脑目录结构、写 skill、写 proposal） |
+| `edit_file` | `edit_file` | 字符串替换编辑（修改 brain.json、微调 soul.md、改 BT 模板） |
+| `glob` | `glob` | 文件模式匹配（发现 skills、搜索 brains/、扫描日志） |
+| `grep` | `grep` | 内容搜索（搜索日志中的错误、查找 skill 关键词） |
+| `bash` | `bash` | Shell 命令执行（运行脚本、查看进程、git 操作） |
+
+实现参考：可直接复用 agentic_os 的 `src/tools/` 实现，适配 MineClaw 的 ToolDefinition 接口。
+权限控制：结合 AGENTIC.md §7 的权限矩阵（默认模式 vs evolve 模式）。
+  new_string: #### 8.1 文件操作（6 个）— 基础设施
+
+| 工具 | 对齐 agentic_os | 用途 |
+|------|---------------|------|
+| `read_file` | `read_file` | 读取任意文件（soul.md、skill 内容、日志、其他脑的代码） |
+| `write_file` | `write_file` | 创建/覆写文件（创建脑目录结构、写 skill、写 proposal） |
+| `edit_file` | `edit_file` | 字符串替换编辑（修改 brain.json、微调 soul.md、改 BT 模板） |
+| `glob` | `glob` | 文件模式匹配（发现 skills、搜索 brains/、扫描日志） |
+| `grep` | `grep` | 内容搜索（搜索日志中的错误、查找 skill 关键词） |
+| `bash` | `bash` | Shell 命令执行（运行脚本、查看进程、git 操作） |
+
+##### Brain-aware 路径解析
+
+**设计灵感**：参考 agent_fcos 的 Workspace Zone 模式（`[workspace:]zone/path`），
+MineClaw 的文件工具原生支持 **brain 上下文路径**，让 Agent 操作 brain 文件时
+不需要拼写完整路径。
+
+**路径解析规则**：
+
+```
+read_file({ path: "soul.md", brain: "planner" })
+→ 解析为 brains/planner/soul.md
+
+write_file({ path: "skills/mine.md", brain: "responder" })
+→ 解析为 brains/responder/skills/mine.md
+
+edit_file({ path: "brain.json", brain: "listener" })
+→ 解析为 brains/listener/brain.json
+
+read_file({ path: "soul.md" })
+→ brain 省略时，默认为调用者自身的 brain 目录
+→ 等效于 read_file({ path: "soul.md", brain: ctx.selfId })
+
+read_file({ path: "src/core/brain.ts" })
+→ 无 brain 参数 + 路径不在 brains/ 下 → 按项目根目录解析
+```
+
+**核心接口**：
+
+```typescript
+interface BrainAwarePath {
+  path: string;        // 相对路径
+  brain?: string;      // brain id，省略时为调用者自身
+}
+
+function resolvePath(input: BrainAwarePath, ctx: ToolContext): string {
+  if (input.brain) {
+    return join(BRAINS_DIR, input.brain, input.path);
+  }
+  // 无 brain 参数：如果路径看起来是 brain 内部文件（soul.md、brain.json、
+  // skills/、memory/ 等已知 pattern），默认解析到调用者自身的 brain 目录
+  if (isBrainLocalPattern(input.path)) {
+    return join(BRAINS_DIR, ctx.selfId, input.path);
+  }
+  // 否则按项目根目录解析
+  return join(PROJECT_ROOT, input.path);
+}
+```
+
+**对比 agent_fcos 的 Zone 设计**：
+
+| agent_fcos | MineClaw |
+|-----------|----------|
+| `[workspace:]zone/path` | `path` + `brain?` 参数 |
+| Zone（assets/data/output/...）按职责分区 | Brain 目录本身就是天然分区（soul.md/brain.json/skills/memory/） |
+| workspace 前缀指定其他节点 | `brain` 参数指定其他脑 |
+| 默认当前 workspace | 默认调用者自身 brain |
+| Clone 时 workspace 上下文复制 | spawn_thought 时 selfId 继承 |
+
+MineClaw 不需要 Zone 层——brain 目录结构本身已经是分区。
+`brain` 参数 = agent_fcos 的 workspace 前缀，提供跨脑访问能力。
+
+**权限控制**：
+
+```
+默认模式：
+  - 自身 brain 目录：读写
+  - 其他 brain 目录：只读（可读 soul.md，不可改别人的配置）
+  - skills/ / src/：只读
+
+evolve 模式：
+  - 自身 brain 目录：读写
+  - 其他 brain 目录：读写（可帮别的脑改 soul.md）
+  - skills/ / src/：读写（可创建新 skill、修改代码）
+```
+
+实现参考：可直接复用 agentic_os 的 `src/tools/` 实现，适配 MineClaw 的 ToolDefinition 接口。
+权限控制：结合 AGENTIC.md §7 的权限矩阵（默认模式 vs evolve 模式）。
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] TodoWrite
+  todos: [{"id":"1","status":"completed"},{"id":"2","status":"in_progress"}]
+  merge: true
+
+[Tool result] TodoWrite
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: #### 8.2 脑管理（1 个）— 统一抽象
+
+**`manage_brain` 工具**：统一 agentic_os 的 spawn/status/kill/persona/model 五个操作。
+
+```
+manage_brain({ action: "list" })
+→ 列出所有脑 + 运行状态（从 Scheduler 运行时数据读取）
+
+manage_brain({ action: "status", id: "planner" })
+→ 单个脑详情（model、tick 数、session 长度、订阅列表）
+
+manage_brain({ action: "start", id: "reviewer" })
+→ 热启动一个脑（Scheduler 动态加载 brains/<id>/）
+
+manage_brain({ action: "stop", id: "reviewer" })
+→ 停止脑（保留目录，可恢复）
+
+manage_brain({ action: "restart", id: "reflect" })
+→ 重启脑（配置变更后生效）
+```
+
+创建新脑不需要专门 action — 用 `write_file` 创建 `brains/<id>/brain.json` + `soul.md`，
+然后 `manage_brain({ action: "start" })` 启动。**创建目录 = 长出新脑**。
+  new_string: #### 8.2 脑管理（1 个）— 统一抽象
+
+**`manage_brain` 工具**：统一 agentic_os 的 spawn/kill/persona/model 操作。
+
+> 旧设计中的 `status` action 已移除——它依赖已废弃的 state.json。
+> 单脑详情直接通过 `list` 返回（每个 entry 包含完整运行时信息），
+> 或通过 `read_file({ path: "brain.json", brain: "planner" })` 读取配置。
+
+```
+manage_brain({ action: "list" })
+→ 列出所有脑 + 运行时状态（从 Scheduler RuntimeStats 读取）
+→ [
+    { id: "listener", model: "gemini-2.5-flash", status: "running",
+      tickCount: 142, subs: ["stdin"], type: "llm" },
+    { id: "planner", model: null, status: "running",
+      tickCount: 89, type: "script" },
+    ...
+  ]
+
+manage_brain({ action: "list", id: "planner" })
+→ 按 id 过滤，返回单脑详情（等效于旧 status action，但数据来源是运行时而非 state.json）
+
+manage_brain({ action: "start", id: "reviewer" })
+→ 热启动一个脑（Scheduler 动态加载 brains/<id>/）
+
+manage_brain({ action: "stop", id: "reviewer" })
+→ 停止脑（保留目录，可恢复）
+
+manage_brain({ action: "restart", id: "reflect" })
+→ 重启脑（配置变更后生效）
+```
+
+**与文件工具的协作模式**：
+
+```
+# 创建新脑（创建目录 = 长出新脑）
+write_file({ path: "brain.json", brain: "explorer", content: '{"model":"..."}' })
+write_file({ path: "soul.md", brain: "explorer", content: "..." })
+manage_brain({ action: "start", id: "explorer" })
+
+# 修改脑配置
+edit_file({ path: "brain.json", brain: "social", old: ..., new: ... })
+manage_brain({ action: "restart", id: "social" })
+
+# 查看其他脑的 soul
+read_file({ path: "soul.md", brain: "planner" })
+```
+
+`manage_brain` 只管运行时生命周期（start/stop/restart/list），
+脑的配置和内容完全通过 brain-aware 文件工具管理，职责清晰不重叠。
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] TodoWrite
+  todos: [{"id":"2","status":"completed"},{"id":"3","status":"in_progress"}]
+  merge: true
+
+[Tool result] TodoWrite
+
+assistant:
+现在清理整个 roadmap 中对 `read_state` 的过时引用。
+[Tool call] Grep
+  pattern: read_state|state\.json
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+
+[Tool result] Grep
+
+assistant:
+大部分 `state.json` 引用在 §7 本身（那是专门讨论删除它的章节，不用改）。需要改的是 §8 里仍然把 `read_state` 当作"当前工具"的引用。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: 当前只有 2 个工具（send_message、read_state），需要补全基础工具集。
+  new_string: 当前只有 1 个工具（send_message），需要补全基础工具集。
+（`read_state` 已随 state.json 一同废弃，见 §7。）
+
+[Tool result] StrReplace
+
+assistant:
+现在更新涉及文件列表，加入新的 `resolvePath` 基础设施文件。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/docs/roadmap.md
+  old_string: ### 涉及文件
+
+- 新建 `tools/read_file.ts`
+- 新建 `tools/write_file.ts`
+- 新建 `tools/edit_file.ts`
+- 新建 `tools/glob.ts`
+- 新建 `tools/grep.ts`
+- 新建 `tools/bash.ts`
+- 新建 `tools/manage_brain.ts`
+- `src/core/scheduler.ts` — 暴露动态启动/停止脑的接口
+- `src/core/types.ts` — ToolContext 扩展（scheduler 引用）
+  new_string: ### 涉及文件
+
+- 新建 `src/tools/resolve-path.ts` — brain-aware 路径解析核心（`resolvePath` + `isBrainLocalPattern` + 权限校验）
+- 新建 `tools/read_file.ts` — 参数含 `brain?`
+- 新建 `tools/write_file.ts` — 参数含 `brain?`
+- 新建 `tools/edit_file.ts` — 参数含 `brain?`
+- 新建 `tools/glob.ts` — 参数含 `brain?`（可选，限定搜索范围到某个 brain 目录）
+- 新建 `tools/grep.ts` — 参数含 `brain?`（可选）
+- 新建 `tools/bash.ts`
+- 新建 `tools/manage_brain.ts` — 只有 list / start / stop / restart（无 status）
+- `src/core/scheduler.ts` — 暴露动态启动/停止脑的接口 + RuntimeStats
+- `src/core/types.ts` — ToolContext 扩展（scheduler 引用、selfId）
+- 删除 `tools/read_state.ts`（§7 一并处理）
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] TodoWrite
+  todos: [{"id":"3","status":"completed"}]
+  merge: true
+
+[Tool result] TodoWrite
+
+assistant:
+更新完成，总结一下改动：
+
+---
+
+### 改了什么
+
+**§8.1 文件操作 — 新增 brain-aware 路径解析**
+
+借鉴 agent_fcos 的 `[workspace:]zone/path` 设计，所有文件工具新增可选的 `brain` 参数：
+
+- `read_file({ path: "soul.md", brain: "planner" })` → 解析到 `brains/planner/soul.md`
+- `brain` 省略时默认解析到调用者自身的 brain 目录
+- 路径如果不匹配 brain 内部文件 pattern（`soul.md`、`brain.json`、`skills/`...），按项目根目录解析
+- 权限分两级：默认模式下只能读写自己的 brain 目录，evolve 模式下可读写所有
+
+与 agent_fcos 的差异是 MineClaw **不需要 Zone 层**——brain 目录结构本身就是天然分区，`brain` 参数等价于 agent_fcos 的 workspace 前缀。
+
+**§8.2 manage_brain — 精简 action**
+
+- 移除 `status` action（依赖已废弃的 state.json）
+- `list` 增加可选 `id` 参数，既能列全部也能查单脑详情（数据源是 Scheduler RuntimeStats，非文件）
+- 保留 `start` / `stop` / `restart` 三个生命周期操作
+- 新增"与文件工具的协作模式"示例，展示创建脑、修改配置、查看其他脑的完整工作流
+- 职责明确：`manage_brain` 只管运行时生命周期，脑的内容通过 brain-aware 文件工具管理
+
+**其他清理**
+
+- §8 开头的"当前只有 2 个工具（send_message、read_state）"更正为"1 个工具（send_message）"
+- 涉及文件列表新增 `src/tools/resolve-path.ts`，标记删除 `tools/read_state.ts`
+
+user:
+<user_query>
+再找下网上cursor的提示词github仓库，下载到references里
+</user_query>
+
+assistant:
+[Tool call] WebSearch
+  search_term: cursor IDE system prompt leaked github repository 2025 2026
+  explanation: 查找 Cursor 提示词泄露的 GitHub 仓库
+[Tool call] WebSearch
+  search_term: cursor agent system prompt github repo collection
+  explanation: 查找 Cursor 系统提示词收集仓库
+
+[Tool result] WebSearch
+
+[Tool result] WebSearch
+
+assistant:
+[Thinking] The best repos for reference seem to be:
+1. `x1xhlol/leaked-system-prompts` - the one with 102k stars
+2. `labac-dev/cursor-system-prompts` - cursor-specific
+3. `maxockner/prompt-stash` - cursor prompts across different models
+4. `mhar-andal/system-prompts-and-models-of-ai-tools` - comprehensive collection
+
+Let me search for the most popular one with 102k stars.
+[Tool call] WebSearch
+  search_term: x1xhlol leaked-system-prompts github 100k stars cursor devin
+  explanation: 查找那个 102k stars 的大型提示词收集仓库
+
+[Tool result] WebSearch
+
+assistant:
+找到了几个关键仓库。让我下载两个最有参考价值的。
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/references && git clone --depth 1 https://github.com/x1xhlol/system-prompts-and-models-of-ai-tools.git cursor-prompts-collection
+  description: 克隆大型 AI 提示词收集仓库
+  block_until_ms: 120000
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/references && git clone --depth 1 https://github.com/maxockner/prompt-stash.git cursor-prompt-stash
+  description: 克隆 Cursor 多模型提示词仓库
+  block_until_ms: 120000
+
+[Tool result] Shell
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: echo "=== cursor-prompts-collection ===" && du -sh /home/aw/Desktop/gamer/references/cursor-prompts-collection && ls /home/aw/Desktop/gamer/references/cursor-prompts-collection && echo "" && echo "=== cursor-prompt-stash ===" && du -sh /home/aw/Desktop/gamer/references/cursor-prompt-stash && ls /home/aw/Desktop/gamer/references/cursor-prompt-stash
+  description: 查看两个仓库内容概况
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: ls -la /home/aw/Desktop/gamer/references/
+  description: 检查 references 目录内容
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Glob
+  glob_pattern: references/cursor-prompts-collection/*
+[Tool call] Glob
+  glob_pattern: references/cursor-prompt-stash/*
+
+[Tool result] Glob
+
+[Tool result] Glob
+
+assistant:
+[Thinking] The clone commands returned exit 0 but no output, and the directories don't seem to exist. Let me check what's going on - maybe the shell is in a different state.
+[Tool call] Shell
+  command: pwd && ls /home/aw/Desktop/gamer/references/
+  description: 确认当前路径和目录内容
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: echo "hello" && pwd
+  description: 测试 shell 基本功能
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Read
+  path: /home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals
+
+[Tool result] Read
+
+assistant:
+[Tool call] Glob
+  glob_pattern: /home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/*.txt
+
+[Tool result] Glob
+
+assistant:
+[Tool call] Shell
+  command: echo "test123"
+  description: 测试 shell 输出
+  block_until_ms: 10000
+
+[Tool result] Shell
+
+assistant:
+[Thinking] The shell seems completely broken - every command returns exit 0 but no output, and completes in 0ms. This is suspicious. Let me try a different approach.
+Shell 似乎有问题，所有命令都返回空输出。让我用另一种方式操作。
+[Tool call] Task
+  subagent_type: shell
+  description: 克隆 Cursor 提示词仓库
+  prompt: 请执行以下操作：
+
+1. 先确认 /home/aw/Desktop/gamer/references/ 目录存在，如不存在则创建
+2. 在该目录下克隆以下两个仓库：
+   - https://github.com/x1xhlol/system-prompts-and-models-of-ai-tools.git 克隆到 cursor-prompts-collection 目录
+   - https://github.com/maxockner/prompt-stash.git 克隆到 cursor-prompt-stash 目录
+   都使用 --depth 1 浅克隆
+3. 克隆完成后，列出两个目录的内容和大小
+
+请返回完整的执行结果，包括每个目录的文件列表。
+
+[Tool result] Task
+
+assistant:
+两个仓库都已克隆到 `/home/aw/Desktop/gamer/references/` 下：
+
+- **cursor-prompts-collection** (3.3M) — 来自 `x1xhlol/system-prompts-and-models-of-ai-tools`，包含 35 个 AI 工具的系统提示词（Cursor、Devin、Claude Code、Windsurf、Replit、v0、Manus 等），非常全面
+- **cursor-prompt-stash** (400K) — 来自 `maxockner/prompt-stash`，专注 Cursor 和 Claude Code，按不同模型（Claude 3.5/3.7、GPT-4.0/4.1、Gemini 2.5 Pro）分类，更精炼
+
+可以开始参考了。
+
+user:
+<user_query>
+导出你和我当前的聊天记录到@chat_history 
+</user_query>
+
+assistant:
+[Thinking] The user wants me to export our current chat history to a `chat_history` directory. Let me first check if that directory exists, and then find our conversation transcript to export it.
+
+The transcript is at `/home/aw/.cursor/projects/home-aw-Desktop-gamer/agent-transcripts/6f4a0bf0-1b4b-4212-bc79-4988f8c75049.txt` based on the summary.
+
+Let me check the `chat_history` location first.
+[Tool call] Glob
+  glob_pattern: **/chat_history*
+
+[Tool result] Glob
+
+assistant:
+[Tool call] Glob
+  glob_pattern: chat_history
+
+[Tool result] Glob
