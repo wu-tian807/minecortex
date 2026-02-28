@@ -214,9 +214,13 @@ export interface ToolContext { brainId; signal; emit; brainBoard; slot; ... }
 export interface DynamicSlotAPI { register; update; release; get; }
 
 // 事件源系统（被 subscriptions/*.ts 直接 import）
-export interface SourceContext { brainId; brainDir; config?; }
+export interface SourceContext { brainId; brainDir; config?; brainBoard: BrainBoardAPI; }
 export type EventSourceFactory = (ctx: SourceContext) => EventSource;
 export interface EventSource { name; start(emit); stop(); }
+
+// BrainBoardAPI（含 watch 响应式 hook）
+export type WatchCallback = (value: unknown, prev: unknown) => void;
+export interface BrainBoardAPI { set; get; remove; getAll; watch(brainId, key, cb: WatchCallback): () => void; }
 ```
 
 **为什么这些留在 core**：`tools/send_message.ts` 写 `import type { ToolDefinition } from '../src/core/types.js'` 是自然的。如果放到 `loaders/types.ts`，工具作者要写 `import from '../src/loaders/types.js'`，语义不直觉。

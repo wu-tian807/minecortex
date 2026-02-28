@@ -17,11 +17,13 @@ todos:
   - id: tool-definition
     content: "重写 ToolDefinition: parameters → input_schema(JSON Schema) + ToolOutput 返回类型"
   - id: tool-context
-    content: "扩展 ToolContext: 新增 signal / brainBoard / slot / brainBus / workspace / terminalManager"
+    content: "扩展 ToolContext: 新增 signal / brainBoard / slot / brainBus / workspace / terminalManager / pathManager"
+  - id: source-context
+    content: "扩展 SourceContext: 新增 brainBoard 引用（对齐 P4/P7 要求，contextWindow 等通过 brainBoard.get() 获取）"
   - id: dynamic-slot-api
     content: "定义 DynamicSlotAPI 接口 (register/update/release/get)"
   - id: brain-board-api
-    content: "定义 BrainBoardAPI 接口 (set/get/remove/getAll)"
+    content: "定义 BrainBoardAPI 接口 (set/get/remove/getAll/watch — watch 为响应式 hook)"
   - id: event-steer
     content: "Event 新增 steer?: boolean 字段"
   - id: context-slot
@@ -203,16 +205,48 @@ export interface ExecResult {
 }
 ```
 
+### BrainBoardAPI（动态可扩展状态注册表 + 响应式 watch hook）
+
+```typescript
+export type WatchCallback = (value: unknown, prev: unknown) => void;
+
+export interface BrainBoardAPI {
+  set(brainId: string, key: string, value: unknown): void;
+  get(brainId: string, key: string): unknown;
+  remove(brainId: string, key: string): void;
+  getAll(brainId: string): Record<string, unknown>;
+  watch(brainId: string, key: string, cb: WatchCallback): () => void;
+}
+```
+
+`watch()` 是框架提供的最本质的响应式 hook。当 `set()` 被调用时同步触发匹配的 watcher。
+返回取消函数。用于 auto_compact 订阅监听 `tokens.lastInputTokens` 变化等场景。
+
+### SourceContext（事件源上下文）
+
+```typescript
+export interface SourceContext {
+  brainId: string;
+  brainDir: string;
+  config?: Record<string, unknown>;
+  brainBoard: BrainBoardAPI;
+}
+```
+
+`brainBoard` 在固定位置（scheduler 持有，传给 brain → 传给 subscription），
+subscription 通过 `brainBoard.get()` 获取 `model.contextWindow`、`tokens.*` 等运行时数据，
+无需单独注入 `modelSpec` 或 `sessionManager`。
+
 ### 完整类型列表（待定义）
 
 - ContentPart, SerializedPart
 - LLMMessage, LLMToolCall, LLMResponse
 - StreamChunk
 - ToolOutput, ToolDefinition, ToolContext
-- DynamicSlotAPI, BrainBoardAPI, BrainBusAPI
+- DynamicSlotAPI, BrainBoardAPI (含 watch), WatchCallback
 - Event (扩展 steer)
 - ContextSlot, SlotKind, SlotFactory, SlotContext
-- EventSource, EventSourceFactory, SourceContext
+- EventSource, EventSourceFactory, SourceContext (含 brainBoard)
 - CapabilitySelector, BrainJson, MineclawConfig, ModelSpec
 - ThoughtType, ThoughtConfig
 - PathManagerAPI, FSWatcherAPI, WatchRegistration
