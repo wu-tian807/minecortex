@@ -1,6 +1,6 @@
 ---
-name: "P11: Web/Browser 工具"
-order: 11
+name: "P12: Web/Browser 工具"
+order: 12
 overview: "web_search(Tavily默认) + web_fetch(HTTP GET+HTML转文本) + browser(后期可选, CDP直连)。web_search 和 web_fetch 为中优先级核心工具，browser 为后期扩展。"
 depends_on: ["P0"]
 unlocks: []
