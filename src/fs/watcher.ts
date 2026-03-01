@@ -2,6 +2,19 @@ import { watch, type FSWatcher as NodeFSWatcher } from "node:fs";
 import { relative } from "node:path";
 import type { FSWatcherAPI, WatchRegistration, FSChangeEvent, FSHandler } from "../core/types.js";
 
+let _instance: FSWatcher | null = null;
+
+/** Get the global FSWatcher singleton (null if not yet created). */
+export function getFSWatcher(): FSWatcher | null {
+  return _instance;
+}
+
+/** Create (or return existing) global FSWatcher singleton. */
+export function createFSWatcher(rootDir: string): FSWatcher {
+  if (!_instance) _instance = new FSWatcher(rootDir);
+  return _instance;
+}
+
 interface Registration {
   id: string;
   pattern: RegExp;
@@ -55,6 +68,7 @@ export class FSWatcher implements FSWatcherAPI {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.registrations.clear();
+    if (_instance === this) _instance = null;
   }
 
   private dispatch(eventType: string, filename: string): void {
