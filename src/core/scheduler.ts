@@ -1,6 +1,6 @@
 /** @desc Scheduler — singleton managers, brain discovery, ScriptBrain support, shutdown handling */
 
-import { readFile, readdir, stat, mkdir, writeFile, access } from "node:fs/promises";
+import { readFile, readdir, stat, mkdir, writeFile, access, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type {
@@ -334,100 +334,119 @@ export class Scheduler {
     return `# ${id}\n\n你是 MineClaw 多脑系统中的 ${id} 脑区。\n\n## 职责\n- (请编辑此处)\n\n## 约束\n- 默认中文回复，代码注释用英文\n- 每步完成后简短汇报\n\n## 关系\n- 通过 send_message 与其他脑区协作\n- 用 manage_brain list 查看系统中所有活跃脑区\n\n## 工作方式\n1. 理解任务 → 拆解步骤\n2. 用工具直接执行\n3. 遇到问题先自己排查\n`;
   }
 
-  listBrains(): string[] {
-    return [...this.slots.keys()];
-  }
-
-  async controlBrain(action: string, target: string, opts?: {
+  async controlBrain(action: string, target?: string, opts?: {
     model?: string;
     soul?: string;
     subscriptions?: Record<string, unknown>;
     autoStart?: boolean;
   }): Promise<string> {
-    this.logger.info("scheduler", 0, `brain_control: ${action} → '${target}'`);
+    this.logger.info("scheduler", 0, `brain_control: ${action}${target ? ` → '${target}'` : ""}`);
 
     switch (action) {
-      case "create": {
-        if (!/^[a-zA-Z0-9_-]+$/.test(target)) {
-          return `Invalid brain id '${target}'. Use only alphanumeric, dash, underscore.`;
-        }
-        const brainDir = join(ROOT, "brains", target);
-        try {
-          await access(brainDir);
-          return `Brain directory already exists: brains/${target}/`;
-        } catch { /* doesn't exist — proceed */ }
-
-        await mkdir(brainDir, { recursive: true });
-        const brainJson = { ...Scheduler.DEFAULT_BRAIN_JSON } as Record<string, unknown>;
-        if (opts?.model) brainJson.model = opts.model;
-        if (opts?.subscriptions) brainJson.subscriptions = opts.subscriptions;
-        await writeFile(join(brainDir, "brain.json"), JSON.stringify(brainJson, null, 2) + "\n", "utf-8");
-        await writeFile(join(brainDir, "soul.md"), opts?.soul ?? Scheduler.defaultSoul(target), "utf-8");
-
-        if (opts?.autoStart) {
-          return await this.controlBrain("start", target);
-        }
-        return `Brain '${target}' created`;
-      }
-
-      case "start": {
-        if (this.slots.has(target)) return `Brain '${target}' is already running`;
-        const brainDir = join(ROOT, "brains", target);
-        if (!existsSync(brainDir)) return `Brain directory not found: brains/${target}/`;
-
-        const globalConfig = await this.loadGlobalConfig();
-        await this.initBrain(target, globalConfig);
-        const slot = this.slots.get(target);
-        if (slot) {
-          slot.brain.run(slot.abortController.signal)
-            .catch(err => this.logger.error("scheduler", 0, `brain '${target}' loop crashed`, err));
-        }
-        return `Brain '${target}' started`;
-      }
-
-      case "stop": {
-        const slot = this.slots.get(target);
-        if (!slot) return `Unknown brain: '${target}'`;
-        slot.brain.stop?.();
-        return `Brain '${target}' stopped`;
-      }
-
-      case "shutdown": {
-        const slot = this.slots.get(target);
-        if (!slot) return `Unknown brain: '${target}'`;
-        await slot.brain.shutdown?.();
-        slot.abortController.abort();
-        return `Brain '${target}' shut down`;
-      }
-
-      case "restart": {
-        const slot = this.slots.get(target);
-        if (!slot) return `Unknown brain: '${target}'`;
-        await slot.brain.shutdown?.();
-        slot.abortController.abort();
-        this.slots.delete(target);
-        const globalConfig = await this.loadGlobalConfig();
-        await this.initBrain(target, globalConfig);
-        const newSlot = this.slots.get(target);
-        if (newSlot) {
-          newSlot.brain.run(newSlot.abortController.signal)
-            .catch(err => this.logger.error("scheduler", 0, `brain '${target}' loop crashed after restart`, err));
-        }
-        return `Brain '${target}' restarted`;
-      }
-
-      case "free": {
-        const slot = this.slots.get(target);
-        if (!slot) return `Unknown brain: '${target}'`;
-        await slot.brain.free?.();
-        slot.abortController.abort();
-        this.slots.delete(target);
-        return `Brain '${target}' freed`;
-      }
-
-      default:
-        return `Unknown action: '${action}'`;
+      case "list":      return this.doList();
+      case "create":    return this.doCreate(target!, opts);
+      case "start":     return this.doStart(target!);
+      case "stop":      return this.doStop(target!);
+      case "shutdown":  return this.doShutdown(target!);
+      case "restart":   return this.doRestart(target!);
+      case "free":      return this.doFree(target!);
+      default:          return `Unknown action: '${action}'`;
     }
+  }
+
+  // ─── Private lifecycle methods ───
+
+  private doList(): string {
+    const ids = [...this.slots.keys()];
+    if (ids.length === 0) return "No active brains.";
+    return "Active brains:\n" + ids.map(id => `  - ${id}`).join("\n");
+  }
+
+  private async doCreate(id: string, opts?: {
+    model?: string;
+    soul?: string;
+    subscriptions?: Record<string, unknown>;
+    autoStart?: boolean;
+  }): Promise<string> {
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+      return `Invalid brain id '${id}'. Use only alphanumeric, dash, underscore.`;
+    }
+    const brainDir = join(ROOT, "brains", id);
+    try {
+      await access(brainDir);
+      return `Brain directory already exists: brains/${id}/`;
+    } catch { /* doesn't exist — proceed */ }
+
+    await mkdir(brainDir, { recursive: true });
+    const brainJson = { ...Scheduler.DEFAULT_BRAIN_JSON } as Record<string, unknown>;
+    if (opts?.model) brainJson.model = opts.model;
+    if (opts?.subscriptions) brainJson.subscriptions = opts.subscriptions;
+    await writeFile(join(brainDir, "brain.json"), JSON.stringify(brainJson, null, 2) + "\n", "utf-8");
+    await writeFile(join(brainDir, "soul.md"), opts?.soul ?? Scheduler.defaultSoul(id), "utf-8");
+
+    if (opts?.autoStart) return this.doStart(id);
+    return `Brain '${id}' created`;
+  }
+
+  private async doStart(id: string): Promise<string> {
+    if (this.slots.has(id)) return `Brain '${id}' is already running`;
+    const brainDir = join(ROOT, "brains", id);
+    if (!existsSync(brainDir)) return `Brain directory not found: brains/${id}/`;
+
+    const globalConfig = await this.loadGlobalConfig();
+    await this.initBrain(id, globalConfig);
+    const slot = this.slots.get(id);
+    if (slot) {
+      slot.brain.run(slot.abortController.signal)
+        .catch(err => this.logger.error("scheduler", 0, `brain '${id}' loop crashed`, err));
+    }
+    return `Brain '${id}' started`;
+  }
+
+  private doStop(id: string): string {
+    const slot = this.slots.get(id);
+    if (!slot) return `Unknown brain: '${id}'`;
+    slot.brain.stop?.();
+    return `Brain '${id}' stopped`;
+  }
+
+  private async doShutdown(id: string): Promise<string> {
+    const slot = this.slots.get(id);
+    if (!slot) return `Unknown brain: '${id}'`;
+    await slot.brain.shutdown?.();
+    slot.abortController.abort();
+    return `Brain '${id}' shut down`;
+  }
+
+  private async doRestart(id: string): Promise<string> {
+    const slot = this.slots.get(id);
+    if (!slot) return `Unknown brain: '${id}'`;
+    await slot.brain.shutdown?.();
+    slot.abortController.abort();
+    this.slots.delete(id);
+    const globalConfig = await this.loadGlobalConfig();
+    await this.initBrain(id, globalConfig);
+    const newSlot = this.slots.get(id);
+    if (newSlot) {
+      newSlot.brain.run(newSlot.abortController.signal)
+        .catch(err => this.logger.error("scheduler", 0, `brain '${id}' loop crashed after restart`, err));
+    }
+    return `Brain '${id}' restarted`;
+  }
+
+  private async doFree(id: string): Promise<string> {
+    const slot = this.slots.get(id);
+    if (slot) {
+      await slot.brain.free?.();
+      slot.abortController.abort();
+      this.slots.delete(id);
+    }
+    const brainDir = join(ROOT, "brains", id);
+    if (existsSync(brainDir)) {
+      await rm(brainDir, { recursive: true, force: true });
+      this.logger.info("scheduler", 0, `brain dir deleted: brains/${id}/`);
+    }
+    return `Brain '${id}' freed`;
   }
 
   private setupSignalHandlers(): void {

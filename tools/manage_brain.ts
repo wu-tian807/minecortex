@@ -5,9 +5,10 @@ export default {
   name: "manage_brain",
   description:
     "Unified brain lifecycle management. " +
-    "create = new brain dir with config, start = launch existing brain, " +
-    "stop = pause (keep context), shutdown = stop + clear runtime, " +
-    "restart = shutdown + reinit, free = shutdown + delete BrainBoard entries.",
+    "list = show active brains, create = new brain dir with config, " +
+    "start = launch existing brain, stop = pause (keep context), " +
+    "shutdown = stop + clear runtime, restart = shutdown + reinit, " +
+    "free = shutdown + delete BrainBoard + delete brain dir.",
   input_schema: {
     type: "object",
     properties: {
@@ -46,13 +47,9 @@ export default {
     const scheduler = getScheduler();
     if (!scheduler) return "Scheduler not running.";
 
-    if (action === "list") {
-      const ids = scheduler.listBrains();
-      if (ids.length === 0) return "No active brains.";
-      return "Active brains:\n" + ids.map(id => `  - ${id}`).join("\n");
+    if (action !== "list" && !brainId) {
+      return `brain_id is required for action '${action}'`;
     }
-
-    if (!brainId) return `brain_id is required for action '${action}'`;
 
     const opts = action === "create" ? {
       model: args.model ? String(args.model) : undefined,
