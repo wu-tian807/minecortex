@@ -45,6 +45,14 @@ export class EventBus {
     }
   }
 
+  /** Push a _wake event to a brain's queue to unblock its event loop. */
+  wake(brainId: string): void {
+    const queue = this.brainQueues.get(brainId);
+    if (queue) {
+      queue.push({ source: "_system", type: "_wake", payload: {}, ts: Date.now(), silent: false, priority: -1 });
+    }
+  }
+
   private route(event: Event, to: string, fromBrainId?: string): void {
     if (to === "*") {
       for (const [id, queue] of this.brainQueues) {

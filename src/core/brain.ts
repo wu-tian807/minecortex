@@ -458,7 +458,7 @@ export class ConsciousBrain implements BrainInterface {
     if (this.turnAbort) {
       this.turnAbort.abort();
     } else {
-      this.eventQueue.push({ source: "_system", type: "_wake", payload: {}, ts: Date.now(), silent: false, priority: -1 });
+      this.eventBus.wake(this.id);
     }
   }
 
