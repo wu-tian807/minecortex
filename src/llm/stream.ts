@@ -6,6 +6,8 @@ export async function assembleResponse(
 ): Promise<LLMResponse> {
   let text = "";
   let thinking = "";
+  let thinkingSignature: string | undefined;
+  let textSignature: string | undefined;
   const toolCalls: LLMToolCall[] = [];
   let usage: { inputTokens: number; outputTokens: number; thinkingTokens?: number } | undefined;
 
@@ -13,16 +15,23 @@ export async function assembleResponse(
     switch (chunk.type) {
       case "text":
         text += chunk.text;
+        if (chunk.thoughtSignature) textSignature = chunk.thoughtSignature;
         break;
       case "thinking":
         thinking += chunk.text;
+        if (chunk.thoughtSignature) thinkingSignature = chunk.thoughtSignature;
         break;
       case "tool_call": {
         let args: Record<string, unknown> = {};
         try {
           args = JSON.parse(chunk.arguments);
         } catch {}
-        toolCalls.push({ id: chunk.id, name: chunk.name, arguments: args });
+        toolCalls.push({
+          id: chunk.id,
+          name: chunk.name,
+          arguments: args,
+          thoughtSignature: chunk.thoughtSignature,
+        });
         break;
       }
       case "usage":
@@ -38,6 +47,8 @@ export async function assembleResponse(
   return {
     content: text,
     thinking: thinking || undefined,
+    thinkingSignature,
+    textSignature,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     usage,
   };

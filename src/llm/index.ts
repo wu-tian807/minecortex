@@ -1,6 +1,7 @@
 /** LLM entry — imports trigger all adapter self-registration */
 
-import "./gemini.js";
+import "./gemini2.js";
+import "./gemini3.js";
 import "./anthropic.js";
 import "./openai-compat.js";
 import "./deepseek-reasoning.js";

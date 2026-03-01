@@ -17,13 +17,19 @@ function toolDefsToAnthropic(tools?: ToolDefinition[]) {
 
 function contentToAnthropic(content: string | ContentPart[]): any {
   if (typeof content === "string") return content;
-  return content.map((p) => {
-    if (p.type === "image")
-      return {
-        type: "image",
-        source: { type: "base64", media_type: p.mimeType, data: p.data },
-      };
-    return { type: "text", text: p.text };
+  return content.flatMap((p) => {
+    switch (p.type) {
+      case "image":
+        return {
+          type: "image",
+          source: { type: "base64", media_type: p.mimeType, data: p.data },
+        };
+      case "text":
+        return { type: "text", text: p.text };
+      case "video":
+      case "audio":
+        return { type: "text", text: `[${p.type}: unsupported by Anthropic]` };
+    }
   });
 }
 
@@ -88,25 +94,19 @@ function messagesToAnthropic(messages: LLMMessage[]): any[] {
 }
 
 function createAnthropicProvider(opts: ProviderFactoryOpts): LLMProvider {
-  const { apiKey, baseUrl, authType } = opts;
+  const { apiKey, baseUrl } = opts;
   const base = (baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
+  const url = `${base}/v1/messages`;
   const model = opts.model;
   const temperature = opts.temperature ?? 0.7;
   const maxTokens = opts.maxTokens ?? 4096;
   const reasoningEffort = opts.reasoningEffort;
 
-  function buildHeaders(): Record<string, string> {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "anthropic-version": "2023-06-01",
-    };
-    if (authType === "bearer") {
-      headers["Authorization"] = `Bearer ${apiKey}`;
-    } else {
-      headers["x-api-key"] = apiKey;
-    }
-    return headers;
-  }
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01",
+    "x-api-key": apiKey,
+  };
 
   return {
     async *chatStream(messages, tools, signal) {
@@ -137,16 +137,16 @@ function createAnthropicProvider(opts: ProviderFactoryOpts): LLMProvider {
       }
 
       const response = await withRetry(async () => {
-        const res = await fetch(`${base}/v1/messages`, {
+        const res = await fetch(url, {
           method: "POST",
-          headers: buildHeaders(),
+          headers,
           body: JSON.stringify(body),
           signal,
         });
         if (!res.ok) {
           const text = await res.text();
           const err = new Error(
-            `Anthropic API error ${res.status}: ${text.slice(0, 500)}`,
+            `Anthropic API error ${res.status} [POST ${url}]: ${text.slice(0, 500)}`,
           );
           (err as any).status = res.status;
           throw err;

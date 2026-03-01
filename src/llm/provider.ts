@@ -12,10 +12,10 @@ export interface ProviderFactoryOpts {
   model: string;
   apiKey: string;
   baseUrl?: string;
-  authType?: string;
   temperature?: number;
   maxTokens?: number;
   reasoningEffort?: ReasoningEffort;
+  showThinking?: boolean;
 }
 
 interface KeyEntry {
@@ -23,7 +23,6 @@ interface KeyEntry {
   api: string;
   models: string[];
   api_base?: string;
-  auth_type?: string;
 }
 
 type ProviderFactory = (opts: ProviderFactoryOpts) => LLMProvider;
@@ -48,8 +47,6 @@ export function parseModelSpec(raw: string): { model: string; keySection?: strin
 
 // ── Key file loading ─────────────────────────────────────────────
 
-let keyFileCache: Record<string, KeyEntry> | null = null;
-
 function getKeyDir(): string {
   try {
     const thisDir = dirname(fileURLToPath(import.meta.url));
@@ -59,13 +56,12 @@ function getKeyDir(): string {
   return resolve(process.cwd(), "key");
 }
 
+/** Always re-read from disk so key/model changes take effect without restart. */
 function loadKeyFile(): Record<string, KeyEntry> {
-  if (keyFileCache) return keyFileCache;
   const p = resolve(getKeyDir(), "llm_key.json");
   if (existsSync(p)) {
     try {
-      keyFileCache = JSON.parse(readFileSync(p, "utf-8"));
-      return keyFileCache!;
+      return JSON.parse(readFileSync(p, "utf-8"));
     } catch { /* malformed JSON */ }
   }
   throw new Error("Missing key/llm_key.json — copy from llm_key.example.json");
@@ -82,19 +78,15 @@ const DEFAULT_SPEC: ModelSpec = {
   tokensPerChar: 0.3,
 };
 
-let modelCatalogCache: Record<string, ModelSpec> | null = null;
-
+/** Always re-read from disk so model spec changes take effect without restart. */
 function loadModelCatalog(): Record<string, ModelSpec> {
-  if (modelCatalogCache) return modelCatalogCache;
   const p = resolve(getKeyDir(), "models.json");
   if (existsSync(p)) {
     try {
-      modelCatalogCache = JSON.parse(readFileSync(p, "utf-8"));
-      return modelCatalogCache!;
+      return JSON.parse(readFileSync(p, "utf-8"));
     } catch { /* malformed JSON */ }
   }
-  modelCatalogCache = {};
-  return modelCatalogCache;
+  return {};
 }
 
 export function getModelSpec(model: string): ModelSpec {
@@ -108,6 +100,7 @@ export interface ResolvedModelParams {
   temperature: number;
   maxTokens: number;
   reasoningEffort?: ReasoningEffort;
+  showThinking?: boolean;
 }
 
 export function resolveModelParams(model: string, brainConfig?: BrainJson): ResolvedModelParams {
@@ -118,8 +111,9 @@ export function resolveModelParams(model: string, brainConfig?: BrainJson): Reso
   const reasoningEffort = spec.reasoning
     ? (brainConfig?.reasoningEffort ?? undefined)
     : undefined;
+  const showThinking = brainConfig?.showThinking ?? false;
 
-  return { temperature, maxTokens, reasoningEffort };
+  return { temperature, maxTokens, reasoningEffort, showThinking };
 }
 
 // ── Model → Section resolution (scan models arrays) ─────────────
@@ -173,10 +167,10 @@ export function createProvider(modelSpec: string, brainConfig?: BrainJson): LLMP
     model,
     apiKey: entry.api_key,
     baseUrl: entry.api_base,
-    authType: entry.auth_type,
     temperature: params.temperature,
     maxTokens: params.maxTokens,
     reasoningEffort: params.reasoningEffort,
+    showThinking: params.showThinking,
   });
 }
 
