@@ -348,17 +348,14 @@ export class ConsciousBrain implements BrainInterface {
   private async process(events: Event[], signal: AbortSignal): Promise<void> {
     if (events.length === 0) return;
 
-    const contentEvents = events.filter(e => !e.contentless);
-    if (contentEvents.length > 0) {
-      const lines = contentEvents.map(e =>
-        `[${e.source}:${e.type}] ${renderEventDisplay(e)}`
-      );
-      await this.sessionManager.appendMessage({
-        role: "user",
-        content: lines.join("\n"),
-        ts: Date.now(),
-      });
-    }
+    const lines = events.map(e =>
+      `[${e.source}:${e.type}] ${renderEventDisplay(e)}`
+    );
+    await this.sessionManager.appendMessage({
+      role: "user",
+      content: lines.join("\n"),
+      ts: Date.now(),
+    });
 
     this.hooks.emit(HookEvent.TurnStart, { turn: this.currentTurn, eventCount: events.length });
     let aborted = false;

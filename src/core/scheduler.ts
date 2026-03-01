@@ -441,9 +441,9 @@ export class Scheduler {
     slot.queue.push({
       source: "scheduler",
       type: "resume",
-      payload: {},
+      payload: { prompt: "<CONTINUE>" },
       ts: Date.now(),
-      contentless: true,
+      priority: 0,
     });
     return `Brain '${id}' resumed`;
   }
