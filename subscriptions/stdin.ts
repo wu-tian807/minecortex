@@ -2,6 +2,7 @@
 
 import * as readline from "node:readline";
 import type { Event, EventSource, SourceContext } from "../src/core/types.js";
+import { parseCommand } from "../src/core/command-parser.js";
 
 export default function create(_ctx: SourceContext): EventSource {
   let rl: readline.Interface | null = null;
@@ -11,15 +12,38 @@ export default function create(_ctx: SourceContext): EventSource {
 
     start(emit: (event: Event) => void) {
       rl = readline.createInterface({ input: process.stdin });
+
       rl.on("line", (line) => {
-        if (line.trim().length === 0) return;
+        const trimmed = line.trim();
+        if (trimmed.length === 0) return;
+
+        if (trimmed.startsWith("/")) {
+          const cmd = parseCommand(trimmed);
+          if (cmd) {
+            emit({
+              source: "stdin",
+              type: "command",
+              payload: cmd,
+              ts: Date.now(),
+              priority: 0,
+            });
+            return;
+          }
+        }
+
         emit({
           source: "stdin",
           type: "message",
-          payload: { text: line.trim() },
+          payload: { text: trimmed },
           ts: Date.now(),
         });
       });
+
+      rl.on("close", () => {
+        console.log("[stdin] 输入流已关闭");
+        rl = null;
+      });
+
       console.log("[stdin] 订阅已启动，等待输入...");
     },
 
