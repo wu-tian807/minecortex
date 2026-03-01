@@ -317,7 +317,7 @@ export class ConsciousBrain implements BrainInterface {
         await sleep(this.coalesceMs);
       }
 
-      const events = this.eventQueue.drain().filter(e => e.type !== "_wake");
+      const events = this.eventQueue.drain().filter(e => e.source !== "_system");
       if (events.length === 0) continue;
 
       this.currentTurn++;

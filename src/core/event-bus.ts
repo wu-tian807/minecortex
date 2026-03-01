@@ -45,21 +45,14 @@ export class EventBus {
     }
   }
 
-  /** Push a _wake event to unblock the event loop (for commandQueue processing only, filtered before LLM turn). */
+  /** Unblock a brain's event loop so it re-checks commandQueue. Filtered out before LLM turn. */
   wake(brainId: string): void {
     const queue = this.brainQueues.get(brainId);
     if (queue) {
-      queue.push({ source: "_system", type: "_wake", payload: {}, ts: Date.now(), silent: false, priority: -1 });
+      queue.push({ source: "_system", type: "_wake", payload: {}, ts: Date.now() });
     }
   }
 
-  /** Push a _resume event to trigger a real LLM turn — the brain loads session history and continues. */
-  resume(brainId: string): void {
-    const queue = this.brainQueues.get(brainId);
-    if (queue) {
-      queue.push({ source: "_system", type: "_resume", payload: {}, ts: Date.now(), priority: 0 });
-    }
-  }
 
   private route(event: Event, to: string, fromBrainId?: string): void {
     if (to === "*") {
