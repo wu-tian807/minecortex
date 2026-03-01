@@ -7,8 +7,8 @@ export default {
   description:
     "Write content to a file, creating parent directories if needed. " +
     "Overwrites the file if it already exists. " +
-    "Write permission is checked: own brain dir is always writable, " +
-    "other locations require evolve mode, src/ is never writable.",
+    "If this is an existing file, you MUST use read_file first. " +
+    "ALWAYS prefer edit_file for modifying existing files — only use write_file for new files or full rewrites.",
   input_schema: {
     type: "object",
     properties: {
@@ -20,16 +20,12 @@ export default {
         type: "string",
         description: "The full content to write to the file",
       },
-      brain: {
-        type: "string",
-        description: "Optional brain ID to resolve path relative to that brain's directory",
-      },
     },
     required: ["path", "contents"],
   },
   async execute(args, ctx): Promise<ToolOutput> {
     const absPath = ctx.pathManager.resolve(
-      { path: String(args.path), brain: args.brain as string | undefined },
+      { path: String(args.path) },
       ctx.brainId,
     );
 

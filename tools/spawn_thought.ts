@@ -1,5 +1,7 @@
 /** @desc spawn_thought — launch sub-agent "thoughts" with recursion limits */
 
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type {
   ToolDefinition,
   ToolOutput,
@@ -139,14 +141,29 @@ export default {
 
     ctx.slot.register(`thought:${thoughtId}`, `[thought:${thoughtId}] status: launched, type: ${type}`);
 
+    const parentBrainId = ctx.brainId.split(":")[0];
+    const thoughtBrainId = `${ctx.brainId}:${thoughtId}`;
+
+    ctx.brainBoard.set(thoughtBrainId, "status", "running");
+    ctx.brainBoard.set(thoughtBrainId, "type", type);
+    ctx.brainBoard.set(thoughtBrainId, "parent", parentBrainId);
+    ctx.brainBoard.set(thoughtBrainId, "task", task.slice(0, 200));
+    ctx.brainBoard.set(thoughtBrainId, "startedAt", Date.now());
+
     let provider: LLMProvider;
     let spec: ModelSpec;
     try {
-      const modelStr = effectiveModel ?? (ctx.brainBoard.get(ctx.brainId, "model") as string) ?? "gemini-2.0-flash";
+      let inheritedModel = "gemini-2.0-flash";
+      try {
+        const brainJson = JSON.parse(await readFile(join(ctx.pathManager.brainDir(parentBrainId), "brain.json"), "utf-8"));
+        inheritedModel = Array.isArray(brainJson.model) ? brainJson.model[0] : brainJson.model ?? inheritedModel;
+      } catch { /* use default */ }
+      const modelStr = effectiveModel ?? inheritedModel;
       provider = createProvider(modelStr);
       spec = getModelSpec(modelStr);
     } catch (err: any) {
       ctx.slot.release(`thought:${thoughtId}`);
+      cleanupBoard(ctx.brainBoard, thoughtBrainId);
       return JSON.stringify({ error: `Failed to create provider: ${err.message}` });
     }
 
@@ -154,10 +171,12 @@ export default {
       { role: "user", content: task, ts: Date.now() },
     ];
 
+    const logPath = join(ctx.pathManager.brainDir(parentBrainId), "logs", "thoughts");
+
     const runThought = async (): Promise<{ result: string; error?: string }> => {
       try {
         const response = await runAgentLoop({
-          brainId: `${ctx.brainId}:${thoughtId}`,
+          brainId: thoughtBrainId,
           provider,
           tools,
           contextEngine,
@@ -176,6 +195,9 @@ export default {
         const content = response?.content;
         const result = typeof content === "string" ? content : JSON.stringify(content ?? "");
 
+        ctx.brainBoard.set(thoughtBrainId, "status", "completed");
+        ctx.brainBoard.set(thoughtBrainId, "result", result.slice(0, 500));
+
         ctx.emit({
           source: `tool:spawn_thought`,
           type: "thought_result",
@@ -184,9 +206,13 @@ export default {
           silent: true,
         });
 
+        await saveThoughtLog(logPath, thoughtId, type, task, sessionHistory, result);
         return { result };
       } catch (err: any) {
         const errorMsg = err.message ?? String(err);
+
+        ctx.brainBoard.set(thoughtBrainId, "status", "error");
+        ctx.brainBoard.set(thoughtBrainId, "error", errorMsg);
 
         ctx.emit({
           source: `tool:spawn_thought`,
@@ -196,9 +222,11 @@ export default {
           silent: true,
         });
 
+        await saveThoughtLog(logPath, thoughtId, type, task, sessionHistory, undefined, errorMsg);
         return { result: "", error: errorMsg };
       } finally {
         ctx.slot.release(`thought:${thoughtId}`);
+        cleanupBoard(ctx.brainBoard, thoughtBrainId);
       }
     };
 
@@ -210,7 +238,8 @@ export default {
       return JSON.stringify({ thoughtId, status: "completed", result: outcome.result });
     }
 
-    runThought().catch(() => {});
+    const promise = runThought().catch(() => {});
+    ctx.trackBackgroundTask?.(promise);
 
     return JSON.stringify({
       thoughtId,
@@ -223,7 +252,38 @@ export default {
 
 function detectParentType(brainId: string): ThoughtType | null {
   if (!brainId.includes(":thought_")) return null;
-  // Anonymous thoughts cannot determine their type from ID alone,
-  // so we conservatively treat them as "observe" (most restrictive).
   return "observe";
+}
+
+function cleanupBoard(board: BrainBoardAPI, thoughtBrainId: string): void {
+  board.removeAll(thoughtBrainId);
+}
+
+async function saveThoughtLog(
+  dir: string,
+  thoughtId: string,
+  type: string,
+  task: string,
+  history: LLMMessage[],
+  result?: string,
+  error?: string,
+): Promise<void> {
+  try {
+    await mkdir(dir, { recursive: true });
+    const lines = [
+      `# Thought: ${thoughtId} (${type})`,
+      `Task: ${task}`,
+      `Time: ${new Date().toISOString()}`,
+      `Status: ${error ? "error" : "completed"}`,
+      "",
+      "## Session",
+      ...history.map(m => `[${m.role}] ${typeof m.content === "string" ? m.content.slice(0, 500) : "[multimodal]"}`),
+      "",
+      result ? `## Result\n${result.slice(0, 2000)}` : "",
+      error ? `## Error\n${error}` : "",
+    ].filter(Boolean);
+    await appendFile(join(dir, `${thoughtId}.md`), lines.join("\n") + "\n", "utf-8");
+  } catch {
+    /* log save failed — non-critical */
+  }
 }

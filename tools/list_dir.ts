@@ -6,7 +6,7 @@ export default {
   name: "list_dir",
   description:
     "List the contents of a directory. Entries are marked with [dir] or [file]. " +
-    "Lightweight — does not recurse by default.",
+    "Prefer glob and grep when you know which directory or pattern to search for.",
   input_schema: {
     type: "object",
     properties: {
@@ -14,15 +14,11 @@ export default {
         type: "string",
         description: "Directory path (absolute or project-relative). Defaults to project root.",
       },
-      brain: {
-        type: "string",
-        description: "Optional brain ID to resolve path relative to that brain's directory",
-      },
     },
   },
   async execute(args, ctx): Promise<ToolOutput> {
     const dirPath = ctx.pathManager.resolve(
-      { path: String(args.path ?? "."), brain: args.brain as string | undefined },
+      { path: String(args.path ?? ".") },
       ctx.brainId,
     );
 

@@ -3,19 +3,19 @@ import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
 export default {
   name: "manage_brain",
   description:
-    "Manage brain lifecycle: list active brains, or start/stop/restart a specific brain. " +
-    "Uses the BrainBoard to read brain status and emits control events to the scheduler.",
+    "Manage brain lifecycle: list active brains, or start/stop/restart/free a specific brain. " +
+    "stop = pause (keep context), shutdown = stop + clear runtime, restart = shutdown + reinit, free = shutdown + delete BrainBoard entries.",
   input_schema: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["list", "start", "stop", "restart"],
+        enum: ["list", "start", "stop", "restart", "shutdown", "free"],
         description: "Action to perform",
       },
       brain_id: {
         type: "string",
-        description: "Target brain ID (required for start/stop/restart)",
+        description: "Target brain ID (required for start/stop/restart/shutdown/free)",
       },
     },
     required: ["action"],
@@ -26,23 +26,21 @@ export default {
 
     switch (action) {
       case "list": {
-        const allBrains = ctx.brainBoard.getAll("__scheduler");
-        const brainList = Object.entries(allBrains)
-          .filter(([k]) => k.startsWith("brain:"))
-          .map(([k, v]) => {
-            const id = k.slice(6);
-            const status = (v as any)?.status ?? "unknown";
-            return `  ${id}: ${status}`;
-          });
-        if (brainList.length === 0) {
-          return "No brains registered in BrainBoard. The scheduler may not have published status yet.";
-        }
-        return "Active brains:\n" + brainList.join("\n");
+        const ids = ctx.brainBoard.brainIds();
+        if (ids.length === 0) return "No brains found in BrainBoard.";
+        const lines = ids.map(id => {
+          const entries = ctx.brainBoard.getAll(id);
+          const summary = Object.keys(entries).join(", ");
+          return `  ${id}: {${summary}}`;
+        });
+        return "Brains:\n" + lines.join("\n");
       }
 
       case "start":
       case "stop":
-      case "restart": {
+      case "shutdown":
+      case "restart":
+      case "free": {
         if (!brainId) return `brain_id is required for action '${action}'`;
         ctx.emit({
           source: `brain:${ctx.brainId}`,
@@ -55,7 +53,7 @@ export default {
       }
 
       default:
-        return `Unknown action: ${action}. Use list/start/stop/restart.`;
+        return `Unknown action: ${action}. Use list/start/stop/shutdown/restart/free.`;
     }
   },
 } satisfies ToolDefinition;

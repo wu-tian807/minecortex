@@ -1,6 +1,4 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import type { ToolDefinition, ToolOutput, BrainJson } from "../src/core/types.js";
+import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
 
 const DEFAULT_TIMEOUT = 30_000;
 
@@ -9,13 +7,18 @@ export default {
   description:
     "Execute a shell command via the terminal manager. Commands that exceed the timeout " +
     "are automatically backgrounded — use the returned terminalId to check output later. " +
-    "Environment variables from the brain's brain.json env field are merged in.",
+    "IMPORTANT: Do not use grep/find/cat/sed/awk — use the dedicated tools (grep, glob, read_file, edit_file) instead. " +
+    "Always quote file paths containing spaces. Use ';' or '&&' to chain commands, not newlines.",
   input_schema: {
     type: "object",
     properties: {
       command: {
         type: "string",
         description: "The shell command to execute",
+      },
+      description: {
+        type: "string",
+        description: "Concise description of what this command does (5-10 words)",
       },
       cwd: {
         type: "string",
@@ -27,7 +30,7 @@ export default {
       },
       env: {
         type: "object",
-        description: "Additional environment variables to set",
+        description: "Additional environment variables to set (on top of brain.json env)",
       },
     },
     required: ["command"],
@@ -36,25 +39,11 @@ export default {
     const command = String(args.command);
     const cwd = args.cwd ? String(args.cwd) : undefined;
     const timeoutMs = (args.timeout_ms as number) ?? DEFAULT_TIMEOUT;
-
-    let brainEnv: Record<string, string> = {};
-    try {
-      const brainJsonPath = join(ctx.pathManager.brainDir(ctx.brainId), "brain.json");
-      const raw = await readFile(brainJsonPath, "utf-8");
-      const brainConfig: BrainJson = JSON.parse(raw);
-      if (brainConfig.env) brainEnv = brainConfig.env;
-    } catch {
-      // no brain.json env — fine
-    }
-
-    const mergedEnv = {
-      ...brainEnv,
-      ...(args.env as Record<string, string> | undefined),
-    };
+    const extraEnv = args.env as Record<string, string> | undefined;
 
     const result = await ctx.terminalManager.exec(command, {
       cwd,
-      env: Object.keys(mergedEnv).length > 0 ? mergedEnv : undefined,
+      env: extraEnv,
       brainId: ctx.brainId,
       timeoutMs,
     });

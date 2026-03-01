@@ -23,8 +23,8 @@ export default {
         description: "Brief summary (5-10 words) for logs and inbox preview",
       },
       priority: {
-        type: "integer",
-        enum: [0, 1, 2],
+        type: "string",
+        enum: ["0", "1", "2"],
         description: "0=immediate, 1=normal (default), 2=low",
       },
       silent: {
@@ -38,7 +38,7 @@ export default {
     const to = String(args.to).trim();
     const content = String(args.content).trim();
     const summary = String(args.summary ?? "").trim() || content.slice(0, 50);
-    const priority = (args.priority as number) ?? 1;
+    const priority = Number(args.priority ?? 1);
     const silent = (args.silent as boolean) ?? false;
 
     if (!to || !content) return '"to" and "content" are required';

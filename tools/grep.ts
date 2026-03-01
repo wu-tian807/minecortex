@@ -76,7 +76,9 @@ export default {
   name: "grep",
   description:
     "Search file contents using a regex pattern. Returns matching lines with file paths " +
-    "and line numbers. Skips binary files, node_modules, .git, dist.",
+    "and line numbers. Skips binary files, node_modules, .git, dist. " +
+    "ALWAYS use this tool instead of shell grep/rg. " +
+    "Supports full regex syntax (e.g. 'TODO', 'function\\s+\\w+').",
   input_schema: {
     type: "object",
     properties: {
@@ -87,10 +89,6 @@ export default {
       path: {
         type: "string",
         description: "Directory or file to search in. Defaults to project root.",
-      },
-      brain: {
-        type: "string",
-        description: "Optional brain ID to resolve path relative to that brain's directory",
       },
       case_insensitive: {
         type: "boolean",
@@ -113,7 +111,7 @@ export default {
     }
 
     const searchPath = ctx.pathManager.resolve(
-      { path: String(args.path ?? "."), brain: args.brain as string | undefined },
+      { path: String(args.path ?? ".") },
       ctx.brainId,
     );
     const contextLines = (args.context_lines as number) ?? 0;

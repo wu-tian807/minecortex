@@ -4,9 +4,11 @@ import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
 export default {
   name: "edit_file",
   description:
-    "Edit a file by replacing an exact string match with new content. " +
-    "The old_string must uniquely match a section of the file. " +
-    "Provide enough surrounding context to ensure uniqueness.",
+    "Performs exact string replacement in a file. " +
+    "The old_string must match the file contents exactly including whitespace and indentation. " +
+    "The edit will FAIL if old_string is not unique — provide more surrounding context to disambiguate, " +
+    "or use replace_all to change every instance. " +
+    "Use replace_all for renaming variables or updating repeated patterns across the file.",
   input_schema: {
     type: "object",
     properties: {
@@ -16,22 +18,22 @@ export default {
       },
       old_string: {
         type: "string",
-        description: "The exact text to find and replace (must be unique in the file)",
+        description: "The exact text to replace (must match file contents exactly)",
       },
       new_string: {
         type: "string",
-        description: "The replacement text",
+        description: "The replacement text (must differ from old_string)",
       },
-      brain: {
-        type: "string",
-        description: "Optional brain ID to resolve path relative to that brain's directory",
+      replace_all: {
+        type: "boolean",
+        description: "Replace all occurrences of old_string (default: false)",
       },
     },
     required: ["path", "old_string", "new_string"],
   },
   async execute(args, ctx): Promise<ToolOutput> {
     const absPath = ctx.pathManager.resolve(
-      { path: String(args.path), brain: args.brain as string | undefined },
+      { path: String(args.path) },
       ctx.brainId,
     );
 
@@ -41,6 +43,7 @@ export default {
 
     const oldStr = String(args.old_string);
     const newStr = String(args.new_string);
+    const replaceAll = (args.replace_all as boolean) ?? false;
 
     if (oldStr === newStr) {
       return "old_string and new_string are identical — nothing to change";
@@ -52,13 +55,15 @@ export default {
     if (occurrences === 0) {
       return `old_string not found in ${absPath}. Make sure the text matches exactly, including whitespace and indentation.`;
     }
-    if (occurrences > 1) {
-      return `old_string found ${occurrences} times in ${absPath}. Provide more context to make it unique.`;
+    if (occurrences > 1 && !replaceAll) {
+      return `old_string found ${occurrences} times in ${absPath}. Provide more context to make it unique, or use replace_all.`;
     }
 
-    const updated = content.replace(oldStr, newStr);
+    const updated = replaceAll
+      ? content.replaceAll(oldStr, newStr)
+      : content.replace(oldStr, newStr);
     await writeFile(absPath, updated);
 
-    return `Edited ${absPath}: replaced 1 occurrence`;
+    return `Edited ${absPath}: replaced ${replaceAll ? occurrences : 1} occurrence${(replaceAll && occurrences > 1) ? "s" : ""}`;
   },
 } satisfies ToolDefinition;

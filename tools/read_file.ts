@@ -2,6 +2,9 @@ import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import type { ToolDefinition, ToolOutput, ContentPart } from "../src/core/types.js";
 
+const MAX_LINES = 2000;
+const MAX_LINE_LENGTH = 2000;
+
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 const MIME_MAP: Record<string, string> = {
   ".png": "image/png",
@@ -14,19 +17,15 @@ const MIME_MAP: Record<string, string> = {
 export default {
   name: "read_file",
   description:
-    "Read a file from the filesystem. Supports text files with optional offset/limit " +
-    "for large files, and image files (png, jpg, gif, webp) which are returned as base64. " +
-    "Use the brain param to read files relative to a specific brain directory.",
+    "Read a file from the filesystem. You MUST read a file before editing or writing to it. " +
+    "Supports text files with optional offset/limit for large files, and images (png, jpg, gif, webp) returned as base64. " +
+    "It is always better to speculatively read multiple files as a batch that are potentially useful.",
   input_schema: {
     type: "object",
     properties: {
       path: {
         type: "string",
         description: "File path (absolute, project-relative, or brain-local like 'state.json')",
-      },
-      brain: {
-        type: "string",
-        description: "Optional brain ID to resolve path relative to that brain's directory",
       },
       offset: {
         type: "integer",
@@ -41,7 +40,7 @@ export default {
   },
   async execute(args, ctx): Promise<ToolOutput> {
     const absPath = ctx.pathManager.resolve(
-      { path: String(args.path), brain: args.brain as string | undefined },
+      { path: String(args.path) },
       ctx.brainId,
     );
 
@@ -60,25 +59,36 @@ export default {
     }
 
     const raw = await readFile(absPath, "utf-8");
+    const allLines = raw.split("\n");
     const offset = args.offset as number | undefined;
     const limit = args.limit as number | undefined;
 
-    if (offset !== undefined || limit !== undefined) {
-      const lines = raw.split("\n");
-      let start: number;
-      if (offset !== undefined && offset < 0) {
-        start = Math.max(0, lines.length + offset);
-      } else {
-        start = Math.max(0, (offset ?? 1) - 1);
-      }
-      const end = limit !== undefined ? start + limit : lines.length;
-      const slice = lines.slice(start, end);
-      const numbered = slice.map((line, i) => `${String(start + i + 1).padStart(6)}|${line}`);
-      return numbered.join("\n");
+    let start: number;
+    if (offset !== undefined && offset < 0) {
+      start = Math.max(0, allLines.length + offset);
+    } else if (offset !== undefined) {
+      start = Math.max(0, offset - 1);
+    } else {
+      start = 0;
     }
 
-    const lines = raw.split("\n");
-    const numbered = lines.map((line, i) => `${String(i + 1).padStart(6)}|${line}`);
-    return numbered.join("\n");
+    const maxLines = limit ?? MAX_LINES;
+    const end = Math.min(allLines.length, start + maxLines);
+    const slice = allLines.slice(start, end);
+
+    const numbered = slice.map((line, i) => {
+      const truncated = line.length > MAX_LINE_LENGTH
+        ? line.slice(0, MAX_LINE_LENGTH) + ` [... truncated ${line.length - MAX_LINE_LENGTH} chars]`
+        : line;
+      return `${String(start + i + 1).padStart(6)}|${truncated}`;
+    });
+
+    const result = numbered.join("\n");
+
+    if (end < allLines.length && limit === undefined) {
+      return result + `\n\n[File has ${allLines.length} lines total, showing first ${MAX_LINES}. Use offset/limit to read more.]`;
+    }
+
+    return result;
   },
 } satisfies ToolDefinition;

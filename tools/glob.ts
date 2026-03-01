@@ -57,8 +57,9 @@ async function walkDir(dir: string, base: string, results: string[]): Promise<vo
 export default {
   name: "glob",
   description:
-    "Find files matching a glob pattern. Patterns not starting with '**/' are auto-prepended " +
-    "with '**/' for recursive search. Skips node_modules, .git, dist.",
+    "Fast file pattern matching tool. Patterns not starting with '**/' are auto-prepended " +
+    "for recursive search. Returns matching file paths. Skips node_modules, .git, dist. " +
+    "It is always better to speculatively perform multiple searches as a batch.",
   input_schema: {
     type: "object",
     properties: {
@@ -71,10 +72,6 @@ export default {
         type: "string",
         description: "Base directory to search from. Defaults to project root.",
       },
-      brain: {
-        type: "string",
-        description: "Optional brain ID to resolve base path relative to that brain's directory",
-      },
     },
     required: ["pattern"],
   },
@@ -85,7 +82,7 @@ export default {
     }
 
     const baseDir = ctx.pathManager.resolve(
-      { path: String(args.path ?? "."), brain: args.brain as string | undefined },
+      { path: String(args.path ?? ".") },
       ctx.brainId,
     );
 
