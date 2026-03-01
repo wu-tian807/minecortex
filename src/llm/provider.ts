@@ -1,13 +1,15 @@
-/** @desc LLM Provider 注册中心 — 配置驱动的适配器工厂 */
+/** LLM Provider registry — config-driven adapter factory with fallback chain support */
 
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { LLMProviderInterface, ModelSpec, BrainJson, ReasoningEffort } from "../core/types.js";
+import type { ModelSpec, BrainJson, ReasoningEffort } from "../core/types.js";
+import type { LLMProvider } from "./types.js";
 
 // ── Types ────────────────────────────────────────────────────────
 
 export interface ProviderFactoryOpts {
+  model: string;
   apiKey: string;
   baseUrl?: string;
   authType?: string;
@@ -24,7 +26,7 @@ interface KeyEntry {
   auth_type?: string;
 }
 
-type ProviderFactory = (opts: ProviderFactoryOpts) => LLMProviderInterface;
+type ProviderFactory = (opts: ProviderFactoryOpts) => LLMProvider;
 
 // ── Adapter Registry (keyed by api type, e.g. "google-generative-ai") ──
 
@@ -138,7 +140,7 @@ function resolveSection(model: string): { sectionName: string; entry: KeyEntry }
 
 // ── Public API ───────────────────────────────────────────────────
 
-export function createProvider(modelSpec: string, brainConfig?: BrainJson): LLMProviderInterface {
+export function createProvider(modelSpec: string, brainConfig?: BrainJson): LLMProvider {
   const { model, keySection } = parseModelSpec(modelSpec);
 
   let entry: KeyEntry;
@@ -167,7 +169,8 @@ export function createProvider(modelSpec: string, brainConfig?: BrainJson): LLMP
 
   const params = resolveModelParams(model, brainConfig);
 
-  const provider = factory({
+  return factory({
+    model,
     apiKey: entry.api_key,
     baseUrl: entry.api_base,
     authType: entry.auth_type,
@@ -175,7 +178,38 @@ export function createProvider(modelSpec: string, brainConfig?: BrainJson): LLMP
     maxTokens: params.maxTokens,
     reasoningEffort: params.reasoningEffort,
   });
+}
 
-  (provider as any)._model = model;
-  return provider;
+/** Try models in order; on pre-stream failure, fall back to the next model. */
+export function createFallbackProvider(
+  models: string[],
+  brainConfig?: BrainJson,
+  onFallback?: (from: string, to: string, error: Error) => void,
+): LLMProvider {
+  if (models.length === 0) throw new Error("No models specified for fallback chain");
+  if (models.length === 1) return createProvider(models[0], brainConfig);
+
+  return {
+    async *chatStream(messages, tools, signal) {
+      let lastError: Error | undefined;
+      for (let i = 0; i < models.length; i++) {
+        let chunksYielded = false;
+        try {
+          const provider = createProvider(models[i], brainConfig);
+          for await (const chunk of provider.chatStream(messages, tools, signal)) {
+            chunksYielded = true;
+            yield chunk;
+          }
+          return;
+        } catch (err: any) {
+          if (chunksYielded) throw err; // mid-stream failure: propagate
+          lastError = err;
+          if (i < models.length - 1) {
+            onFallback?.(models[i], models[i + 1], err);
+          }
+        }
+      }
+      throw lastError ?? new Error("All models in fallback chain failed");
+    },
+  };
 }

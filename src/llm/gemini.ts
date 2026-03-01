@@ -1,17 +1,13 @@
-/** @desc Gemini 适配器 — 实现 LLMProviderInterface */
+/** Gemini adapter — streaming-first, multimodal, thinking support */
 
 import { GoogleGenAI } from "@google/genai";
 import { registerProvider, type ProviderFactoryOpts } from "./provider.js";
-import type {
-  LLMProviderInterface,
-  LLMMessage,
-  LLMResponse,
-  LLMToolCall,
-  ToolDefinition,
-} from "../core/types.js";
+import type { ToolDefinition, ContentPart } from "../core/types.js";
+import type { LLMMessage, LLMProvider, StreamChunk } from "./types.js";
+import { withRetry } from "./retry.js";
 
-function toolDefsToGemini(tools?: ToolDefinition[]): any {
-  if (!tools || tools.length === 0) return undefined;
+function toolDefsToGemini(tools?: ToolDefinition[]): any[] | undefined {
+  if (!tools?.length) return undefined;
   return [
     {
       functionDeclarations: tools.map((t) => ({
@@ -19,35 +15,54 @@ function toolDefsToGemini(tools?: ToolDefinition[]): any {
         description: t.description,
         parameters: {
           type: "object",
-          properties: Object.fromEntries(
-            Object.entries(t.parameters).map(([k, v]) => [
-              k,
-              { type: v.type, description: v.description, enum: v.enum },
-            ]),
-          ),
-          required: Object.entries(t.parameters)
-            .filter(([, v]) => v.required !== false)
-            .map(([k]) => k),
+          properties: t.input_schema.properties,
+          required: t.input_schema.required,
         },
       })),
     },
   ];
 }
 
+function contentPartsToGemini(content: string | ContentPart[]): any[] {
+  if (typeof content === "string") return [{ text: content }];
+  return content.map((p) => {
+    if (p.type === "image")
+      return { inlineData: { data: p.data, mimeType: p.mimeType } };
+    return { text: p.text };
+  });
+}
+
+function extractSystemText(messages: LLMMessage[]): string | undefined {
+  const sys = messages.find((m) => m.role === "system");
+  if (!sys) return undefined;
+  if (typeof sys.content === "string") return sys.content;
+  return sys.content
+    .filter((p) => p.type === "text")
+    .map((p) => (p as Extract<ContentPart, { type: "text" }>).text)
+    .join("\n");
+}
+
 function messagesToGemini(messages: LLMMessage[]): any[] {
   const contents: any[] = [];
 
   for (const msg of messages) {
-    if (msg.role === "system") continue; // handled via systemInstruction
+    if (msg.role === "system") continue;
 
     if (msg.role === "tool") {
+      const resultText =
+        typeof msg.content === "string"
+          ? msg.content
+          : msg.content
+              .filter((p) => p.type === "text")
+              .map((p) => (p as Extract<ContentPart, { type: "text" }>).text)
+              .join("");
       contents.push({
         role: "user",
         parts: [
           {
             functionResponse: {
               name: msg.toolCallId ?? "_tool",
-              response: { result: msg.content },
+              response: { result: resultText },
             },
           },
         ],
@@ -57,11 +72,9 @@ function messagesToGemini(messages: LLMMessage[]): any[] {
 
     if (msg.role === "assistant" && msg.toolCalls?.length) {
       const parts: any[] = [];
-      if (msg.content) parts.push({ text: msg.content });
+      if (msg.content) parts.push(...contentPartsToGemini(msg.content));
       for (const tc of msg.toolCalls) {
-        parts.push({
-          functionCall: { name: tc.name, args: tc.arguments },
-        });
+        parts.push({ functionCall: { name: tc.name, args: tc.arguments } });
       }
       contents.push({ role: "model", parts });
       continue;
@@ -69,70 +82,77 @@ function messagesToGemini(messages: LLMMessage[]): any[] {
 
     contents.push({
       role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: msg.content }],
+      parts: contentPartsToGemini(msg.content),
     });
   }
   return contents;
 }
 
-function parseResponse(response: any): LLMResponse {
-  const candidate = response.candidates?.[0];
-  if (!candidate) {
-    return { content: "(no response)" };
-  }
-
-  const parts = candidate.content?.parts ?? [];
-  let text = "";
-  const toolCalls: LLMToolCall[] = [];
-
-  for (const part of parts) {
-    if (part.text) text += part.text;
-    if (part.functionCall) {
-      toolCalls.push({
-        id: `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        name: part.functionCall.name,
-        arguments: part.functionCall.args ?? {},
-      });
-    }
-  }
-
-  const usage = response.usageMetadata;
-  return {
-    content: text,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    usage: usage
-      ? {
-          inputTokens: usage.promptTokenCount ?? 0,
-          outputTokens: usage.candidatesTokenCount ?? 0,
-        }
-      : undefined,
-  };
-}
-
-function createGeminiProvider(opts: ProviderFactoryOpts): LLMProviderInterface {
+function createGeminiProvider(opts: ProviderFactoryOpts): LLMProvider {
   const client = new GoogleGenAI({ apiKey: opts.apiKey });
+  const model = opts.model;
   const temperature = opts.temperature;
   const maxOutputTokens = opts.maxTokens;
+  const reasoningEffort = opts.reasoningEffort;
 
   return {
-    async chat(messages, tools) {
-      const systemMsg = messages.find((m) => m.role === "system");
+    async *chatStream(messages, tools, signal) {
       const contents = messagesToGemini(messages);
       const geminiTools = toolDefsToGemini(tools);
+      const systemInstruction = extractSystemText(messages);
 
-      const model = (this as any)._model ?? "gemini-2.5-flash";
-      const response = await client.models.generateContent({
-        model,
-        contents,
-        config: {
-          systemInstruction: systemMsg?.content,
-          tools: geminiTools,
-          temperature,
-          maxOutputTokens,
-        },
-      });
+      const config: any = {
+        systemInstruction,
+        tools: geminiTools,
+        temperature,
+        maxOutputTokens,
+      };
 
-      return parseResponse(response);
+      if (reasoningEffort) {
+        const budget =
+          reasoningEffort === "high"
+            ? 32768
+            : reasoningEffort === "medium"
+              ? 16384
+              : 4096;
+        config.thinkingConfig = { thinkingBudget: budget };
+      }
+
+      const response = await withRetry(() =>
+        client.models.generateContentStream({ model, contents, config }),
+      );
+
+      for await (const chunk of response) {
+        if (signal.aborted) break;
+
+        const parts = chunk.candidates?.[0]?.content?.parts;
+        if (parts) {
+          for (const part of parts) {
+            if (part.functionCall) {
+              yield {
+                type: "tool_call",
+                id: `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                name: part.functionCall.name!,
+                arguments: JSON.stringify(part.functionCall.args ?? {}),
+              };
+            } else if (part.text != null) {
+              if ((part as any).thought) {
+                yield { type: "thinking", text: part.text };
+              } else {
+                yield { type: "text", text: part.text };
+              }
+            }
+          }
+        }
+
+        if (chunk.usageMetadata) {
+          yield {
+            type: "usage",
+            inputTokens: (chunk.usageMetadata as any).promptTokenCount ?? 0,
+            outputTokens: (chunk.usageMetadata as any).candidatesTokenCount ?? 0,
+          };
+        }
+      }
     },
   };
 }

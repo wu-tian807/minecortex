@@ -1,43 +1,41 @@
-/** @desc OpenAI Chat Completions 适配器 — 兼容 DeepSeek/Qwen/Kimi 等 */
+/** OpenAI Chat Completions adapter — SSE streaming, <think> tag parsing, multimodal */
 
 import { registerProvider, type ProviderFactoryOpts } from "./provider.js";
-import type {
-  LLMProviderInterface,
-  LLMMessage,
-  LLMResponse,
-  LLMToolCall,
-  ToolDefinition,
-} from "../core/types.js";
+import type { ToolDefinition, ContentPart, ReasoningEffort } from "../core/types.js";
+import type { LLMMessage, LLMProvider, StreamChunk } from "./types.js";
+import { withRetry } from "./retry.js";
+import { parseSSE, ThinkTagParser } from "./stream.js";
 
-function toolDefsToOpenAI(tools?: ToolDefinition[]) {
-  if (!tools || tools.length === 0) return undefined;
+export function toolDefsToOpenAI(tools?: ToolDefinition[]) {
+  if (!tools?.length) return undefined;
   return tools.map((t) => ({
     type: "function" as const,
     function: {
       name: t.name,
       description: t.description,
-      parameters: {
-        type: "object" as const,
-        properties: Object.fromEntries(
-          Object.entries(t.parameters).map(([k, v]) => [
-            k,
-            { type: v.type, description: v.description, enum: v.enum },
-          ]),
-        ),
-        required: Object.entries(t.parameters)
-          .filter(([, v]) => v.required !== false)
-          .map(([k]) => k),
-      },
+      parameters: t.input_schema,
     },
   }));
 }
 
-function messagesToOpenAI(messages: LLMMessage[]): any[] {
+export function contentToOpenAI(content: string | ContentPart[]): any {
+  if (typeof content === "string") return content;
+  return content.map((p) => {
+    if (p.type === "image")
+      return {
+        type: "image_url",
+        image_url: { url: `data:${p.mimeType};base64,${p.data}` },
+      };
+    return { type: "text", text: p.text };
+  });
+}
+
+export function messagesToOpenAI(messages: LLMMessage[]): any[] {
   const result: any[] = [];
 
   for (const msg of messages) {
     if (msg.role === "system") {
-      result.push({ role: "system", content: msg.content });
+      result.push({ role: "system", content: contentToOpenAI(msg.content) });
       continue;
     }
 
@@ -45,14 +43,20 @@ function messagesToOpenAI(messages: LLMMessage[]): any[] {
       result.push({
         role: "tool",
         tool_call_id: msg.toolCallId ?? "_tool",
-        content: msg.content,
+        content:
+          typeof msg.content === "string"
+            ? msg.content
+            : msg.content
+                .filter((p) => p.type === "text")
+                .map((p) => (p as Extract<ContentPart, { type: "text" }>).text)
+                .join(""),
       });
       continue;
     }
 
     if (msg.role === "assistant" && msg.toolCalls?.length) {
       const assistantMsg: any = { role: "assistant" };
-      if (msg.content) assistantMsg.content = msg.content;
+      if (msg.content) assistantMsg.content = contentToOpenAI(msg.content);
       assistantMsg.tool_calls = msg.toolCalls.map((tc) => ({
         id: tc.id,
         type: "function",
@@ -65,51 +69,160 @@ function messagesToOpenAI(messages: LLMMessage[]): any[] {
       continue;
     }
 
-    result.push({
-      role: msg.role,
-      content: msg.content,
-    });
+    result.push({ role: msg.role, content: contentToOpenAI(msg.content) });
   }
-
   return result;
 }
 
-function parseResponse(data: any): LLMResponse {
-  const choice = data.choices?.[0];
-  if (!choice) {
-    return { content: "(no response)" };
-  }
+// ── Shared streaming logic (reused by deepseek-reasoning) ──
 
-  let text = choice.message?.content ?? "";
-  const toolCalls: LLMToolCall[] = [];
+export interface OpenAIStreamOpts {
+  model: string;
+  apiKey: string;
+  baseUrl: string;
+  temperature: number;
+  maxTokens?: number;
+  reasoningEffort?: ReasoningEffort;
+  extractReasoning?: boolean;
+  useThinkTags?: boolean;
+}
 
-  if (choice.message?.tool_calls) {
-    for (const tc of choice.message.tool_calls) {
-      let args: Record<string, unknown> = {};
-      try {
-        args = JSON.parse(tc.function.arguments || "{}");
-      } catch { /* malformed JSON */ }
-      toolCalls.push({
-        id: tc.id,
-        name: tc.function.name,
-        arguments: args,
-      });
+export async function* openAICompatStream(
+  streamOpts: OpenAIStreamOpts,
+  messages: LLMMessage[],
+  tools: ToolDefinition[],
+  signal: AbortSignal,
+): AsyncGenerator<StreamChunk> {
+  const openaiMessages = messagesToOpenAI(messages);
+  const openaiTools = toolDefsToOpenAI(tools);
+
+  const body: any = {
+    model: streamOpts.model,
+    messages: openaiMessages,
+    temperature: streamOpts.temperature,
+    stream: true,
+    stream_options: { include_usage: true },
+  };
+  if (streamOpts.maxTokens) body.max_tokens = streamOpts.maxTokens;
+  if (openaiTools) body.tools = openaiTools;
+  if (streamOpts.reasoningEffort)
+    body.reasoning_effort = streamOpts.reasoningEffort;
+
+  const response = await withRetry(async () => {
+    const res = await fetch(`${streamOpts.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${streamOpts.apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      const err = new Error(
+        `OpenAI-compat API error ${res.status}: ${text.slice(0, 500)}`,
+      );
+      (err as any).status = res.status;
+      throw err;
+    }
+    return res;
+  });
+
+  const thinkParser = streamOpts.useThinkTags ? new ThinkTagParser() : null;
+  const pendingToolCalls = new Map<
+    number,
+    { id: string; name: string; arguments: string }
+  >();
+
+  for await (const { data } of parseSSE(response)) {
+    if (data === "[DONE]") break;
+    if (signal.aborted) break;
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      continue;
+    }
+
+    const choice = parsed.choices?.[0];
+    if (!choice) {
+      if (parsed.usage) {
+        yield {
+          type: "usage",
+          inputTokens: parsed.usage.prompt_tokens ?? 0,
+          outputTokens: parsed.usage.completion_tokens ?? 0,
+        };
+      }
+      continue;
+    }
+
+    const delta = choice.delta;
+    if (!delta) continue;
+
+    if (streamOpts.extractReasoning && delta.reasoning_content) {
+      yield { type: "thinking", text: delta.reasoning_content };
+    }
+
+    if (delta.content) {
+      if (thinkParser) {
+        for (const chunk of thinkParser.feed(delta.content)) yield chunk;
+      } else {
+        yield { type: "text", text: delta.content };
+      }
+    }
+
+    if (delta.tool_calls) {
+      for (const tc of delta.tool_calls) {
+        const idx = tc.index ?? 0;
+        if (!pendingToolCalls.has(idx)) {
+          pendingToolCalls.set(idx, {
+            id: tc.id ?? "",
+            name: tc.function?.name ?? "",
+            arguments: "",
+          });
+        }
+        const pending = pendingToolCalls.get(idx)!;
+        if (tc.id) pending.id = tc.id;
+        if (tc.function?.name) pending.name = tc.function.name;
+        if (tc.function?.arguments) pending.arguments += tc.function.arguments;
+      }
+    }
+
+    if (
+      choice.finish_reason === "tool_calls" ||
+      choice.finish_reason === "stop"
+    ) {
+      if (thinkParser) {
+        for (const chunk of thinkParser.flush()) yield chunk;
+      }
+      for (const [, tc] of pendingToolCalls) {
+        yield {
+          type: "tool_call",
+          id: tc.id,
+          name: tc.name,
+          arguments: tc.arguments,
+        };
+      }
+      pendingToolCalls.clear();
     }
   }
 
-  if (!text && toolCalls.length === 0) {
-    text = "(empty response)";
+  if (thinkParser) {
+    for (const chunk of thinkParser.flush()) yield chunk;
   }
-
-  const usage = data.usage;
-  return {
-    content: text,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    usage: usage
-      ? { inputTokens: usage.prompt_tokens ?? 0, outputTokens: usage.completion_tokens ?? 0 }
-      : undefined,
-  };
+  for (const [, tc] of pendingToolCalls) {
+    yield {
+      type: "tool_call",
+      id: tc.id,
+      name: tc.name,
+      arguments: tc.arguments,
+    };
+  }
 }
+
+// ── Provider factory ──
 
 function normalizeBaseUrl(url: string): string {
   url = url.replace(/\/+$/, "");
@@ -117,44 +230,23 @@ function normalizeBaseUrl(url: string): string {
   return url;
 }
 
-function createOpenAICompatProvider(opts: ProviderFactoryOpts): LLMProviderInterface {
-  const { apiKey, baseUrl } = opts;
-  const base = normalizeBaseUrl(baseUrl ?? "https://api.openai.com/v1");
-  const temperature = opts.temperature ?? 0.7;
-  const maxTokens = opts.maxTokens;
-  const reasoningEffort = opts.reasoningEffort;
-
+function createOpenAICompatProvider(opts: ProviderFactoryOpts): LLMProvider {
   return {
-    async chat(messages, tools) {
-      const openaiMessages = messagesToOpenAI(messages);
-      const openaiTools = toolDefsToOpenAI(tools);
-      const model = (this as any)._model ?? "gpt-4o";
-
-      const body: any = {
-        model,
-        messages: openaiMessages,
-        temperature,
-      };
-      if (maxTokens) body.max_tokens = maxTokens;
-      if (openaiTools) body.tools = openaiTools;
-      if (reasoningEffort) body.reasoning_effort = reasoningEffort;
-
-      const res = await fetch(`${base}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
+    async *chatStream(messages, tools, signal) {
+      yield* openAICompatStream(
+        {
+          model: opts.model,
+          apiKey: opts.apiKey,
+          baseUrl: normalizeBaseUrl(opts.baseUrl ?? "https://api.openai.com"),
+          temperature: opts.temperature ?? 0.7,
+          maxTokens: opts.maxTokens,
+          reasoningEffort: opts.reasoningEffort,
+          useThinkTags: true,
         },
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`OpenAI-compat API error ${res.status}: ${errText.slice(0, 500)}`);
-      }
-
-      const data = await res.json();
-      return parseResponse(data);
+        messages,
+        tools,
+        signal,
+      );
     },
   };
 }
