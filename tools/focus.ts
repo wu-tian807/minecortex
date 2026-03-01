@@ -11,7 +11,6 @@ export default {
     "Switch working focus to a directory. Updates the context-file slot " +
     "with AGENTS.md/README.md and directory tree from the target path. " +
     "Call with no path to reset to the brain's default directory.",
-  requiresBrain: true,
   input_schema: {
     type: "object",
     properties: {
@@ -27,7 +26,7 @@ export default {
     const rawPath = args.path as string | undefined;
     const targetPath = rawPath
       ? resolve(ROOT, rawPath)
-      : ctx.pathManager.brainDir(ctx.brainId!);
+      : ctx.pathManager.brainDir(ctx.brainId);
 
     try {
       const st = statSync(targetPath);
@@ -38,14 +37,14 @@ export default {
       return `Error: ${targetPath} does not exist.`;
     }
 
-    if (!ctx.pathManager.checkPermission(targetPath, "read", ctx.brainId!, false)) {
+    if (!ctx.pathManager.checkPermission(targetPath, "read", ctx.brainId, false)) {
       return `Permission denied: cannot access ${targetPath}`;
     }
 
-    ctx.slot!.release("context-file:current");
+    ctx.slot.release("context-file:current");
 
     const content = buildFocusContent(targetPath);
-    ctx.slot!.register("context-file:current", content);
+    ctx.slot.register("context-file:current", content);
 
     const rel = relative(ROOT, targetPath) || ".";
     return `Focus set to: ${rel}`;

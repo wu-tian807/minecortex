@@ -26,7 +26,6 @@ export default {
   description:
     "Create or update a structured todo list. Renders as a markdown list " +
     "in the 'todos' dynamic slot so it remains visible across turns.",
-  requiresBrain: true,
   input_schema: {
     type: "object",
     properties: {
@@ -57,12 +56,12 @@ export default {
     }
 
     const rendered = renderTodos(todos);
-    const existing = ctx.slot!.get("todos");
+    const existing = ctx.slot.get("todos");
 
     if (existing !== undefined) {
-      ctx.slot!.update("todos", rendered);
+      ctx.slot.update("todos", rendered);
     } else {
-      ctx.slot!.register("todos", rendered);
+      ctx.slot.register("todos", rendered);
     }
 
     const counts: Record<TodoStatus, number> = { pending: 0, in_progress: 0, completed: 0 };

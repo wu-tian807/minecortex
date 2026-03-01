@@ -27,10 +27,10 @@ export default {
   async execute(args, ctx): Promise<ToolOutput> {
     const absPath = ctx.pathManager.resolve(
       { path: String(args.path) },
-      ctx.brainId ?? "",
+      ctx.brainId,
     );
 
-    if (!ctx.pathManager.checkPermission(absPath, "write", ctx.brainId ?? "", false)) {
+    if (!ctx.pathManager.checkPermission(absPath, "write", ctx.brainId, false)) {
       return `Permission denied: cannot write to ${absPath}`;
     }
 

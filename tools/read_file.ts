@@ -41,10 +41,10 @@ export default {
   async execute(args, ctx): Promise<ToolOutput> {
     const absPath = ctx.pathManager.resolve(
       { path: String(args.path) },
-      ctx.brainId ?? "",
+      ctx.brainId,
     );
 
-    if (!ctx.pathManager.checkPermission(absPath, "read", ctx.brainId ?? "", false)) {
+    if (!ctx.pathManager.checkPermission(absPath, "read", ctx.brainId, false)) {
       return `Error: permission denied — cannot read ${absPath}`;
     }
 

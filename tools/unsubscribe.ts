@@ -11,7 +11,6 @@ export default {
     "subscriptions.disable[] list in brain.json (and removes it from enable[]). " +
     "The change is picked up automatically by the file watcher, which triggers " +
     "reconciliation to stop the source.",
-  requiresBrain: true,
   input_schema: {
     type: "object",
     properties: {
@@ -25,7 +24,7 @@ export default {
   async execute(args, ctx): Promise<ToolOutput> {
     const name = String(args.name);
 
-    const brainJsonPath = join(ctx.pathManager.brainDir(ctx.brainId!), "brain.json");
+    const brainJsonPath = join(ctx.pathManager.brainDir(ctx.brainId), "brain.json");
 
     let brainConfig: BrainJson;
     try {

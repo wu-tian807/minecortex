@@ -60,7 +60,6 @@ export default {
     "Spawn a sub-agent thought to perform a focused task. " +
     "Types: observe (read-only exploration), plan (read-only planning), act (can modify). " +
     "Background mode returns immediately; foreground mode awaits result.",
-  requiresBrain: true,
   input_schema: {
     type: "object",
     properties: {
@@ -106,7 +105,7 @@ export default {
       return JSON.stringify({ error: `Invalid thought type: ${type}` });
     }
 
-    const parentType = detectParentType(ctx.brainId!);
+    const parentType = detectParentType(ctx.brainId);
     if (parentType !== null) {
       const allowed = RECURSION_RULES[parentType];
       if (!allowed.includes(type)) {
@@ -135,22 +134,22 @@ export default {
     const contextEngine = new ContextEngine(slotRegistry);
 
     slotRegistry.register("thought:identity", [
-      `You are a ${type} thought (id: ${thoughtId}) spawned by brain "${ctx.brainId!}".`,
+      `You are a ${type} thought (id: ${thoughtId}) spawned by brain "${ctx.brainId}".`,
       `Your task: ${task}`,
       defaults.readOnly ? "You are in READ-ONLY mode. Do not modify any files." : "",
       "IMPORTANT: When you have gathered enough information or completed the task, you MUST respond with a final text summary. Do NOT just keep calling tools without ever responding.",
     ].filter(Boolean).join("\n"));
 
-    ctx.slot!.register(`thought:${thoughtId}`, `[thought:${thoughtId}] status: launched, type: ${type}`);
+    ctx.slot.register(`thought:${thoughtId}`, `[thought:${thoughtId}] status: launched, type: ${type}`);
 
-    const parentBrainId = ctx.brainId!.split(":")[0];
-    const thoughtBrainId = `${ctx.brainId!}:${thoughtId}`;
+    const parentBrainId = ctx.brainId.split(":")[0];
+    const thoughtBrainId = `${ctx.brainId}:${thoughtId}`;
 
-    const tz = (ctx.brainBoard!.get(parentBrainId, "timezone") as string) ?? "Asia/Shanghai";
-    ctx.brainBoard!.set(thoughtBrainId, "type", type);
-    ctx.brainBoard!.set(thoughtBrainId, "parent", parentBrainId);
-    ctx.brainBoard!.set(thoughtBrainId, "task", task.slice(0, 200));
-    ctx.brainBoard!.set(thoughtBrainId, "startedAt", new Date().toLocaleString("zh-CN", { timeZone: tz }));
+    const tz = (ctx.brainBoard.get(parentBrainId, "timezone") as string) ?? "Asia/Shanghai";
+    ctx.brainBoard.set(thoughtBrainId, "type", type);
+    ctx.brainBoard.set(thoughtBrainId, "parent", parentBrainId);
+    ctx.brainBoard.set(thoughtBrainId, "task", task.slice(0, 200));
+    ctx.brainBoard.set(thoughtBrainId, "startedAt", new Date().toLocaleString("zh-CN", { timeZone: tz }));
 
     let provider: LLMProvider;
     let spec: ModelSpec;
@@ -165,8 +164,8 @@ export default {
       provider = createProvider(modelStr);
       spec = getModelSpec(modelStr);
     } catch (err: any) {
-      ctx.slot!.release(`thought:${thoughtId}`);
-      cleanupBoard(ctx.brainBoard!, thoughtBrainId);
+      ctx.slot.release(`thought:${thoughtId}`);
+      cleanupBoard(ctx.brainBoard, thoughtBrainId);
       return JSON.stringify({ error: `Failed to create provider: ${err.message}` });
     }
 
@@ -187,12 +186,12 @@ export default {
           modelSpec: spec,
           maxIterations: SAFETY_MAX_ITERATIONS,
           signal: ctx.signal,
-          brainBoard: ctx.brainBoard!,
+          brainBoard: ctx.brainBoard,
           slotRegistry,
           pathManager: ctx.pathManager,
           terminalManager: ctx.terminalManager,
           workspace: ctx.workspace,
-          emit: ctx.emit!,
+          emit: ctx.emit,
           logger: ctx.logger,
         });
 
@@ -206,9 +205,9 @@ export default {
           result = extractLastAssistantContent(sessionHistory);
         }
 
-        ctx.brainBoard!.set(thoughtBrainId, "result", result.slice(0, 500));
+        ctx.brainBoard.set(thoughtBrainId, "result", result.slice(0, 500));
 
-        ctx.emit!({
+        ctx.emit({
           source: `tool:spawn_thought`,
           type: "thought_result",
           payload: { thoughtId, type, result, todoId },
@@ -221,9 +220,9 @@ export default {
       } catch (err: any) {
         const errorMsg = err.message ?? String(err);
 
-        ctx.brainBoard!.set(thoughtBrainId, "error", errorMsg);
+        ctx.brainBoard.set(thoughtBrainId, "error", errorMsg);
 
-        ctx.emit!({
+        ctx.emit({
           source: `tool:spawn_thought`,
           type: "thought_error",
           payload: { thoughtId, type, error: errorMsg, todoId },
@@ -234,8 +233,8 @@ export default {
         await saveThoughtLog(logPath, thoughtId, type, task, sessionHistory, undefined, errorMsg);
         return { result: "", error: errorMsg };
       } finally {
-        ctx.slot!.release(`thought:${thoughtId}`);
-        cleanupBoard(ctx.brainBoard!, thoughtBrainId);
+        ctx.slot.release(`thought:${thoughtId}`);
+        cleanupBoard(ctx.brainBoard, thoughtBrainId);
       }
     };
 
@@ -295,7 +294,7 @@ async function requestSummary(
     });
 
     const vars: Record<string, string> = {};
-    const boardEntries = ctx.brainBoard!.getAll(brainId);
+    const boardEntries = ctx.brainBoard.getAll(brainId);
     for (const [k, v] of Object.entries(boardEntries)) {
       vars[k] = typeof v === "string" ? v : JSON.stringify(v);
     }
