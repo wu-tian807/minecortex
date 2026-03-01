@@ -19,10 +19,10 @@ export default {
   async execute(args, ctx): Promise<ToolOutput> {
     const dirPath = ctx.pathManager.resolve(
       { path: String(args.path ?? ".") },
-      ctx.brainId,
+      ctx.brainId ?? "",
     );
 
-    if (!ctx.pathManager.checkPermission(dirPath, "read", ctx.brainId, false)) {
+    if (!ctx.pathManager.checkPermission(dirPath, "read", ctx.brainId ?? "", false)) {
       return `Permission denied: cannot read ${dirPath}`;
     }
 

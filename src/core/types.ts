@@ -62,6 +62,7 @@ export interface BrainJson {
   temperature?: number;
   maxTokens?: number;
   reasoningEffort?: ReasoningEffort;
+  showThinking?: boolean;
   coalesceMs?: number;
   subscriptions?: CapabilitySelector;
   tools?: CapabilitySelector;
@@ -86,6 +87,8 @@ export interface ToolDefinition {
   name: string;
   description: string;
   ccVersion?: string;
+  /** When true, this tool is only available inside a brain context (brainId must be set). */
+  requiresBrain?: boolean;
   input_schema: {
     type: "object";
     properties: Record<string, any>;
@@ -95,16 +98,20 @@ export interface ToolDefinition {
 }
 
 export interface ToolContext {
-  brainId: string;
   signal: AbortSignal;
-  emit: (event: Event) => void;
-  brainBoard: BrainBoardAPI;
-  slot: DynamicSlotAPI;
   pathManager: PathManagerAPI;
   terminalManager: TerminalManagerAPI;
   workspace: string;
+  /** Logger for sub-agents to inherit real-time debug output. */
+  logger?: import("./logger.js").Logger;
   /** Register a background promise so the parent brain can await it on shutdown. */
   trackBackgroundTask?: (p: Promise<unknown>) => void;
+
+  // ── Brain-only fields (undefined when running without a brain) ──
+  brainId?: string;
+  emit?: (event: Event) => void;
+  brainBoard?: BrainBoardAPI;
+  slot?: DynamicSlotAPI;
 }
 
 export interface DynamicSlotAPI {

@@ -26,12 +26,13 @@ export default {
     "Scans both the global subscriptions/ directory and the brain-local " +
     "brains/<id>/subscriptions/ directory, then cross-references with the " +
     "brain.json configuration to determine each source's status.",
+  requiresBrain: true,
   input_schema: {
     type: "object",
     properties: {},
   },
   async execute(_args, ctx): Promise<ToolOutput> {
-    const brainDir = ctx.pathManager.brainDir(ctx.brainId);
+    const brainDir = ctx.pathManager.brainDir(ctx.brainId!);
     const brainJsonPath = join(brainDir, "brain.json");
 
     let brainConfig: BrainJson;

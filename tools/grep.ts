@@ -112,7 +112,7 @@ export default {
 
     const searchPath = ctx.pathManager.resolve(
       { path: String(args.path ?? ".") },
-      ctx.brainId,
+      ctx.brainId ?? "",
     );
     const contextLines = (args.context_lines as number) ?? 0;
 

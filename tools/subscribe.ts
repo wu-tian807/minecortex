@@ -12,6 +12,7 @@ export default {
     "if present). Optionally provide config that will be stored in " +
     "subscriptions.config[name]. The change is picked up automatically by the " +
     "file watcher, which triggers reconciliation.",
+  requiresBrain: true,
   input_schema: {
     type: "object",
     properties: {
@@ -30,7 +31,7 @@ export default {
     const name = String(args.name);
     const config = args.config as Record<string, unknown> | undefined;
 
-    const brainJsonPath = join(ctx.pathManager.brainDir(ctx.brainId), "brain.json");
+    const brainJsonPath = join(ctx.pathManager.brainDir(ctx.brainId!), "brain.json");
 
     let brainConfig: BrainJson;
     try {

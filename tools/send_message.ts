@@ -7,6 +7,7 @@ export default {
     "Messages are delivered to the recipient's next tick. " +
     "Use '*' as target to broadcast to all brains. " +
     "After sending, output a brief confirmation and end your turn — do not wait for a reply.",
+  requiresBrain: true,
   input_schema: {
     type: "object",
     properties: {
@@ -43,8 +44,8 @@ export default {
 
     if (!to || !content) return '"to" and "content" are required';
 
-    ctx.emit({
-      source: `brain:${ctx.brainId}`,
+    ctx.emit!({
+      source: `brain:${ctx.brainId!}`,
       type: "message",
       payload: { to, content, summary },
       ts: Date.now(),

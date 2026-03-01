@@ -26,6 +26,7 @@ import { microCompact } from "../session/compaction.js";
 import { renderEventDisplay } from "../context/event-router.js";
 import { HookEvent } from "../hooks/types.js";
 import type { BrainHooks } from "../hooks/brain-hooks.js";
+import { executeTool } from "./tool-executor.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -56,6 +57,7 @@ export interface AgentLoopOpts {
   onAssistantMessage?: (msg: LLMMessage) => void;
   hooks?: BrainHooks;
   keepToolResults?: number;
+  showThinking?: boolean;
   trackBackgroundTask?: (p: Promise<unknown>) => void;
 }
 
@@ -65,7 +67,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     modelSpec, maxIterations, signal, brainBoard, slotRegistry,
     pathManager, terminalManager, workspace, emit, logger,
     sessionManager, turn = 0, onAssistantMessage, hooks,
-    keepToolResults = 8,
+    keepToolResults = 8, showThinking = false,
   } = opts;
 
   const ephemeralHistory = opts.sessionHistory;
@@ -82,6 +84,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     terminalManager,
     workspace,
     trackBackgroundTask: opts.trackBackgroundTask,
+    logger,
   };
 
   for (;;) {
@@ -137,7 +140,8 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     }
 
     let content = response.content;
-    if (response.thinking) {
+    const hasThinking = showThinking && response.thinking;
+    if (hasThinking) {
       const thinkingBlock = `<thinking>${response.thinking}</thinking>`;
       if (typeof content === "string") {
         content = content ? `${thinkingBlock}\n${content}` : thinkingBlock;
@@ -147,6 +151,9 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     const assistantMsg: LLMMessage = {
       role: "assistant",
       content,
+      thinking: hasThinking ? response.thinking : undefined,
+      thinkingSignature: hasThinking ? response.thinkingSignature : undefined,
+      textSignature: response.textSignature,
       toolCalls: response.toolCalls,
       usage: response.usage
         ? { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens }
@@ -173,13 +180,18 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       logger?.info(brainId, turn, displayContent);
     }
 
-    if (!response.toolCalls || response.toolCalls.length === 0) break;
+    if (!response.toolCalls || response.toolCalls.length === 0) {
+      if (!displayContent) {
+        logger?.warn(brainId, turn, "LLM returned empty response (no content, no tool calls)");
+      }
+      break;
+    }
 
     const results = await Promise.all(
       response.toolCalls.map(async (tc) => {
         hooks?.emit(HookEvent.ToolCall, { name: tc.name, args: tc.arguments, toolCall: tc });
         const t0 = Date.now();
-        const result = await executeTool(tc, tools, toolCtx, logger, brainId, turn);
+        const result = await executeTool(tc.name, tc.arguments, tools, toolCtx, logger);
         hooks?.emit(HookEvent.ToolResult, { name: tc.name, result, durationMs: Date.now() - t0 });
         return { tc, result };
       }),
@@ -199,31 +211,6 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
   }
 
   return lastResponse;
-}
-
-async function executeTool(
-  tc: LLMToolCall,
-  tools: ToolDefinition[],
-  ctx: ToolContext,
-  logger?: Logger,
-  brainId = "",
-  turn = 0,
-): Promise<unknown> {
-  const tool = tools.find(t => t.name === tc.name);
-  if (!tool) return { error: `Unknown tool: ${tc.name}` };
-
-  logger?.debug(brainId, turn, `tool:${tc.name}(${JSON.stringify(tc.arguments).slice(0, 120)})`);
-  try {
-    const result = await tool.execute(tc.arguments, ctx);
-    const preview = typeof result === "string"
-      ? result.slice(0, 200)
-      : JSON.stringify(result).slice(0, 200);
-    logger?.debug(brainId, turn, `tool:${tc.name} → ${preview}`);
-    return result;
-  } catch (err: any) {
-    logger?.error(brainId, turn, `tool:${tc.name} failed`, err);
-    return { error: err.message };
-  }
 }
 
 // ─── ConsciousBrain ───
@@ -393,6 +380,7 @@ export class ConsciousBrain implements BrainInterface {
         turn: this.currentTurn,
         hooks: this.hooks,
         keepToolResults: this.brainConfig.session?.keepToolResults ?? 8,
+        showThinking: this.brainConfig.showThinking ?? false,
         trackBackgroundTask: (p) => {
           this.pendingTasks.add(p);
           p.finally(() => this.pendingTasks.delete(p));
@@ -446,15 +434,11 @@ export class ConsciousBrain implements BrainInterface {
         this.pendingTasks.add(p);
         p.finally(() => this.pendingTasks.delete(p));
       },
+      logger: this.logger,
     };
 
     const t0 = Date.now();
-    let result: unknown;
-    try {
-      result = await tool.execute(args, toolCtx);
-    } catch (err: any) {
-      result = { error: err.message };
-    }
+    const result = await executeTool(toolName, args, this.tools, toolCtx, this.logger);
     this.hooks.emit(HookEvent.ToolResult, { name: toolName, result, durationMs: Date.now() - t0 });
 
     const resultStr = typeof result === "string" ? result : JSON.stringify(result);
@@ -476,6 +460,13 @@ export class ConsciousBrain implements BrainInterface {
     } else {
       this.eventQueue.push({ source: "_system", type: "_wake", payload: {}, ts: Date.now(), silent: false, priority: -1 });
     }
+  }
+
+  /** Hot-swap provider/model when brain.json changes. Takes effect on next turn. */
+  updateConfig(opts: { provider: LLMProvider; modelSpec: ModelSpec; brainConfig: BrainJson }) {
+    this.provider = opts.provider;
+    this.modelSpec = opts.modelSpec;
+    this.brainConfig = opts.brainConfig;
   }
 
   // ─── Lifecycle: 3 levels ───

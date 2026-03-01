@@ -33,6 +33,7 @@ export default {
   name: "read_skill",
   description:
     "Read the full content of a skill by name. Use this after seeing the skills summary to get detailed instructions.",
+  requiresBrain: true,
   input_schema: {
     type: "object",
     properties: {
@@ -45,7 +46,7 @@ export default {
   },
   async execute(args, ctx) {
     const name = String(args.name);
-    const skillPath = findSkillFile(name, ctx.brainId);
+    const skillPath = findSkillFile(name, ctx.brainId!);
     if (!skillPath) {
       return `Skill "${name}" not found.`;
     }

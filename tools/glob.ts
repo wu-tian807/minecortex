@@ -83,7 +83,7 @@ export default {
 
     const baseDir = ctx.pathManager.resolve(
       { path: String(args.path ?? ".") },
-      ctx.brainId,
+      ctx.brainId ?? "",
     );
 
     const allPaths: string[] = [];

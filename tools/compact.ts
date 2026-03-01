@@ -52,6 +52,7 @@ export default {
     "Compact the current session by summarizing old messages into a new session. " +
     "The original session is preserved intact. A new session is created with " +
     "the summary + newest 30% of messages, and the session pointer is switched.",
+  requiresBrain: true,
   input_schema: {
     type: "object",
     properties: {
@@ -63,7 +64,7 @@ export default {
     required: [],
   },
   async execute(args, ctx): Promise<ToolOutput> {
-    const brainDir = ctx.pathManager.brainDir(ctx.brainId);
+    const brainDir = ctx.pathManager.brainDir(ctx.brainId!);
     const sessionJsonPath = join(brainDir, "session.json");
 
     let sessionData: { currentSessionId: string; [k: string]: unknown };

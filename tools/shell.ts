@@ -44,7 +44,7 @@ export default {
     const result = await ctx.terminalManager.exec(command, {
       cwd,
       env: extraEnv,
-      brainId: ctx.brainId,
+      brainId: ctx.brainId ?? "",
       timeoutMs,
     });
 

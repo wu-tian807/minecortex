@@ -6,9 +6,13 @@ export default {
   description:
     "Performs exact string replacement in a file. " +
     "The old_string must match the file contents exactly including whitespace and indentation. " +
+    "old_string MUST include AT LEAST 3-5 lines of context before AND after the change point to ensure uniqueness. " +
+    "Before editing, verify that old_string uniquely identifies the target location. " +
     "The edit will FAIL if old_string is not unique — provide more surrounding context to disambiguate, " +
     "or use replace_all to change every instance. " +
-    "Use replace_all for renaming variables or updating repeated patterns across the file.",
+    "Use replace_all for renaming variables or updating repeated patterns across the file. " +
+    "When constructing old_string from read_file output, do NOT include the line number prefix (e.g. '     1|'). " +
+    "For larger edits or when edit_file fails repeatedly, use write_file to rewrite the entire file.",
   input_schema: {
     type: "object",
     properties: {
@@ -34,10 +38,10 @@ export default {
   async execute(args, ctx): Promise<ToolOutput> {
     const absPath = ctx.pathManager.resolve(
       { path: String(args.path) },
-      ctx.brainId,
+      ctx.brainId ?? "",
     );
 
-    if (!ctx.pathManager.checkPermission(absPath, "write", ctx.brainId, false)) {
+    if (!ctx.pathManager.checkPermission(absPath, "write", ctx.brainId ?? "", false)) {
       return `Permission denied: cannot write to ${absPath}`;
     }
 
@@ -53,7 +57,7 @@ export default {
 
     const occurrences = content.split(oldStr).length - 1;
     if (occurrences === 0) {
-      return `old_string not found in ${absPath}. Make sure the text matches exactly, including whitespace and indentation.`;
+      return `old_string not found in ${absPath}. Make sure the text matches exactly, including whitespace and indentation. Hint: Re-read the file with read_file and copy the exact text. If this keeps failing, use write_file to rewrite the entire file.`;
     }
     if (occurrences > 1 && !replaceAll) {
       return `old_string found ${occurrences} times in ${absPath}. Provide more context to make it unique, or use replace_all.`;
