@@ -46,10 +46,10 @@ export class EventBus {
   }
 
   /** Unblock a brain's event loop so it re-checks commandQueue. Filtered out before LLM turn. */
-  wake(brainId: string): void {
+  nudge(brainId: string): void {
     const queue = this.brainQueues.get(brainId);
     if (queue) {
-      queue.push({ source: "_system", type: "_wake", payload: {}, ts: Date.now() });
+      queue.push({ source: "_system", type: "_nudge", payload: {}, ts: Date.now() });
     }
   }
 

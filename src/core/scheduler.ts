@@ -350,6 +350,7 @@ export class Scheduler {
       case "shutdown":  return this.doShutdown(target!);
       case "restart":   return this.doRestart(target!);
       case "free":      return this.doFree(target!);
+      case "resume":    return this.doResume(target!);
       default:          return `Unknown action: '${action}'`;
     }
   }
@@ -432,6 +433,19 @@ export class Scheduler {
         .catch(err => this.logger.error("scheduler", 0, `brain '${id}' loop crashed after restart`, err));
     }
     return `Brain '${id}' restarted`;
+  }
+
+  private doResume(id: string): string {
+    const slot = this.slots.get(id);
+    if (!slot) return `Unknown brain: '${id}'`;
+    slot.queue.push({
+      source: "scheduler",
+      type: "resume",
+      payload: {},
+      ts: Date.now(),
+      contentless: true,
+    });
+    return `Brain '${id}' resumed`;
   }
 
   private async doFree(id: string): Promise<string> {

@@ -10,6 +10,7 @@ export interface Event {
   priority?: number;    // 0=immediate, 1=normal(default), 2=low
   silent?: boolean;     // true = queue only, don't trigger processing
   steer?: boolean;      // true = interrupt current LLM call immediately
+  contentless?: boolean; // true = trigger a turn without injecting a message
 }
 
 export interface EventQueueInterface {

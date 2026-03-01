@@ -8,13 +8,14 @@ export default {
     "list = show active brains, create = new brain dir with config, " +
     "start = launch existing brain, stop = pause (keep context), " +
     "shutdown = stop + clear runtime, restart = shutdown + reinit, " +
-    "free = shutdown + delete BrainBoard + delete brain dir.",
+    "free = shutdown + delete BrainBoard + delete brain dir, " +
+    "resume = trigger a new turn without injecting a message.",
   input_schema: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["list", "create", "start", "stop", "restart", "shutdown", "free"],
+        enum: ["list", "create", "start", "stop", "restart", "shutdown", "free", "resume"],
         description: "Action to perform",
       },
       brain_id: {
