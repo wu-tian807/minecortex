@@ -1,21 +1,34 @@
-import { appendFile } from "node:fs/promises";
+import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
 export class QARecorder {
   private filePath: string;
   private closed = false;
+  private dirCreated = false;
 
-  constructor(sessionDir: string) {
-    this.filePath = join(sessionDir, "qa.md");
+  /**
+   * @param logDir - brain-specific log dir (brains/<id>/logs) or session dir for backward compat
+   */
+  constructor(logDir: string) {
+    this.filePath = join(logDir, "qa.md");
+  }
+
+  private async ensureDir(): Promise<void> {
+    if (this.dirCreated) return;
+    const { dirname } = await import("node:path");
+    await mkdir(dirname(this.filePath), { recursive: true });
+    this.dirCreated = true;
   }
 
   async recordUser(content: string): Promise<void> {
     if (this.closed) return;
+    await this.ensureDir();
     await appendFile(this.filePath, `## User\n${sanitize(content)}\n\n`, "utf-8");
   }
 
   async recordAssistant(content: string): Promise<void> {
     if (this.closed) return;
+    await this.ensureDir();
     await appendFile(this.filePath, `## Assistant\n${sanitize(content)}\n\n`, "utf-8");
   }
 

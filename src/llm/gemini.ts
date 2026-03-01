@@ -26,9 +26,8 @@ function toolDefsToGemini(tools?: ToolDefinition[]): any[] | undefined {
 function contentPartsToGemini(content: string | ContentPart[]): any[] {
   if (typeof content === "string") return [{ text: content }];
   return content.map((p) => {
-    if (p.type === "image")
-      return { inlineData: { data: p.data, mimeType: p.mimeType } };
-    return { text: p.text };
+    if (p.type === "text") return { text: p.text };
+    return { inlineData: { data: p.data, mimeType: p.mimeType } };
   });
 }
 
@@ -146,10 +145,14 @@ function createGeminiProvider(opts: ProviderFactoryOpts): LLMProvider {
         }
 
         if (chunk.usageMetadata) {
+          const meta = chunk.usageMetadata as any;
+          const candidatesTokens = meta.candidatesTokenCount ?? 0;
+          const thinkingTokens = meta.thoughtsTokenCount ?? 0;
           yield {
             type: "usage",
-            inputTokens: (chunk.usageMetadata as any).promptTokenCount ?? 0,
-            outputTokens: (chunk.usageMetadata as any).candidatesTokenCount ?? 0,
+            inputTokens: meta.promptTokenCount ?? 0,
+            outputTokens: candidatesTokens + thinkingTokens,
+            thinkingTokens: thinkingTokens || undefined,
           };
         }
       }

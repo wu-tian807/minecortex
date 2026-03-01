@@ -1,18 +1,8 @@
 /** DeepSeek reasoning adapter — extends openai-compat with reasoning_content extraction */
 
 import { registerProvider, type ProviderFactoryOpts } from "./provider.js";
-import type { LLMMessage, LLMProvider } from "./types.js";
+import type { LLMProvider } from "./types.js";
 import { openAICompatStream } from "./openai-compat.js";
-
-/** Strip thinking from previous assistant turns to avoid confusing the model on tool-loop passback. */
-function clearPreviousReasoning(messages: LLMMessage[]): LLMMessage[] {
-  return messages.map((m) => {
-    if (m.role === "assistant" && m.thinking) {
-      return { ...m, thinking: undefined };
-    }
-    return m;
-  });
-}
 
 function normalizeBaseUrl(url: string): string {
   url = url.replace(/\/+$/, "");
@@ -25,7 +15,6 @@ function createDeepSeekReasoningProvider(
 ): LLMProvider {
   return {
     async *chatStream(messages, tools, signal) {
-      const cleaned = clearPreviousReasoning(messages);
       yield* openAICompatStream(
         {
           model: opts.model,
@@ -39,7 +28,7 @@ function createDeepSeekReasoningProvider(
           extractReasoning: true,
           useThinkTags: false,
         },
-        cleaned,
+        messages,
         tools,
         signal,
       );

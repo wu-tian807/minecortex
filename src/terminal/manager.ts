@@ -7,6 +7,7 @@ import type {
   ExecOpts,
   ExecResult,
   PathManagerAPI,
+  BrainJson,
 } from "../core/types.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -16,9 +17,26 @@ export class TerminalManager implements TerminalManagerAPI {
   private terminals = new Map<string, TerminalInstance & { process?: ChildProcess }>();
   private logDir: string;
   private counter = 0;
+  private brainEnvCache = new Map<string, Record<string, string>>();
 
   constructor(private pathManager: PathManagerAPI) {
     this.logDir = pathManager.dir("terminals");
+  }
+
+  /** Pre-load brain.json env for a brain. Called by scheduler during init. */
+  async loadBrainEnv(brainId: string): Promise<void> {
+    try {
+      const raw = await readFile(
+        join(this.pathManager.brainDir(brainId), "brain.json"),
+        "utf-8",
+      );
+      const config: BrainJson = JSON.parse(raw);
+      if (config.env) {
+        this.brainEnvCache.set(brainId, config.env);
+      }
+    } catch {
+      // no env to load
+    }
   }
 
   async exec(command: string, opts: ExecOpts): Promise<ExecResult> {
@@ -29,7 +47,9 @@ export class TerminalManager implements TerminalManagerAPI {
     const logFile = join(this.logDir, `${id}.txt`);
     const startedAt = Date.now();
 
-    const env = { ...process.env, ...opts.env };
+    const baseBrainId = opts.brainId.split(":")[0];
+    const brainEnv = this.brainEnvCache.get(baseBrainId) ?? {};
+    const env = { ...process.env, ...brainEnv, ...opts.env };
     const child = spawn("bash", ["-c", command], { cwd, env, stdio: "pipe" });
 
     const instance: TerminalInstance & { process?: ChildProcess } = {

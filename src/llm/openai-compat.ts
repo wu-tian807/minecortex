@@ -21,12 +21,13 @@ export function toolDefsToOpenAI(tools?: ToolDefinition[]) {
 export function contentToOpenAI(content: string | ContentPart[]): any {
   if (typeof content === "string") return content;
   return content.map((p) => {
+    if (p.type === "text") return { type: "text", text: p.text };
     if (p.type === "image")
       return {
         type: "image_url",
         image_url: { url: `data:${p.mimeType};base64,${p.data}` },
       };
-    return { type: "text", text: p.text };
+    return { type: "text", text: `[${p.type} content]` };
   });
 }
 
@@ -149,10 +150,12 @@ export async function* openAICompatStream(
     const choice = parsed.choices?.[0];
     if (!choice) {
       if (parsed.usage) {
+        const reasoning = parsed.usage.completion_tokens_details?.reasoning_tokens;
         yield {
           type: "usage",
           inputTokens: parsed.usage.prompt_tokens ?? 0,
           outputTokens: parsed.usage.completion_tokens ?? 0,
+          thinkingTokens: reasoning || undefined,
         };
       }
       continue;

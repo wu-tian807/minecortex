@@ -8,6 +8,7 @@ export interface LLMMessage {
   ts?: number;
   toolCallId?: string;
   toolCalls?: LLMToolCall[];
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 export interface LLMToolCall {
@@ -21,14 +22,14 @@ export interface LLMResponse {
   thinking?: string;
   rawAssistantMessage?: unknown;
   toolCalls?: LLMToolCall[];
-  usage?: { inputTokens: number; outputTokens: number };
+  usage?: { inputTokens: number; outputTokens: number; thinkingTokens?: number };
 }
 
 export type StreamChunk =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
   | { type: "tool_call"; id: string; name: string; arguments: string }
-  | { type: "usage"; inputTokens: number; outputTokens: number };
+  | { type: "usage"; inputTokens: number; outputTokens: number; thinkingTokens?: number };
 
 export interface LLMProvider {
   chatStream(

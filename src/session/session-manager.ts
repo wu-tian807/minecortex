@@ -121,7 +121,7 @@ export class SessionManager {
 
     const parts: SerializedPart[] = [];
     for (const part of msg.content) {
-      if (part.type === "image") {
+      if (part.type === "image" || part.type === "video" || part.type === "audio") {
         const byteSize = Buffer.byteLength(part.data, "base64");
         if (byteSize >= MEDIA_INLINE_THRESHOLD) {
           const mediaDir = this.mediasDir(sid);
@@ -129,7 +129,8 @@ export class SessionManager {
           const filename = `${Date.now()}_${randomBytes(4).toString("hex")}.${mimeToExt(part.mimeType)}`;
           const filePath = join(mediaDir, filename);
           await writeFile(filePath, Buffer.from(part.data, "base64"));
-          parts.push({ type: "image_ref", path: `medias/${filename}`, mimeType: part.mimeType });
+          const refType = `${part.type}_ref` as "image_ref" | "video_ref" | "audio_ref";
+          parts.push({ type: refType, path: `medias/${filename}`, mimeType: part.mimeType });
         } else {
           parts.push(part);
         }
@@ -148,16 +149,17 @@ export class SessionManager {
 
     const parts: ContentPart[] = [];
     for (const part of msg.content) {
-      if (part.type === "image_ref") {
+      if (part.type === "image_ref" || part.type === "video_ref" || part.type === "audio_ref") {
+        const mediaType = part.type.replace("_ref", "") as "image" | "video" | "audio";
         try {
           const absPath = join(this.sessionDir(sid), part.path);
           const buf = await readFile(absPath);
-          parts.push({ type: "image", data: buf.toString("base64"), mimeType: part.mimeType });
+          parts.push({ type: mediaType, data: buf.toString("base64"), mimeType: part.mimeType } as ContentPart);
         } catch {
-          parts.push({ type: "text", text: `[image unavailable: ${part.path}]` });
+          parts.push({ type: "text", text: `[${mediaType} unavailable: ${part.path}]` });
         }
       } else {
-        parts.push(part);
+        parts.push(part as ContentPart);
       }
     }
 
@@ -172,6 +174,14 @@ function mimeToExt(mime: string): string {
     "image/gif": "gif",
     "image/webp": "webp",
     "image/svg+xml": "svg",
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+    "video/quicktime": "mov",
+    "audio/mpeg": "mp3",
+    "audio/wav": "wav",
+    "audio/ogg": "ogg",
+    "audio/webm": "weba",
+    "audio/mp4": "m4a",
   };
   return map[mime] ?? "bin";
 }

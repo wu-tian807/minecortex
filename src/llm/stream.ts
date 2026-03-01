@@ -7,7 +7,7 @@ export async function assembleResponse(
   let text = "";
   let thinking = "";
   const toolCalls: LLMToolCall[] = [];
-  let usage: { inputTokens: number; outputTokens: number } | undefined;
+  let usage: { inputTokens: number; outputTokens: number; thinkingTokens?: number } | undefined;
 
   for await (const chunk of stream) {
     switch (chunk.type) {
@@ -26,7 +26,11 @@ export async function assembleResponse(
         break;
       }
       case "usage":
-        usage = { inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens };
+        usage = {
+          inputTokens: chunk.inputTokens,
+          outputTokens: chunk.outputTokens,
+          thinkingTokens: chunk.thinkingTokens,
+        };
         break;
     }
   }
