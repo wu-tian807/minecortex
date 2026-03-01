@@ -5,3 +5,5 @@ logs/
 brains/
 task-board.md
 *.tsbuildinfo
+debug.log
+workspace/

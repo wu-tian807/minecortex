@@ -2,8 +2,9 @@
 
 ## 运行时身份
 - 脑区 ID: ${BRAIN_ID}
+- 工作目录: ${WORKSPACE}
 - 模型: ${MODEL}
-- 时间: ${TIMESTAMP}
+- 时间: ${CURRENT_TIME}
 - 框架: MineClaw v0.1.0
 
 ## 运行环境

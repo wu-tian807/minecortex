@@ -1,40 +1,42 @@
-/** @desc Auto-compaction subscription — watches token utilization and emits steer when threshold exceeded */
+/** @desc Auto-compaction subscription — watches currentContextUsage, triggers compact via command channel */
 
-import type { Event, EventSource, SourceContext } from "../src/core/types.js";
+import type { EventSource, SourceContext } from "../src/core/types.js";
+import { getModelSpec } from "../src/llm/provider.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 export default function create(ctx: SourceContext): EventSource {
   const threshold = (ctx.config?.threshold as number) ?? 0.6;
   let unwatch: (() => void) | null = null;
+  let compacting = false;
 
   return {
     name: "auto_compact",
 
-    start(emit: (event: Event) => void) {
-      unwatch = ctx.brainBoard.watch(ctx.brainId, "tokens.lastInputTokens", (value) => {
-        const inputTokens = value as number;
-        if (!inputTokens || inputTokens <= 0) return;
+    start() {
+      unwatch = ctx.brainBoard.watch(ctx.brainId, "currentContextUsage", (value) => {
+        const totalTokens = value as number;
+        if (!totalTokens || totalTokens <= 0 || compacting) return;
+        if (!ctx.onCommand) return;
 
-        const contextWindow = ctx.brainBoard.get(ctx.brainId, "model.contextWindow") as number;
+        let modelName: string | undefined;
+        try {
+          const brainJson = JSON.parse(readFileSync(join(ctx.brainDir, "brain.json"), "utf-8"));
+          modelName = brainJson.model;
+          if (Array.isArray(modelName)) modelName = modelName[0];
+        } catch { return; }
+        if (!modelName) return;
+
+        const contextWindow = getModelSpec(modelName).contextWindow;
         if (!contextWindow || contextWindow <= 0) return;
 
-        const utilization = inputTokens / contextWindow;
+        const utilization = totalTokens / contextWindow;
         if (utilization > threshold) {
-          console.log(
-            `[auto_compact] 利用率 ${(utilization * 100).toFixed(1)}% 超过阈值 ${(threshold * 100).toFixed(0)}%，请求压缩`,
-          );
-          emit({
-            source: "auto_compact",
-            type: "steer",
-            payload: {
-              text: `Context utilization at ${(utilization * 100).toFixed(1)}% (${inputTokens}/${contextWindow} tokens). Please run the compact tool to free up context space.`,
-              utilization,
-              inputTokens,
-              contextWindow,
-            },
-            ts: Date.now(),
-            steer: true,
-            priority: 0,
-          });
+          compacting = true;
+          const reason = `Context at ${(utilization * 100).toFixed(1)}% (${totalTokens}/${contextWindow}), auto-compacting.`;
+          console.log(`[auto_compact] ${reason}`);
+          ctx.onCommand("compact", {}, "/", reason);
+          setTimeout(() => { compacting = false; }, 5000);
         }
       });
       console.log(`[auto_compact] 订阅已启动 (阈值 ${(threshold * 100).toFixed(0)}%)`);

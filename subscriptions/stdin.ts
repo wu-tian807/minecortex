@@ -1,11 +1,14 @@
 /** @desc Stdin subscription source — terminal input as standard EventSource */
 
 import * as readline from "node:readline";
+import { join } from "node:path";
 import type { Event, EventSource, SourceContext } from "../src/core/types.js";
 import { parseCommand } from "../src/core/command-parser.js";
+import { QARecorder } from "../src/session/qa-recorder.js";
 
-export default function create(_ctx: SourceContext): EventSource {
+export default function create(ctx: SourceContext): EventSource {
   let rl: readline.Interface | null = null;
+  const qa = new QARecorder(join(ctx.brainDir, "logs"));
 
   return {
     name: "stdin",
@@ -19,17 +22,13 @@ export default function create(_ctx: SourceContext): EventSource {
 
         if (trimmed.startsWith("/")) {
           const cmd = parseCommand(trimmed);
-          if (cmd) {
-            emit({
-              source: "stdin",
-              type: "command",
-              payload: cmd,
-              ts: Date.now(),
-              priority: 0,
-            });
+          if (cmd && ctx.onCommand) {
+            ctx.onCommand(cmd.toolName, cmd.args, cmd.target);
             return;
           }
         }
+
+        qa.recordUser(trimmed).catch(() => {});
 
         emit({
           source: "stdin",
@@ -50,6 +49,7 @@ export default function create(_ctx: SourceContext): EventSource {
     stop() {
       rl?.close();
       rl = null;
+      qa.close();
     },
   };
 }
