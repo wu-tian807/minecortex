@@ -1,39 +1,33 @@
-/** @desc 扫描全局 + 脑内工具定义，按 brain.json 配置过滤并合并 */
-
-import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { BrainJson, ToolDefinition } from "../core/types.js";
-import { applySelector } from "./subscription-loader.js";
+import type { ToolDefinition, FSWatcherAPI } from "../core/types.js";
+import type { LoaderContext } from "./types.js";
+import { BaseLoader } from "./base-loader.js";
 
-const ROOT = process.cwd();
+type ToolFactory = { default: ToolDefinition };
 
-async function scanTools(dir: string): Promise<Map<string, ToolDefinition>> {
-  const map = new Map<string, ToolDefinition>();
-  try {
-    const files = await readdir(dir);
-    const tsFiles = files.filter((f) => f.endsWith(".ts"));
-    for (const f of tsFiles) {
-      const mod = await import(join(dir, f));
-      const tool = mod.default as ToolDefinition;
-      if (tool?.name) {
-        map.set(tool.name, tool);
-      }
-    }
-  } catch {
-    // directory doesn't exist
+export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition> {
+  async importFactory(path: string): Promise<ToolFactory> {
+    return await import(path);
   }
-  return map;
-}
 
-export async function loadTools(
-  brainId: string,
-  brainConfig: BrainJson,
-): Promise<ToolDefinition[]> {
-  const globalTools = await scanTools(join(ROOT, "tools"));
-  const localTools = await scanTools(join(ROOT, "brains", brainId, "tools"));
+  createInstance(factory: ToolFactory, _ctx: LoaderContext, _name: string): ToolDefinition {
+    return factory.default;
+  }
 
-  // local overrides global (same name)
-  const merged = new Map([...globalTools, ...localTools]);
-  const enabled = applySelector([...merged.keys()], brainConfig.tools);
-  return enabled.map((name) => merged.get(name)!).filter(Boolean);
+  onRegister(_name: string, _instance: ToolDefinition): void {}
+  onUnregister(_name: string, _instance: ToolDefinition): void {}
+
+  registerWatchPatterns(watcher: FSWatcherAPI): void {
+    watcher.register(/tools\/[^/]+\.ts$/, () => {});
+    watcher.register(/brains\/[^/]+\/tools\/[^/]+\.ts$/, () => {});
+  }
+
+  async load(ctx: LoaderContext): Promise<ToolDefinition[]> {
+    const paths = await this.discover(
+      join(ctx.globalDir, "tools"),
+      join(ctx.brainDir, "tools"),
+    );
+    await this.loadAll(paths, ctx);
+    return [...this.registry.values()].filter(Boolean);
+  }
 }

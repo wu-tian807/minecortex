@@ -1,73 +1,105 @@
-/** @desc 扫描全局 + 脑内订阅源，工厂模式加载，传入 SourceContext */
-
-import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type {
-  BrainJson,
-  CapabilitySelector,
   EventSource,
   EventSourceFactory,
   SourceContext,
+  CapabilitySelector,
+  FSWatcherAPI,
+  BrainBoardAPI,
+  Event,
 } from "../core/types.js";
+import type { LoaderContext } from "./types.js";
+import { BaseLoader } from "./base-loader.js";
 
-const ROOT = process.cwd();
-
-function applySelector(
-  available: string[],
-  selector: CapabilitySelector | undefined,
-): string[] {
-  if (!selector) return [];
-  if (selector.default === "all") {
-    const disabled = new Set(selector.disable ?? []);
-    return available.filter((n) => !disabled.has(n));
-  }
-  return selector.enable ?? [];
+interface SubscriptionEntry {
+  source: EventSource;
+  name: string;
 }
 
-async function scanSources(dir: string): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
-  try {
-    const files = await readdir(dir);
-    for (const f of files) {
-      if (f.endsWith(".ts")) {
-        map.set(f.replace(/\.ts$/, ""), join(dir, f));
+export class SubscriptionLoader extends BaseLoader<EventSourceFactory, SubscriptionEntry> {
+  private emitter: ((event: Event) => void) | null = null;
+  private brainBoard: BrainBoardAPI | null = null;
+
+  setEmitter(emit: (event: Event) => void): void {
+    this.emitter = emit;
+  }
+
+  setBrainBoard(board: BrainBoardAPI): void {
+    this.brainBoard = board;
+  }
+
+  async importFactory(path: string): Promise<EventSourceFactory> {
+    const mod = await import(path);
+    return mod.default as EventSourceFactory;
+  }
+
+  createInstance(factory: EventSourceFactory, ctx: LoaderContext, name: string): SubscriptionEntry {
+    const sourceCtx: SourceContext = {
+      brainId: ctx.brainId,
+      brainDir: ctx.brainDir,
+      config: ctx.selector.config?.[name] ?? undefined,
+      brainBoard: this.brainBoard!,
+    };
+    const source = factory(sourceCtx);
+    return { source, name: source.name };
+  }
+
+  onRegister(name: string, entry: SubscriptionEntry): void {
+    if (!this.emitter) return;
+    try {
+      entry.source.start(this.emitter);
+    } catch (err) {
+      console.error(`[SubscriptionLoader] subscription_error for "${name}":`, err);
+      this.emitter({
+        source: `subscription:${name}`,
+        type: "subscription_error",
+        payload: { error: String(err) },
+        ts: Date.now(),
+        silent: true,
+      });
+    }
+  }
+
+  onUnregister(_name: string, entry: SubscriptionEntry): void {
+    try {
+      entry.source.stop();
+    } catch { /* already stopped */ }
+  }
+
+  registerWatchPatterns(watcher: FSWatcherAPI): void {
+    watcher.register(/subscriptions\/[^/]+\.ts$/, () => {});
+    watcher.register(/brains\/[^/]+\/subscriptions\/[^/]+\.ts$/, () => {});
+    watcher.register(/brains\/[^/]+\/brain\.json$/, () => {});
+  }
+
+  async load(ctx: LoaderContext): Promise<EventSource[]> {
+    const paths = await this.discover(
+      join(ctx.globalDir, "subscriptions"),
+      join(ctx.brainDir, "subscriptions"),
+    );
+    await this.loadAll(paths, ctx);
+    return [...this.registry.values()].map((e) => e.source);
+  }
+
+  reconcile(
+    oldSelector: CapabilitySelector,
+    newSelector: CapabilitySelector,
+    allNames: string[],
+  ): { toStart: string[]; toStop: string[] } {
+    const oldEnabled = new Set(this.filterByCapability(allNames, oldSelector));
+    const newEnabled = new Set(this.filterByCapability(allNames, newSelector));
+
+    const toStart = [...newEnabled].filter((n) => !oldEnabled.has(n));
+    const toStop = [...oldEnabled].filter((n) => !newEnabled.has(n));
+
+    for (const name of toStop) {
+      const entry = this.registry.get(name);
+      if (entry) {
+        this.onUnregister(name, entry);
+        this.registry.delete(name);
       }
     }
-  } catch {
-    // directory doesn't exist — skip
+
+    return { toStart, toStop };
   }
-  return map;
 }
-
-export async function loadSubscriptions(
-  brainId: string,
-  brainConfig: BrainJson,
-): Promise<EventSource[]> {
-  const globalSources = await scanSources(join(ROOT, "subscriptions"));
-  const localSources = await scanSources(
-    join(ROOT, "brains", brainId, "subscriptions"),
-  );
-
-  const merged = new Map([...globalSources, ...localSources]);
-  const enabled = applySelector(
-    [...merged.keys()],
-    brainConfig.subscriptions,
-  );
-
-  const sources: EventSource[] = [];
-  for (const name of enabled) {
-    const path = merged.get(name);
-    if (!path) continue;
-    const mod = await import(path);
-    const factory = mod.default as EventSourceFactory;
-    const sourceCtx: SourceContext = {
-      brainId,
-      brainDir: join(ROOT, "brains", brainId),
-      config: brainConfig.subscriptions?.config?.[name],
-    };
-    sources.push(factory(sourceCtx));
-  }
-  return sources;
-}
-
-export { applySelector };

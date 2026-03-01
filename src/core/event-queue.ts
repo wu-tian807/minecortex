@@ -1,5 +1,3 @@
-/** @desc EventQueue — per-brain event accumulator with blocking wait for agent loop */
-
 import type { Event, EventQueueInterface } from "./types.js";
 
 const MAX_EVENTS = 50;
@@ -7,11 +5,17 @@ const MAX_EVENTS = 50;
 export class EventQueue implements EventQueueInterface {
   private queue: Event[] = [];
   private waiter: ((event: Event) => void) | null = null;
+  private steerListeners = new Set<() => void>();
 
   push(event: Event): void {
     this.queue.push(event);
     if (this.queue.length > MAX_EVENTS) {
       this.queue.shift();
+    }
+    if (event.steer) {
+      for (const cb of this.steerListeners) {
+        try { cb(); } catch { /* listener error */ }
+      }
     }
     if (!event.silent && this.waiter) {
       const resolve = this.waiter;
@@ -20,7 +24,6 @@ export class EventQueue implements EventQueueInterface {
     }
   }
 
-  /** Block until a non-silent event arrives; returns the triggering event (peek, not removed) */
   waitForEvent(signal?: AbortSignal): Promise<Event> {
     const trigger = this.queue.find(e => !e.silent);
     if (trigger) {
@@ -35,7 +38,6 @@ export class EventQueue implements EventQueueInterface {
     });
   }
 
-  /** Drain all queued events (silent + non-silent), sorted by priority then timestamp */
   drain(): Event[] {
     if (this.queue.length === 0) return [];
     const batch = [...this.queue];
@@ -46,5 +48,16 @@ export class EventQueue implements EventQueueInterface {
 
   pending(): number {
     return this.queue.length;
+  }
+
+  hasSteerEvent(): boolean {
+    return this.queue.some(e => e.steer === true);
+  }
+
+  onSteer(cb: () => void): { dispose(): void } {
+    this.steerListeners.add(cb);
+    return {
+      dispose: () => { this.steerListeners.delete(cb); },
+    };
   }
 }
