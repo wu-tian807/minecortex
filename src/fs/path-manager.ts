@@ -44,7 +44,7 @@ export class PathManager implements PathManagerAPI {
 
     if (raw.startsWith("/")) return normalize(raw);
 
-    return resolve(this.projectRoot, raw);
+    return resolve(this.brainDir(targetBrain), "workspace", raw);
   }
 
   checkPermission(
@@ -61,22 +61,18 @@ export class PathManager implements PathManagerAPI {
     const srcDir = join(this.projectRoot, "src");
     if (normalized.startsWith(srcDir + "/") || normalized === srcDir) return false;
 
-    // Own brain dir is always writable
-    const ownBrainDir = this.brainDir(callerBrainId);
-    if (normalized.startsWith(ownBrainDir + "/") || normalized === ownBrainDir) return true;
-
-    // Other brain dirs or global dirs: only in evolve mode
+    // brains/ directory is always writable (shared workspace across brains)
     const brainsDir = this.knownDirs.get("brains")!;
-    if (normalized.startsWith(brainsDir + "/")) {
-      return evolve;
+    if (normalized.startsWith(brainsDir + "/") || normalized === brainsDir) return true;
+
+    // Other project files require evolve mode
+    if (evolve) {
+      if (normalized.startsWith(this.projectRoot + "/") || normalized === this.projectRoot) {
+        return true;
+      }
     }
 
-    // Global project files: evolve mode only
-    if (normalized.startsWith(this.projectRoot + "/") || normalized === this.projectRoot) {
-      return evolve;
-    }
-
-    // Outside project root: deny
+    // Outside project root or non-evolve: deny
     return false;
   }
 
