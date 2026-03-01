@@ -4,19 +4,20 @@ import { getScheduler } from "../src/core/scheduler.js";
 export default {
   name: "manage_brain",
   description:
-    "Manage brain lifecycle: list active brains, or start/stop/restart/free a specific brain. " +
+    "Manage brain lifecycle: list active brains, create a new brain, or start/stop/restart/shutdown/free a specific brain. " +
+    "create = new brain dir with defaults, start = launch existing brain, " +
     "stop = pause (keep context), shutdown = stop + clear runtime, restart = shutdown + reinit, free = shutdown + delete BrainBoard entries.",
   input_schema: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["list", "start", "stop", "restart", "shutdown", "free"],
+        enum: ["list", "create", "start", "stop", "restart", "shutdown", "free"],
         description: "Action to perform",
       },
       brain_id: {
         type: "string",
-        description: "Target brain ID (required for start/stop/restart/shutdown/free)",
+        description: "Target brain ID (required for all actions except list)",
       },
     },
     required: ["action"],
@@ -35,6 +36,12 @@ export default {
     }
 
     if (!brainId) return `brain_id is required for action '${action}'`;
+
+    if (action === "create") {
+      const result = await scheduler.createBrain(brainId);
+      return result.ok ? `Brain '${brainId}' created` : `Error: ${result.error}`;
+    }
+
     return await scheduler.controlBrain(action, brainId);
   },
 } satisfies ToolDefinition;

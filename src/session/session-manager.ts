@@ -71,6 +71,9 @@ export class SessionManager {
     try {
       raw = await readFile(this.messagesPath(id), "utf-8");
     } catch {
+      // Dangling pointer — session dir/file was deleted. Auto-create a fresh session.
+      console.warn(`[session] pointer dangling (${id}), auto-creating new session`);
+      await this.createSession();
       return [];
     }
 
@@ -105,6 +108,26 @@ export class SessionManager {
     }
     data.responseApi = { lastResponseId, provider };
     await writeFile(this.sessionJsonPath(), JSON.stringify(data, null, 2), "utf-8");
+  }
+
+  /** Create a new session with optional initial messages, switch the pointer. */
+  async newSession(initialMessages?: LLMMessage[]): Promise<string> {
+    const sid = await this.createSession();
+    if (initialMessages?.length) {
+      const lines = await Promise.all(
+        initialMessages.map(m => this.serializeMessage(m, sid)),
+      );
+      const content = lines.map(l => JSON.stringify(l)).join("\n") + "\n";
+      await writeFile(this.messagesPath(sid), content, "utf-8");
+    }
+    return sid;
+  }
+
+  /** Clear messages in the current session without creating a new directory. */
+  async resetSession(): Promise<void> {
+    const id = await this.currentSessionId();
+    if (!id) throw new Error("No active session to reset");
+    await writeFile(this.messagesPath(id), "", "utf-8");
   }
 
   /** Resolve the messages.jsonl path for the current session (used by compact tool) */

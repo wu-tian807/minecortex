@@ -1,6 +1,6 @@
 /** @desc Scheduler — singleton managers, brain discovery, ScriptBrain support, shutdown handling */
 
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat, mkdir, writeFile, access } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type {
@@ -114,6 +114,18 @@ export class Scheduler {
 
       this.fsWatcher.register(/directives\/[^/]+\.md$/, () => {
         this.logger.info("scheduler", 0, "Directive file changed (hot-reload via slot re-read on next prompt)");
+      });
+
+      this.fsWatcher.register(/^brains\/([^/]+)\/?$/, async (evt) => {
+        const match = evt.path.match(/^brains\/([^/]+)\/?$/);
+        if (!match) return;
+        const brainId = match[1];
+        if (!this.slots.has(brainId)) return;
+        const brainDir = join(ROOT, "brains", brainId);
+        if (!existsSync(brainDir)) {
+          this.logger.info("scheduler", 0, `brain dir deleted, auto-freeing '${brainId}'`);
+          await this.controlBrain("free", brainId);
+        }
       });
     }
 
@@ -309,11 +321,79 @@ export class Scheduler {
     );
   }
 
+  // ─── Public API ───
+
+  private static readonly DEFAULT_BRAIN_JSON = {
+    model: null,
+    subscriptions: { global: "none", enable: ["stdin"] },
+    tools: { global: "all", disable: ["create_brain", "manage_brain"] },
+    slots: { global: "all" },
+  };
+
+  private static defaultSoul(id: string): string {
+    return `# ${id}\n\n你是 MineClaw 多脑系统中的 ${id} 脑区。\n\n## 职责\n- (请编辑此处)\n\n## 约束\n- 默认中文回复，代码注释用英文\n- 每步完成后简短汇报\n\n## 关系\n- 通过 send_message 与其他脑区协作\n- 用 manage_brain list 查看系统中所有活跃脑区\n\n## 工作方式\n1. 理解任务 → 拆解步骤\n2. 用工具直接执行\n3. 遇到问题先自己排查\n`;
+  }
+
+  async createBrain(id: string, opts?: {
+    model?: string;
+    soul?: string;
+    subscriptions?: Record<string, unknown>;
+    autoStart?: boolean;
+  }): Promise<{ ok: boolean; error?: string }> {
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+      return { ok: false, error: `Invalid brain id '${id}'. Use only alphanumeric, dash, underscore.` };
+    }
+
+    const brainDir = join(ROOT, "brains", id);
+
+    try {
+      await access(brainDir);
+      return { ok: false, error: `Brain directory already exists: brains/${id}/` };
+    } catch { /* doesn't exist — proceed */ }
+
+    await mkdir(brainDir, { recursive: true });
+
+    const brainJson = { ...Scheduler.DEFAULT_BRAIN_JSON } as Record<string, unknown>;
+    if (opts?.model) brainJson.model = opts.model;
+    if (opts?.subscriptions) brainJson.subscriptions = opts.subscriptions;
+
+    await writeFile(join(brainDir, "brain.json"), JSON.stringify(brainJson, null, 2) + "\n", "utf-8");
+    await writeFile(join(brainDir, "soul.md"), opts?.soul ?? Scheduler.defaultSoul(id), "utf-8");
+
+    this.logger.info("scheduler", 0, `Brain '${id}' created`);
+
+    if (opts?.autoStart) {
+      return { ok: true, ...(await this.startBrain(id)) };
+    }
+    return { ok: true };
+  }
+
   listBrains(): string[] {
     return [...this.slots.keys()];
   }
 
+  private async startBrain(id: string): Promise<{ error?: string }> {
+    if (this.slots.has(id)) return { error: `Brain '${id}' is already running` };
+
+    const brainDir = join(ROOT, "brains", id);
+    if (!existsSync(brainDir)) return { error: `Brain directory not found: brains/${id}/` };
+
+    const globalConfig = await this.loadGlobalConfig();
+    await this.initBrain(id, globalConfig);
+    const slot = this.slots.get(id);
+    if (slot) {
+      slot.brain.run(slot.abortController.signal)
+        .catch(err => this.logger.error("scheduler", 0, `brain '${id}' loop crashed`, err));
+    }
+    return {};
+  }
+
   async controlBrain(action: string, target: string): Promise<string> {
+    if (action === "start") {
+      const result = await this.startBrain(target);
+      return result.error ?? `Brain '${target}' started`;
+    }
+
     const slot = this.slots.get(target);
     if (!slot) return `Unknown brain: '${target}'`;
 
