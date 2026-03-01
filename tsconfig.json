@@ -12,6 +12,11 @@
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts", "subscriptions/**/*.ts", "tools/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "subscriptions/**/*.ts",
+    "tools/**/*.ts",
+    "slots/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist", "brains/*/src/**"]
 }
