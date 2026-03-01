@@ -1,4 +1,4 @@
-/** @desc Stdout subscription — pipes assistant messages to terminal only if brain subscribes to stdin */
+/** @desc Stdout subscription — pipes assistant messages + tool activity to terminal */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,7 +22,7 @@ function brainHasStdin(ctx: SourceContext): boolean {
 }
 
 export default function create(ctx: SourceContext): EventSource {
-  let unsubscribe: (() => void) | null = null;
+  const unsubs: (() => void)[] = [];
   const qa = new QARecorder(join(ctx.brainDir, "logs"));
 
   return {
@@ -31,25 +31,41 @@ export default function create(ctx: SourceContext): EventSource {
     start(_emit: (event: Event) => void) {
       if (!brainHasStdin(ctx)) return;
 
-      unsubscribe = ctx.hooks.on(HookEvent.AssistantMessage, ({ msg }) => {
-        if (!msg.content) return;
+      unsubs.push(ctx.hooks.on(HookEvent.AssistantMessage, ({ msg }) => {
         const raw = typeof msg.content === "string"
           ? msg.content
           : msg.content
-              .filter((p): p is { type: "text"; text: string } => p.type === "text")
+              ?.filter((p): p is { type: "text"; text: string } => p.type === "text")
               .map(p => p.text)
-              .join("");
+              .join("") ?? "";
         const text = raw.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
-        if (text) {
+
+        if (msg.toolCalls?.length) {
+          const calls = msg.toolCalls
+            .map(tc => `  → ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 120)})`)
+            .join("\n");
+          const block = text ? `${text}\n${calls}` : calls;
+          process.stdout.write(block + "\n");
+          qa.recordAssistant(block).catch(() => {});
+        } else if (text) {
           process.stdout.write(text + "\n");
           qa.recordAssistant(text).catch(() => {});
         }
-      });
+      }));
+
+      unsubs.push(ctx.hooks.on(HookEvent.ToolResult, ({ name, result, durationMs }) => {
+        const resultStr = typeof result === "string" ? result : JSON.stringify(result);
+        const preview = resultStr.slice(0, 200);
+        const suffix = resultStr.length > 200 ? "..." : "";
+        const line = `  ← ${name} (${durationMs}ms): ${preview}${suffix}`;
+        process.stdout.write(line + "\n");
+        qa.recordToolResult(name, resultStr, durationMs).catch(() => {});
+      }));
     },
 
     stop() {
-      unsubscribe?.();
-      unsubscribe = null;
+      for (const u of unsubs) u();
+      unsubs.length = 0;
       qa.close();
     },
   };

@@ -5,7 +5,7 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "tsx src/main.ts",
-    "dev": "tsx watch src/main.ts"
+    "dev": "tsx watch --ignore brains --ignore workspace --ignore debug.log src/main.ts"
   },
   "dependencies": {
     "@google/genai": "^1.0.0",

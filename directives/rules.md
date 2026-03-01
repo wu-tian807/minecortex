@@ -18,11 +18,6 @@ waitForEvent → coalesce → drain → process。
 - silent 事件只入队不唤醒
 - steer 事件打断当前 LLM 调用
 
-## 工具使用
-- 无依赖关系的工具调用应一次性并行发出
-- 不要描述即将做什么——直接做
-- 工具返回错误时先自己排查
-
 ## 多脑协作
 - 通过 send_message 与其他脑通信
 - 用 spawn_thought 委托子任务

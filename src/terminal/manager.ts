@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { writeFile, readFile, readdir, unlink, mkdir } from "node:fs/promises";
+import { writeFile, readFile, mkdir, unlink } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   TerminalManagerAPI,
@@ -11,19 +12,34 @@ import type {
 } from "../core/types.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_STDOUT_CAPTURE = 512_000; // 512 KB inline cap
+const MAX_STDOUT_CAPTURE = 512_000;
+
+interface PendingCommand {
+  marker: string;
+  chunks: string[];
+  onComplete: (output: string, exitCode: number | undefined) => void;
+}
+
+interface ShellSession {
+  process: ChildProcess;
+  pending: PendingCommand | null;
+  ready: Promise<void>;
+  markReady: (() => void) | null;
+}
 
 export class TerminalManager implements TerminalManagerAPI {
-  private terminals = new Map<string, TerminalInstance & { process?: ChildProcess }>();
-  private logDir: string;
+  private terminals = new Map<string, TerminalInstance>();
+  private shells = new Map<string, ShellSession>();
   private counter = 0;
   private brainEnvCache = new Map<string, Record<string, string>>();
 
-  constructor(private pathManager: PathManagerAPI) {
-    this.logDir = pathManager.dir("terminals");
+  constructor(private pathManager: PathManagerAPI) {}
+
+  private logDirFor(brainId: string): string {
+    const base = brainId.split(":")[0];
+    return join(this.pathManager.brainDir(base), "workspace", "terminals");
   }
 
-  /** Pre-load brain.json env for a brain. Called by scheduler during init. */
   async loadBrainEnv(brainId: string): Promise<void> {
     try {
       const raw = await readFile(
@@ -39,92 +55,155 @@ export class TerminalManager implements TerminalManagerAPI {
     }
   }
 
+  private getOrCreateShell(brainId: string): ShellSession {
+    const base = brainId.split(":")[0];
+    const existing = this.shells.get(base);
+    if (existing && existing.process.exitCode === null) {
+      return existing;
+    }
+
+    const brainEnv = this.brainEnvCache.get(base) ?? {};
+    const child = spawn("bash", ["--norc", "--noprofile"], {
+      cwd: this.pathManager.root(),
+      env: { ...process.env, ...brainEnv, PS1: "", PS2: "" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const session: ShellSession = {
+      process: child,
+      pending: null,
+      ready: Promise.resolve(),
+      markReady: null,
+    };
+
+    const handleData = (data: Buffer) => {
+      if (!session.pending) return;
+      const text = data.toString("utf-8");
+      session.pending.chunks.push(text);
+
+      const combined = session.pending.chunks.join("");
+      const idx = combined.indexOf(session.pending.marker);
+      if (idx === -1) return;
+
+      const output = combined.slice(0, idx).trimEnd();
+      const rest = combined.slice(idx + session.pending.marker.length).trim();
+      const exitCode = parseInt(rest, 10);
+
+      const cb = session.pending.onComplete;
+      session.pending = null;
+
+      if (session.markReady) {
+        session.markReady();
+        session.markReady = null;
+      }
+
+      cb(output, isNaN(exitCode) ? undefined : exitCode);
+    };
+
+    child.stdout!.on("data", handleData);
+    child.stderr!.on("data", handleData);
+
+    child.on("exit", () => {
+      this.shells.delete(base);
+      if (session.markReady) {
+        session.markReady();
+        session.markReady = null;
+      }
+    });
+
+    this.shells.set(base, session);
+    return session;
+  }
+
   async exec(command: string, opts: ExecOpts): Promise<ExecResult> {
-    await mkdir(this.logDir, { recursive: true });
+    const logDir = this.logDirFor(opts.brainId);
+    await mkdir(logDir, { recursive: true });
 
     const id = `t${++this.counter}-${Date.now()}`;
-    const cwd = opts.cwd ?? this.pathManager.root();
-    const logFile = join(this.logDir, `${id}.txt`);
+    const logFile = join(logDir, `${id}.txt`);
     const startedAt = Date.now();
+    const marker = `__MCEND_${id}__`;
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-    const baseBrainId = opts.brainId.split(":")[0];
-    const brainEnv = this.brainEnvCache.get(baseBrainId) ?? {};
-    const env = { ...process.env, ...brainEnv, ...opts.env };
-    const child = spawn("bash", ["-c", command], { cwd, env, stdio: "pipe" });
+    const session = this.getOrCreateShell(opts.brainId);
 
-    const instance: TerminalInstance & { process?: ChildProcess } = {
+    // Serialize: wait for previous command to finish if shell is still occupied
+    await session.ready;
+
+    let cmd = command;
+    if (opts.cwd) {
+      cmd = `cd ${shellQuote(opts.cwd)} && ${cmd}`;
+    }
+    if (opts.env) {
+      const exports = Object.entries(opts.env)
+        .map(([k, v]) => `export ${k}=${shellQuote(v)}`)
+        .join("; ");
+      cmd = `${exports}; ${cmd}`;
+    }
+
+    // Capture exit code before marker echo so it reflects the real command
+    const wrapped = `{ ${cmd} ; } 2>&1; __mc_rc=$?; echo ""; echo "${marker} $__mc_rc"\n`;
+
+    const instance: TerminalInstance = {
       id,
-      pid: child.pid!,
+      pid: session.process.pid!,
       command,
-      cwd,
+      cwd: opts.cwd ?? ".",
       brainId: opts.brainId,
       startedAt,
       logFile,
-      process: child,
     };
     this.terminals.set(id, instance);
 
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-
-    child.stdout?.on("data", (data: Buffer) => {
-      if (totalBytes < MAX_STDOUT_CAPTURE) {
-        chunks.push(data);
-        totalBytes += data.length;
-      }
-    });
-    child.stderr?.on("data", (data: Buffer) => {
-      if (totalBytes < MAX_STDOUT_CAPTURE) {
-        chunks.push(data);
-        totalBytes += data.length;
-      }
-    });
-
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    // Gate for the next command
+    let readyResolve!: () => void;
+    session.ready = new Promise<void>((r) => { readyResolve = r; });
+    session.markReady = readyResolve;
 
     return new Promise<ExecResult>((resolve) => {
       let settled = false;
-      let backgrounded = false;
+
+      session.pending = {
+        marker,
+        chunks: [],
+        onComplete: (output, exitCode) => {
+          clearTimeout(timer);
+          instance.exitCode = exitCode;
+          instance.elapsedMs = Date.now() - startedAt;
+          this.writeLog(instance, output, true);
+
+          if (!settled) {
+            settled = true;
+            resolve({
+              terminalId: id,
+              stdout: output.slice(0, MAX_STDOUT_CAPTURE),
+              exitCode,
+              backgrounded: false,
+            });
+          }
+        },
+      };
 
       const timer = setTimeout(() => {
         if (settled) return;
-        backgrounded = true;
         settled = true;
-        this.writeLog(instance, Buffer.concat(chunks).toString("utf-8"));
+        const output = session.pending?.chunks.join("") ?? "";
+        this.writeLog(instance, output);
         resolve({
           terminalId: id,
-          stdout: Buffer.concat(chunks).toString("utf-8").slice(0, MAX_STDOUT_CAPTURE),
+          stdout: output.slice(0, MAX_STDOUT_CAPTURE),
           backgrounded: true,
-          hint: `Command still running (pid ${child.pid}). Use readOutput("${id}") to check later.`,
+          hint: `Command still running (pid ${session.process.pid}). Use readOutput("${id}") to check later.`,
         });
+        // pending stays set — when marker arrives it will update instance and ungate next command
       }, timeoutMs);
 
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        instance.exitCode = code ?? undefined;
-        instance.elapsedMs = Date.now() - startedAt;
-        delete instance.process;
-
-        const stdout = Buffer.concat(chunks).toString("utf-8");
-        this.writeLog(instance, stdout, true);
-
-        if (settled) return;
-        settled = true;
-        resolve({
-          terminalId: id,
-          stdout: stdout.slice(0, MAX_STDOUT_CAPTURE),
-          exitCode: code ?? undefined,
-          backgrounded: false,
-        });
-      });
+      session.process.stdin!.write(wrapped);
     });
   }
 
   get(id: string): TerminalInstance | undefined {
-    const t = this.terminals.get(id);
-    if (!t) return undefined;
-    const { process: _p, ...rest } = t;
-    return rest;
+    return this.terminals.get(id);
   }
 
   list(filter?: { brainId?: string; status?: string }): TerminalInstance[] {
@@ -133,17 +212,20 @@ export class TerminalManager implements TerminalManagerAPI {
       if (filter?.brainId && t.brainId !== filter.brainId) continue;
       if (filter?.status === "running" && t.exitCode !== undefined) continue;
       if (filter?.status === "done" && t.exitCode === undefined) continue;
-      const { process: _p, ...rest } = t;
-      result.push(rest);
+      result.push(t);
     }
     return result;
   }
 
   kill(id: string): boolean {
     const t = this.terminals.get(id);
-    if (!t?.process) return false;
+    if (!t) return false;
+    const base = t.brainId.split(":")[0];
+    const session = this.shells.get(base);
+    if (!session || session.process.exitCode !== null) return false;
     try {
-      t.process.kill("SIGTERM");
+      // Send Ctrl+C to interrupt the current command without killing the shell
+      session.process.stdin!.write("\x03");
       return true;
     } catch {
       return false;
@@ -154,8 +236,7 @@ export class TerminalManager implements TerminalManagerAPI {
     const t = this.terminals.get(id);
     if (!t) return `Terminal ${id} not found`;
     try {
-      const fs = require("node:fs");
-      const content: string = fs.readFileSync(t.logFile, "utf-8");
+      const content = readFileSync(t.logFile, "utf-8");
       if (opts?.tail) {
         const lines = content.split("\n");
         return lines.slice(-opts.tail).join("\n");
@@ -167,6 +248,13 @@ export class TerminalManager implements TerminalManagerAPI {
   }
 
   cleanup(maxAge?: number): void {
+    if (maxAge === 0) {
+      for (const [, session] of this.shells) {
+        try { session.process.kill("SIGTERM"); } catch {}
+      }
+      this.shells.clear();
+    }
+
     const cutoff = Date.now() - (maxAge ?? 3_600_000);
     for (const [id, t] of this.terminals) {
       if (t.exitCode !== undefined && t.startedAt < cutoff) {
@@ -206,4 +294,8 @@ export class TerminalManager implements TerminalManagerAPI {
 
     await writeFile(instance.logFile, header + output + footer).catch(() => {});
   }
+}
+
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
 }

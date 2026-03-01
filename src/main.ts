@@ -1,6 +1,7 @@
 /** @desc MineClaw 入口 — 注册所有 LLM 适配器，启动 Scheduler */
 
-import "./llm/gemini.js";
+import "./llm/gemini2.js";
+import "./llm/gemini3.js";
 import "./llm/anthropic.js";
 import "./llm/openai-compat.js";
 import "./llm/deepseek-reasoning.js";

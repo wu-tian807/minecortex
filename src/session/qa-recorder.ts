@@ -32,6 +32,18 @@ export class QARecorder {
     await appendFile(this.filePath, `## Assistant\n${sanitize(content)}\n\n`, "utf-8");
   }
 
+  async recordToolResult(name: string, result: string, durationMs: number): Promise<void> {
+    if (this.closed) return;
+    await this.ensureDir();
+    const preview = result.slice(0, 500);
+    const suffix = result.length > 500 ? "..." : "";
+    await appendFile(
+      this.filePath,
+      `### Tool: ${name} (${durationMs}ms)\n\`\`\`\n${preview}${suffix}\n\`\`\`\n\n`,
+      "utf-8",
+    );
+  }
+
   close(): void {
     this.closed = true;
   }

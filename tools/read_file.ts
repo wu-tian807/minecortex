@@ -1,8 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { readFile, access } from "node:fs/promises";
 import { extname } from "node:path";
 import type { ToolDefinition, ToolOutput, ContentPart } from "../src/core/types.js";
 
-const MAX_LINES = 2000;
+const MAX_CHARS = 256_000;
 const MAX_LINE_LENGTH = 2000;
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
@@ -41,52 +41,91 @@ export default {
   async execute(args, ctx): Promise<ToolOutput> {
     const absPath = ctx.pathManager.resolve(
       { path: String(args.path) },
-      ctx.brainId,
+      ctx.brainId ?? "",
     );
 
-    if (!ctx.pathManager.checkPermission(absPath, "read", ctx.brainId, false)) {
-      return `Permission denied: cannot read ${absPath}`;
+    if (!ctx.pathManager.checkPermission(absPath, "read", ctx.brainId ?? "", false)) {
+      return `Error: permission denied — cannot read ${absPath}`;
+    }
+
+    try {
+      await access(absPath);
+    } catch {
+      return `Error: file not found — ${absPath}`;
     }
 
     const ext = extname(absPath).toLowerCase();
 
     if (IMAGE_EXTS.has(ext)) {
-      const buf = await readFile(absPath);
-      const parts: ContentPart[] = [
-        { type: "image", data: buf.toString("base64"), mimeType: MIME_MAP[ext]! },
-      ];
-      return parts;
+      try {
+        const buf = await readFile(absPath);
+        const parts: ContentPart[] = [
+          { type: "image", data: buf.toString("base64"), mimeType: MIME_MAP[ext]! },
+        ];
+        return parts;
+      } catch (e: any) {
+        return `Error: failed to read image — ${e.message}`;
+      }
     }
 
-    const raw = await readFile(absPath, "utf-8");
+    let raw: string;
+    try {
+      raw = await readFile(absPath, "utf-8");
+    } catch (e: any) {
+      return `Error: failed to read file — ${e.message}`;
+    }
+
+    if (raw.length === 0) {
+      return "File is empty.";
+    }
+
     const allLines = raw.split("\n");
+    const totalLines = allLines.length;
     const offset = args.offset as number | undefined;
     const limit = args.limit as number | undefined;
 
     let start: number;
     if (offset !== undefined && offset < 0) {
-      start = Math.max(0, allLines.length + offset);
+      start = Math.max(0, totalLines + offset);
     } else if (offset !== undefined) {
       start = Math.max(0, offset - 1);
     } else {
       start = 0;
     }
 
-    const maxLines = limit ?? MAX_LINES;
-    const end = Math.min(allLines.length, start + maxLines);
-    const slice = allLines.slice(start, end);
+    const end = limit !== undefined
+      ? Math.min(totalLines, start + limit)
+      : totalLines;
 
-    const numbered = slice.map((line, i) => {
-      const truncated = line.length > MAX_LINE_LENGTH
-        ? line.slice(0, MAX_LINE_LENGTH) + ` [... truncated ${line.length - MAX_LINE_LENGTH} chars]`
-        : line;
-      return `${String(start + i + 1).padStart(6)}|${truncated}`;
-    });
+    const numbered: string[] = [];
+    let charCount = 0;
+    let truncatedAtLine = -1;
 
-    const result = numbered.join("\n");
+    for (let i = start; i < end; i++) {
+      let line = allLines[i];
+      if (line.length > MAX_LINE_LENGTH) {
+        line = line.slice(0, MAX_LINE_LENGTH) + ` [... truncated ${allLines[i].length - MAX_LINE_LENGTH} chars]`;
+      }
+      const formatted = `${String(i + 1).padStart(6)}|${line}\n`;
 
-    if (end < allLines.length && limit === undefined) {
-      return result + `\n\n[File has ${allLines.length} lines total, showing first ${MAX_LINES}. Use offset/limit to read more.]`;
+      if (charCount + formatted.length > MAX_CHARS && limit === undefined) {
+        truncatedAtLine = i;
+        break;
+      }
+
+      numbered.push(formatted);
+      charCount += formatted.length;
+    }
+
+    const result = numbered.join("").trimEnd();
+
+    if (truncatedAtLine !== -1) {
+      const shown = truncatedAtLine - start;
+      return result + `\n\n[Output truncated: file has ${totalLines} lines (${raw.length} chars), showed lines ${start + 1}–${truncatedAtLine}. Use offset/limit to read the rest.]`;
+    }
+
+    if (end < totalLines && limit !== undefined) {
+      return result + `\n\n[Showing lines ${start + 1}–${end} of ${totalLines} total.]`;
     }
 
     return result;

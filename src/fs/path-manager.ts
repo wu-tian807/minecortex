@@ -15,7 +15,6 @@ export class PathManager implements PathManagerAPI {
       ["directives", join(this.projectRoot, "directives")],
       ["skills", join(this.projectRoot, "skills")],
       ["workspace", this.projectRoot],
-      ["terminals", join(this.projectRoot, "workspace", "terminals")],
       ["key", join(this.projectRoot, "key")],
     ]);
   }
