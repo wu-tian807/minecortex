@@ -1,6 +1,4 @@
-/** @desc 工具: 向其他脑发送自然语言消息，通过统一 Event 路由 */
-
-import type { ToolDefinition } from "../src/core/types.js";
+import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
 
 export default {
   name: "send_message",
@@ -9,37 +7,51 @@ export default {
     "Messages are delivered to the recipient's next tick. " +
     "Use '*' as target to broadcast to all brains. " +
     "After sending, output a brief confirmation and end your turn — do not wait for a reply.",
-  parameters: {
-    to: {
-      type: "string",
-      description: "Target brain ID (e.g. 'creative') or '*' for broadcast",
-      required: true,
+  input_schema: {
+    type: "object",
+    properties: {
+      to: {
+        type: "string",
+        description: "Target brain ID (e.g. 'creative') or '*' for broadcast",
+      },
+      content: {
+        type: "string",
+        description: "Message body in natural language",
+      },
+      summary: {
+        type: "string",
+        description: "Brief summary (5-10 words) for logs and inbox preview",
+      },
+      priority: {
+        type: "integer",
+        enum: [0, 1, 2],
+        description: "0=immediate, 1=normal (default), 2=low",
+      },
+      silent: {
+        type: "boolean",
+        description: "If true, queue only without triggering processing in recipient",
+      },
     },
-    content: {
-      type: "string",
-      description: "Message body in natural language",
-      required: true,
-    },
-    summary: {
-      type: "string",
-      description: "Brief summary (5-10 words) for logs and inbox preview",
-    },
+    required: ["to", "content"],
   },
-  async execute(args, ctx) {
+  async execute(args, ctx): Promise<ToolOutput> {
     const to = String(args.to).trim();
     const content = String(args.content).trim();
     const summary = String(args.summary ?? "").trim() || content.slice(0, 50);
+    const priority = (args.priority as number) ?? 1;
+    const silent = (args.silent as boolean) ?? false;
 
-    if (!to || !content) return { error: '"to" and "content" are required' };
+    if (!to || !content) return '"to" and "content" are required';
 
     ctx.emit({
       source: `brain:${ctx.brainId}`,
       type: "message",
       payload: { to, content, summary },
       ts: Date.now(),
-      priority: 0,
+      priority,
+      silent,
     });
 
-    return { ok: true, to, summary };
+    return `Message sent to '${to}': ${summary}`;
   },
 } satisfies ToolDefinition;
