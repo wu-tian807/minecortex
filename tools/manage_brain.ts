@@ -4,9 +4,10 @@ import { getScheduler } from "../src/core/scheduler.js";
 export default {
   name: "manage_brain",
   description:
-    "Manage brain lifecycle: list active brains, create a new brain, or start/stop/restart/shutdown/free a specific brain. " +
-    "create = new brain dir with defaults, start = launch existing brain, " +
-    "stop = pause (keep context), shutdown = stop + clear runtime, restart = shutdown + reinit, free = shutdown + delete BrainBoard entries.",
+    "Unified brain lifecycle management. " +
+    "create = new brain dir with config, start = launch existing brain, " +
+    "stop = pause (keep context), shutdown = stop + clear runtime, " +
+    "restart = shutdown + reinit, free = shutdown + delete BrainBoard entries.",
   input_schema: {
     type: "object",
     properties: {
@@ -18,6 +19,22 @@ export default {
       brain_id: {
         type: "string",
         description: "Target brain ID (required for all actions except list)",
+      },
+      model: {
+        type: "string",
+        description: "(create only) Model override for brain.json",
+      },
+      soul: {
+        type: "string",
+        description: "(create only) Custom soul.md content",
+      },
+      subscriptions: {
+        type: "object",
+        description: "(create only) Custom subscriptions selector",
+      },
+      auto_start: {
+        type: "boolean",
+        description: "(create only) Start the brain immediately after creation",
       },
     },
     required: ["action"],
@@ -37,11 +54,13 @@ export default {
 
     if (!brainId) return `brain_id is required for action '${action}'`;
 
-    if (action === "create") {
-      const result = await scheduler.createBrain(brainId);
-      return result.ok ? `Brain '${brainId}' created` : `Error: ${result.error}`;
-    }
+    const opts = action === "create" ? {
+      model: args.model ? String(args.model) : undefined,
+      soul: args.soul ? String(args.soul) : undefined,
+      subscriptions: args.subscriptions as Record<string, unknown> | undefined,
+      autoStart: Boolean(args.auto_start),
+    } : undefined;
 
-    return await scheduler.controlBrain(action, brainId);
+    return await scheduler.controlBrain(action, brainId, opts);
   },
 } satisfies ToolDefinition;

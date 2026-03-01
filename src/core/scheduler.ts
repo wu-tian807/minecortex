@@ -326,7 +326,7 @@ export class Scheduler {
   private static readonly DEFAULT_BRAIN_JSON = {
     model: null,
     subscriptions: { global: "none", enable: ["stdin"] },
-    tools: { global: "all", disable: ["create_brain", "manage_brain"] },
+    tools: { global: "all", disable: ["manage_brain"] },
     slots: { global: "all" },
   };
 
@@ -334,82 +334,75 @@ export class Scheduler {
     return `# ${id}\n\n你是 MineClaw 多脑系统中的 ${id} 脑区。\n\n## 职责\n- (请编辑此处)\n\n## 约束\n- 默认中文回复，代码注释用英文\n- 每步完成后简短汇报\n\n## 关系\n- 通过 send_message 与其他脑区协作\n- 用 manage_brain list 查看系统中所有活跃脑区\n\n## 工作方式\n1. 理解任务 → 拆解步骤\n2. 用工具直接执行\n3. 遇到问题先自己排查\n`;
   }
 
-  async createBrain(id: string, opts?: {
-    model?: string;
-    soul?: string;
-    subscriptions?: Record<string, unknown>;
-    autoStart?: boolean;
-  }): Promise<{ ok: boolean; error?: string }> {
-    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
-      return { ok: false, error: `Invalid brain id '${id}'. Use only alphanumeric, dash, underscore.` };
-    }
-
-    const brainDir = join(ROOT, "brains", id);
-
-    try {
-      await access(brainDir);
-      return { ok: false, error: `Brain directory already exists: brains/${id}/` };
-    } catch { /* doesn't exist — proceed */ }
-
-    await mkdir(brainDir, { recursive: true });
-
-    const brainJson = { ...Scheduler.DEFAULT_BRAIN_JSON } as Record<string, unknown>;
-    if (opts?.model) brainJson.model = opts.model;
-    if (opts?.subscriptions) brainJson.subscriptions = opts.subscriptions;
-
-    await writeFile(join(brainDir, "brain.json"), JSON.stringify(brainJson, null, 2) + "\n", "utf-8");
-    await writeFile(join(brainDir, "soul.md"), opts?.soul ?? Scheduler.defaultSoul(id), "utf-8");
-
-    this.logger.info("scheduler", 0, `Brain '${id}' created`);
-
-    if (opts?.autoStart) {
-      return { ok: true, ...(await this.startBrain(id)) };
-    }
-    return { ok: true };
-  }
-
   listBrains(): string[] {
     return [...this.slots.keys()];
   }
 
-  private async startBrain(id: string): Promise<{ error?: string }> {
-    if (this.slots.has(id)) return { error: `Brain '${id}' is already running` };
-
-    const brainDir = join(ROOT, "brains", id);
-    if (!existsSync(brainDir)) return { error: `Brain directory not found: brains/${id}/` };
-
-    const globalConfig = await this.loadGlobalConfig();
-    await this.initBrain(id, globalConfig);
-    const slot = this.slots.get(id);
-    if (slot) {
-      slot.brain.run(slot.abortController.signal)
-        .catch(err => this.logger.error("scheduler", 0, `brain '${id}' loop crashed`, err));
-    }
-    return {};
-  }
-
-  async controlBrain(action: string, target: string): Promise<string> {
-    if (action === "start") {
-      const result = await this.startBrain(target);
-      return result.error ?? `Brain '${target}' started`;
-    }
-
-    const slot = this.slots.get(target);
-    if (!slot) return `Unknown brain: '${target}'`;
-
+  async controlBrain(action: string, target: string, opts?: {
+    model?: string;
+    soul?: string;
+    subscriptions?: Record<string, unknown>;
+    autoStart?: boolean;
+  }): Promise<string> {
     this.logger.info("scheduler", 0, `brain_control: ${action} → '${target}'`);
 
     switch (action) {
-      case "stop":
+      case "create": {
+        if (!/^[a-zA-Z0-9_-]+$/.test(target)) {
+          return `Invalid brain id '${target}'. Use only alphanumeric, dash, underscore.`;
+        }
+        const brainDir = join(ROOT, "brains", target);
+        try {
+          await access(brainDir);
+          return `Brain directory already exists: brains/${target}/`;
+        } catch { /* doesn't exist — proceed */ }
+
+        await mkdir(brainDir, { recursive: true });
+        const brainJson = { ...Scheduler.DEFAULT_BRAIN_JSON } as Record<string, unknown>;
+        if (opts?.model) brainJson.model = opts.model;
+        if (opts?.subscriptions) brainJson.subscriptions = opts.subscriptions;
+        await writeFile(join(brainDir, "brain.json"), JSON.stringify(brainJson, null, 2) + "\n", "utf-8");
+        await writeFile(join(brainDir, "soul.md"), opts?.soul ?? Scheduler.defaultSoul(target), "utf-8");
+
+        if (opts?.autoStart) {
+          return await this.controlBrain("start", target);
+        }
+        return `Brain '${target}' created`;
+      }
+
+      case "start": {
+        if (this.slots.has(target)) return `Brain '${target}' is already running`;
+        const brainDir = join(ROOT, "brains", target);
+        if (!existsSync(brainDir)) return `Brain directory not found: brains/${target}/`;
+
+        const globalConfig = await this.loadGlobalConfig();
+        await this.initBrain(target, globalConfig);
+        const slot = this.slots.get(target);
+        if (slot) {
+          slot.brain.run(slot.abortController.signal)
+            .catch(err => this.logger.error("scheduler", 0, `brain '${target}' loop crashed`, err));
+        }
+        return `Brain '${target}' started`;
+      }
+
+      case "stop": {
+        const slot = this.slots.get(target);
+        if (!slot) return `Unknown brain: '${target}'`;
         slot.brain.stop?.();
         return `Brain '${target}' stopped`;
+      }
 
-      case "shutdown":
+      case "shutdown": {
+        const slot = this.slots.get(target);
+        if (!slot) return `Unknown brain: '${target}'`;
         await slot.brain.shutdown?.();
         slot.abortController.abort();
         return `Brain '${target}' shut down`;
+      }
 
       case "restart": {
+        const slot = this.slots.get(target);
+        if (!slot) return `Unknown brain: '${target}'`;
         await slot.brain.shutdown?.();
         slot.abortController.abort();
         this.slots.delete(target);
@@ -423,11 +416,14 @@ export class Scheduler {
         return `Brain '${target}' restarted`;
       }
 
-      case "free":
+      case "free": {
+        const slot = this.slots.get(target);
+        if (!slot) return `Unknown brain: '${target}'`;
         await slot.brain.free?.();
         slot.abortController.abort();
         this.slots.delete(target);
         return `Brain '${target}' freed`;
+      }
 
       default:
         return `Unknown action: '${action}'`;
