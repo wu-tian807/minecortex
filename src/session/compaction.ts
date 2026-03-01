@@ -93,43 +93,76 @@ export function repairToolPairing(messages: LLMMessage[]): LLMMessage[] {
   return result;
 }
 
+export type LLMSummarizer = (messages: LLMMessage[]) => Promise<string>;
+
 /**
- * Generate a structured summary for compaction.
- * Summarizes the oldest `ratio` portion of messages.
+ * Split messages at `ratio`, then generate a summary for the older portion.
+ * When `summarizer` is provided, uses LLM for real summarization.
+ * Falls back to a mechanical template extraction when no summarizer is given.
  */
-export function summarizeForCompaction(
+export async function summarizeForCompaction(
   messages: LLMMessage[],
   ratio = 0.7,
-): { summary: LLMMessage; keptMessages: LLMMessage[] } {
+  summarizer?: LLMSummarizer,
+): Promise<{ summary: LLMMessage; keptMessages: LLMMessage[] }> {
   const splitIdx = Math.max(1, Math.floor(messages.length * ratio));
 
-  let toSummarize = messages.slice(0, splitIdx);
-  let kept = messages.slice(splitIdx);
+  const toSummarize = messages.slice(0, splitIdx);
+  const kept = messages.slice(splitIdx);
 
-  // Never split in the middle of a tool call / tool result pair
   while (kept.length > 0 && kept[0].role === "tool") {
     toSummarize.push(kept.shift()!);
   }
 
+  let summaryText: string;
+
+  if (summarizer) {
+    summaryText = await summarizer(toSummarize);
+  } else {
+    summaryText = templateSummary(toSummarize, kept);
+  }
+
+  const summary: LLMMessage = {
+    role: "user",
+    content: summaryText,
+    ts: Date.now(),
+  };
+
+  return { summary, keptMessages: kept };
+}
+
+function templateSummary(toSummarize: LLMMessage[], kept: LLMMessage[]): string {
   const tasks: string[] = [];
   const discoveries: string[] = [];
   const toolsUsed: string[] = [];
+  const userMessages: string[] = [];
+  const errors: string[] = [];
   let lastUserMessage = "";
 
   for (const msg of toSummarize) {
+    const text = extractText(msg.content);
+
     if (msg.role === "user") {
-      const text = extractText(msg.content);
       if (text) lastUserMessage = text;
       if (text && !tasks.includes(text.slice(0, 120))) {
         tasks.push(text.slice(0, 120));
       }
+      if (text) userMessages.push(text.slice(0, 200));
     }
+
     if (msg.role === "assistant") {
-      const text = extractText(msg.content);
       if (text && text.length > 30) {
         discoveries.push(text.slice(0, 200));
       }
     }
+
+    if (msg.role === "tool" && text) {
+      const lower = text.toLowerCase();
+      if (lower.includes("error") || lower.includes("fail") || lower.includes("exception")) {
+        errors.push(text.slice(0, 200));
+      }
+    }
+
     if (msg.toolCalls) {
       for (const tc of msg.toolCalls) {
         if (!toolsUsed.includes(tc.name)) toolsUsed.push(tc.name);
@@ -139,37 +172,41 @@ export function summarizeForCompaction(
 
   const keptText = kept.length > 0 ? extractText(kept[0].content) : "";
 
-  const summaryText = [
+  return [
     "# Compacted Session Summary",
     "",
     "## Task Overview",
     tasks.length > 0 ? tasks.map(t => `- ${t}`).join("\n") : "- (general conversation)",
     "",
     "## Current State",
-    `- Last user request: ${lastUserMessage.slice(0, 200) || "(none)"}`,
+    `- Last user request: ${lastUserMessage.slice(0, 300) || "(none)"}`,
     `- Messages compacted: ${toSummarize.length}`,
     `- Messages remaining: ${kept.length}`,
     "",
-    "## Key Discoveries",
+    "## Key Discoveries & Errors",
     discoveries.length > 0
       ? discoveries.slice(-5).map(d => `- ${d}`).join("\n")
       : "- (none recorded)",
+    errors.length > 0
+      ? "\n### Errors Encountered\n" + errors.slice(-5).map(e => `- ${e}`).join("\n")
+      : "",
+    "",
+    "## User Messages",
+    userMessages.length > 0
+      ? userMessages.slice(-8).map(m => `- ${m}`).join("\n")
+      : "- (none)",
     "",
     "## Tools Used",
     toolsUsed.length > 0 ? toolsUsed.map(t => `- ${t}`).join("\n") : "- (none)",
     "",
+    "## Pending Tasks & Next Steps",
+    `- Continue from: ${lastUserMessage.slice(0, 200) || "(conversation end)"}`,
+    keptText ? `- Next context: ${keptText.slice(0, 200)}` : "",
+    "",
     "## Context to Preserve",
-    `- Continue from where the conversation left off`,
-    keptText ? `- Next context: ${keptText.slice(0, 150)}` : "",
+    `- Session had ${toSummarize.length + kept.length} total messages`,
+    toolsUsed.length > 0 ? `- Active tool set: ${toolsUsed.join(", ")}` : "",
   ].join("\n");
-
-  const summary: LLMMessage = {
-    role: "user",
-    content: summaryText,
-    ts: Date.now(),
-  };
-
-  return { summary, keptMessages: kept };
 }
 
 function extractText(content: string | ContentPart[]): string {

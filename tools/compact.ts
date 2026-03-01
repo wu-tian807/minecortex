@@ -1,42 +1,84 @@
-import { readFile, writeFile, rename } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
 import type { LLMMessage } from "../src/llm/types.js";
-import { estimateTokens } from "../src/core/token-stats.js";
 import { summarizeForCompaction, repairToolPairing, microCompact } from "../src/session/compaction.js";
+import { createProvider } from "../src/llm/provider.js";
+import { assembleResponse } from "../src/llm/stream.js";
+
+const SUMMARIZE_PROMPT = `You are a session compaction assistant. Your task is to create a continuation summary that allows efficient resumption of work in a new context window where the conversation history will be replaced with this summary.
+
+Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts. In your analysis:
+1. Chronologically walk through each message, identifying the user's requests, your approach, key decisions, and specific details (file names, code snippets, function signatures).
+2. Note errors encountered and how they were resolved, especially user corrections.
+3. Double-check for technical accuracy and completeness.
+
+Then provide your structured summary in <summary> tags with these sections:
+
+1. Task Overview
+   - The user's core request and success criteria
+   - Clarifications or constraints they specified
+
+2. Current State
+   - What has been completed so far
+   - Files created, modified, or analyzed (with paths)
+   - Key outputs or artifacts produced
+
+3. Key Discoveries & Errors
+   - Technical constraints or requirements uncovered
+   - Decisions made and their rationale
+   - Errors encountered and how they were resolved
+   - Approaches tried that didn't work (and why)
+
+4. User Messages
+   - List all non-tool-result user messages (to preserve intent drift and feedback)
+
+5. Pending Tasks & Next Steps
+   - Specific actions needed to complete the task
+   - Any blockers or open questions
+   - Priority order if multiple steps remain
+   - Include direct quotes from the most recent exchange showing where you left off
+
+6. Context to Preserve
+   - User preferences or style requirements
+   - Domain-specific details that aren't obvious
+   - Any promises made to the user
+
+Be concise but complete — err on the side of including information that would prevent duplicate work or repeated mistakes. Write in a way that enables immediate resumption of the task.`;
 
 export default {
   name: "compact",
   description:
-    "Compact the current session history to free up context window space. " +
-    "Summarizes the oldest 70% of messages and keeps the newest 30% intact. " +
-    "Archives the original session as a .bak file.",
+    "Compact the current session by summarizing old messages into a new session. " +
+    "The original session is preserved intact. A new session is created with " +
+    "the summary + newest 30% of messages, and the session pointer is switched.",
   input_schema: {
     type: "object",
-    properties: {},
+    properties: {
+      instructions: {
+        type: "string",
+        description: "Custom instructions for the summarizer, e.g. 'Focus on game state and bot actions'",
+      },
+    },
     required: [],
   },
-  async execute(_args, ctx): Promise<ToolOutput> {
-    const sessionJsonPath = join(ctx.pathManager.brainDir(ctx.brainId), "session.json");
-    let currentSessionId: string;
+  async execute(args, ctx): Promise<ToolOutput> {
+    const brainDir = ctx.pathManager.brainDir(ctx.brainId);
+    const sessionJsonPath = join(brainDir, "session.json");
+
+    let sessionData: { currentSessionId: string; [k: string]: unknown };
     try {
-      const raw = await readFile(sessionJsonPath, "utf-8");
-      const data = JSON.parse(raw);
-      currentSessionId = data.currentSessionId;
+      sessionData = JSON.parse(await readFile(sessionJsonPath, "utf-8"));
     } catch {
       return "No active session found.";
     }
 
-    const messagesPath = join(
-      ctx.pathManager.brainDir(ctx.brainId),
-      "sessions",
-      currentSessionId,
-      "messages.jsonl",
-    );
+    const oldSessionId = sessionData.currentSessionId;
+    const oldMessagesPath = join(brainDir, "sessions", oldSessionId, "messages.jsonl");
 
     let rawContent: string;
     try {
-      rawContent = await readFile(messagesPath, "utf-8");
+      rawContent = await readFile(oldMessagesPath, "utf-8");
     } catch {
       return "Session messages file not found.";
     }
@@ -48,37 +90,73 @@ export default {
 
     const messages: LLMMessage[] = lines.map(l => JSON.parse(l));
 
-    const tokensBefore = messages.reduce(
-      (sum, m) => sum + estimateTokens(m.content),
-      0,
-    );
+    const lastUsage = [...messages].reverse().find(m => m.usage)?.usage;
+    const tokensBefore = lastUsage
+      ? lastUsage.inputTokens + lastUsage.outputTokens
+      : 0;
 
     const compacted = microCompact(messages, { keepToolResults: 3, keepMedias: 2 });
     const repaired = repairToolPairing(compacted);
-    const { summary, keptMessages } = summarizeForCompaction(repaired);
 
-    const summaryTokens = estimateTokens(summary.content);
+    let modelName: string | undefined;
+    try {
+      const brainJson = JSON.parse(await readFile(join(brainDir, "brain.json"), "utf-8"));
+      modelName = brainJson.model as string | undefined;
+      if (Array.isArray(modelName)) modelName = modelName[0];
+    } catch { /* no brain.json */ }
 
+    const customInstructions = args.instructions as string | undefined;
+
+    let summarizer: ((msgs: LLMMessage[]) => Promise<string>) | undefined;
+    if (modelName) {
+      try {
+        const provider = createProvider(modelName);
+        summarizer = async (msgs: LLMMessage[]) => {
+          const conversationText = msgs
+            .map(m => {
+              const text = typeof m.content === "string" ? m.content : "[multimodal]";
+              return `[${m.role}] ${text.slice(0, 500)}`;
+            })
+            .join("\n");
+
+          let systemPrompt = SUMMARIZE_PROMPT;
+          if (customInstructions) {
+            systemPrompt += `\n\n## Custom Compact Instructions\n${customInstructions}`;
+          }
+
+          const stream = provider.chatStream(
+            [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: `Conversation to summarize (${msgs.length} messages):\n\n${conversationText}` },
+            ],
+            [],
+            ctx.signal,
+          );
+          const resp = await assembleResponse(stream);
+          return typeof resp.content === "string" ? resp.content : "[summary generation failed]";
+        };
+      } catch { /* LLM unavailable */ }
+    }
+
+    const { summary, keptMessages } = await summarizeForCompaction(repaired, 0.7, summarizer);
     const newMessages = [summary, ...keptMessages];
-    const tokensAfter = newMessages.reduce(
-      (sum, m) => sum + estimateTokens(m.content),
-      0,
-    );
 
-    const bakPath = messagesPath + ".bak";
-    await rename(messagesPath, bakPath);
+    const newSessionId = `s_${Date.now()}`;
+    const newSessionDir = join(brainDir, "sessions", newSessionId);
+    await mkdir(newSessionDir, { recursive: true });
 
     const newContent = newMessages.map(m => JSON.stringify(m)).join("\n") + "\n";
-    await writeFile(messagesPath, newContent, "utf-8");
+    await writeFile(join(newSessionDir, "messages.jsonl"), newContent, "utf-8");
 
-    ctx.brainBoard.set(ctx.brainId, "tokens.lastInputTokens", tokensAfter);
+    sessionData.currentSessionId = newSessionId;
+    await writeFile(sessionJsonPath, JSON.stringify(sessionData, null, 2), "utf-8");
 
-    return [
-      `Compaction complete.`,
-      `  Messages: ${messages.length} → ${newMessages.length}`,
-      `  Tokens (est): ${tokensBefore} → ${tokensAfter}`,
-      `  Summary tokens: ${summaryTokens}`,
-      `  Original archived: ${bakPath}`,
-    ].join("\n");
+    console.log(
+      `[compact] ${oldSessionId} → ${newSessionId} | msgs: ${messages.length} → ${newMessages.length}` +
+      (tokensBefore ? ` | tokens before: ${tokensBefore}` : "") +
+      ` | summarizer: ${summarizer ? "LLM" : "template"}`,
+    );
+
+    return `Compaction complete. Old session ${oldSessionId} preserved, now using ${newSessionId}.`;
   },
 } satisfies ToolDefinition;
