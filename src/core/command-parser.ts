@@ -1,17 +1,19 @@
 export interface ParsedCommand {
   toolName: string;
-  target: string;       // "all" (broadcast), "/" (CLI mode), "<brain_id>" (specific brain)
+  target: string;       // "/" (current stdin brain) or "<brain_id>" (specific brain)
   args: Record<string, string>;
 }
 
 /**
  * Parse a slash command string.
- * Syntax: /<tool-name> <target> -param1 value1 -param2 value2
+ * Syntax: /<tool-name> [target] -param1 value1 -param2 value2
+ *
+ * target defaults to "/" (current brain). Use a brain_id to target another brain.
  *
  * Examples:
- *   /compact /               → { toolName: "compact", target: "/", args: {} }
- *   /focus architect         → { toolName: "focus", target: "architect", args: {} }
- *   /shell all -command ls   → { toolName: "shell", target: "all", args: { command: "ls" } }
+ *   /compact                 → { toolName: "compact", target: "/", args: {} }
+ *   /compact responder       → { toolName: "compact", target: "responder", args: {} }
+ *   /shell responder -cmd ls → { toolName: "shell", target: "responder", args: { cmd: "ls" } }
  */
 export function parseCommand(input: string): ParsedCommand | null {
   const trimmed = input.trim();

@@ -72,7 +72,6 @@ const create: SlotFactory = (ctx): ContextSlot => {
 
   return {
     id: "context-file:current",
-    kind: "dynamic",
     order: 60,
     priority: 5,
     content: () => buildFocusContent(defaultPath),

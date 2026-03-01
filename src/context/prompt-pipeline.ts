@@ -1,5 +1,4 @@
 import type { ModelSpec } from "../core/types.js";
-import type { LLMMessage } from "../llm/types.js";
 import type { ContextSlot } from "./types.js";
 import { estimateTokens } from "../core/token-stats.js";
 
@@ -16,7 +15,7 @@ function resolveContent(slot: ContextSlot): string {
 }
 
 function renderTemplate(text: string, vars: Record<string, string>): string {
-  return text.replace(/\$\{(\w+)\}/g, (_, key) => vars[key] ?? "");
+  return text.replace(/\$\{([\w.]+)\}/g, (_, key) => vars[key] ?? "");
 }
 
 // ─── Stage 1: Resolve — evaluate lazy content ───
@@ -92,28 +91,11 @@ export function assembleSystemPrompt(
   spec?: Pick<ModelSpec, "tokensPerChar">,
   vars: Record<string, string> = {},
 ): string {
-  const system = slots.filter(
-    (s) => s.kind === "system" || s.kind === "dynamic",
-  );
-
-  let resolved = resolveSlots(system, spec);
+  let resolved = resolveSlots(slots, spec);
   resolved = filterSlots(resolved);
   resolved = sortSlots(resolved);
   resolved = renderSlots(resolved, vars);
   resolved = budgetSlots(resolved, tokenBudget, spec);
 
   return resolved.map((r) => r.text).filter(Boolean).join("\n\n");
-}
-
-export function assembleMessages(slots: ContextSlot[]): LLMMessage[] {
-  const message = slots.filter((s) => s.kind === "message");
-
-  let resolved = resolveSlots(message);
-  resolved = filterSlots(resolved);
-  resolved = sortSlots(resolved);
-
-  return resolved.map((r) => ({
-    role: "user" as const,
-    content: r.text,
-  }));
 }

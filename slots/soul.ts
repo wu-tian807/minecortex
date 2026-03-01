@@ -9,7 +9,6 @@ const create: SlotFactory = (ctx): ContextSlot => {
 
   return {
     id: "soul",
-    kind: "system",
     order: 1,
     priority: 10,
     content: () => {

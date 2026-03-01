@@ -1,10 +1,7 @@
 import type { BrainBoardAPI } from '../core/types.js';
 
-export type SlotKind = 'system' | 'dynamic' | 'message';
-
 export interface ContextSlot {
   id: string;
-  kind: SlotKind;
   order: number;
   priority: number;
   condition?: () => boolean;

@@ -26,6 +26,7 @@ import { TerminalManager } from "../terminal/manager.js";
 import { SessionManager } from "../session/session-manager.js";
 import { Logger } from "./logger.js";
 import { createProvider, createFallbackProvider, getModelSpec } from "../llm/provider.js";
+import { BrainHooks } from "../hooks/brain-hooks.js";
 
 const ROOT = process.cwd();
 
@@ -38,10 +39,10 @@ interface BrainSlot {
 
 export class Scheduler {
   private eventBus = new EventBus();
-  private brainBoard = new BrainBoard();
+  private brainBoard = new BrainBoard(join(ROOT, "brains"));
   private pathManager = new PathManager(ROOT);
   private terminalManager = new TerminalManager(this.pathManager);
-  private logger = new Logger(ROOT);
+  private logger = new Logger(ROOT, this.pathManager);
   private fsWatcher: FSWatcher | null = null;
   private slots = new Map<string, BrainSlot>();
   private shuttingDown = false;
@@ -50,8 +51,11 @@ export class Scheduler {
   async start(): Promise<void> {
     this.logger.info("scheduler", 0, "启动中...");
 
+    this.brainBoard.loadFromDisk();
+
     try {
       this.fsWatcher = new FSWatcher(ROOT);
+      this.brainBoard.registerFSWatcher(this.fsWatcher);
     } catch {
       this.logger.warn("scheduler", 0, "FSWatcher creation failed — hot-reload disabled");
     }
@@ -66,6 +70,31 @@ export class Scheduler {
 
     for (const brainId of brainIds) {
       await this.initBrain(brainId, globalConfig);
+    }
+
+    this.eventBus.onAny((event) => {
+      if (event.type === "brain_control") {
+        this.handleBrainControl(event).catch(err =>
+          this.logger.error("scheduler", 0, "brain_control handler failed", err),
+        );
+      }
+    });
+
+    if (this.fsWatcher) {
+      this.fsWatcher.register(/brains\/([^/]+)\/brain\.json$/, async (evt) => {
+        const match = evt.path.match(/brains\/([^/]+)\/brain\.json$/);
+        if (!match) return;
+        const brainId = match[1];
+        this.logger.info("scheduler", 0, `brain.json changed for '${brainId}', reloading config...`);
+        const slot = this.slots.get(brainId);
+        if (slot) {
+          await this.terminalManager.loadBrainEnv(brainId);
+        }
+      });
+
+      this.fsWatcher.register(/directives\/[^/]+\.md$/, () => {
+        this.logger.info("scheduler", 0, "Directive file changed (hot-reload via slot re-read on next prompt)");
+      });
     }
 
     for (const [id, slot] of this.slots) {
@@ -103,9 +132,15 @@ export class Scheduler {
     const abortController = new AbortController();
     const brainDir = this.pathManager.brainDir(brainId);
 
+    await this.terminalManager.loadBrainEnv(brainId);
+
     this.eventBus.register(brainId, queue);
 
     const emitFn = (event: Event): void => {
+      if (event.type === "brain_control") {
+        this.eventBus.emit(event, brainId);
+        return;
+      }
       const to = (event.payload as any)?.to as string | undefined;
       if (to && to !== brainId) {
         this.eventBus.emit(event, brainId);
@@ -114,9 +149,25 @@ export class Scheduler {
       }
     };
 
+    const hooks = new BrainHooks();
+
+    let brainRef: ConsciousBrain | null = null;
+
     const subLoader = new SubscriptionLoader();
     subLoader.setEmitter(emitFn);
     subLoader.setBrainBoard(this.brainBoard);
+    subLoader.setHooks(hooks);
+    subLoader.setCommandHandler((toolName, args, target, reason) => {
+      const effectiveTarget = (!target || target === "/") ? brainId : target;
+      const slot = this.slots.get(effectiveTarget);
+      if (slot && "queueCommand" in slot.brain) {
+        (slot.brain as ConsciousBrain).queueCommand(toolName, args, reason);
+      } else if (effectiveTarget === brainId) {
+        brainRef?.queueCommand(toolName, args, reason);
+      } else {
+        this.logger.warn("scheduler", 0, `command target '${effectiveTarget}' not found or not a ConsciousBrain`);
+      }
+    });
 
     const selectorSub = brainConfig.subscriptions ?? { global: "all" as const };
     const sources = await subLoader.load({
@@ -137,7 +188,6 @@ export class Scheduler {
       });
 
       this.slots.set(brainId, { brain, queue, abortController, sources });
-      this.brainBoard.set("__scheduler", `brain:${brainId}`, { status: "ready", type: "script" });
       this.logger.info("scheduler", 0, `ScriptBrain '${brainId}' 就绪`);
       return;
     }
@@ -231,16 +281,63 @@ export class Scheduler {
       eventBus: this.eventBus,
       sources,
       workspace: ROOT,
+      hooks,
     });
 
-    this.brainBoard.set(brainId, "model", modelName);
+    brainRef = brain;
     this.slots.set(brainId, { brain, queue, abortController, sources });
-    this.brainBoard.set("__scheduler", `brain:${brainId}`, { status: "ready", type: "conscious" });
 
     this.logger.info(
       "scheduler", 0,
       `脑区 '${brainId}' 就绪 (model: ${modelName}, tools: [${tools.map(t => t.name).join(",")}])`,
     );
+  }
+
+  private async handleBrainControl(event: Event): Promise<void> {
+    const { action, target } = event.payload as { action: string; target: string };
+    const slot = this.slots.get(target);
+
+    if (!slot) {
+      this.logger.warn("scheduler", 0, `brain_control: unknown brain '${target}'`);
+      return;
+    }
+
+    const brain = slot.brain;
+    this.logger.info("scheduler", 0, `brain_control: ${action} → '${target}'`);
+
+    switch (action) {
+      case "stop":
+        brain.stop?.();
+        break;
+
+      case "shutdown":
+        await brain.shutdown?.();
+        slot.abortController.abort();
+        break;
+
+      case "restart": {
+        await brain.shutdown?.();
+        slot.abortController.abort();
+        this.slots.delete(target);
+        const globalConfig = await this.loadGlobalConfig();
+        await this.initBrain(target, globalConfig);
+        const newSlot = this.slots.get(target);
+        if (newSlot) {
+          newSlot.brain.run(newSlot.abortController.signal)
+            .catch(err => this.logger.error("scheduler", 0, `brain '${target}' loop crashed after restart`, err));
+        }
+        break;
+      }
+
+      case "free":
+        await brain.free?.();
+        slot.abortController.abort();
+        this.slots.delete(target);
+        break;
+
+      default:
+        this.logger.warn("scheduler", 0, `brain_control: unknown action '${action}'`);
+    }
   }
 
   private setupSignalHandlers(): void {

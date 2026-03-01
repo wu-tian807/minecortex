@@ -1,6 +1,7 @@
-import { createWriteStream, statSync, renameSync, existsSync } from "node:fs";
+import { createWriteStream, statSync, renameSync, existsSync, mkdirSync } from "node:fs";
 import type { WriteStream } from "node:fs";
 import { join } from "node:path";
+import type { PathManagerAPI } from "./types.js";
 
 export enum LogLevel {
   DEBUG = 0,
@@ -28,23 +29,65 @@ function ts(): string {
   return `${hh}:${mm}:${ss}.${ms}`;
 }
 
-export class Logger {
-  private stream: WriteStream;
+/** Per-brain file logger with latest.log (INFO+) + debug.log (all levels) */
+class BrainFileLogger {
+  private debugStream: WriteStream;
+  private latestStream: WriteStream;
+  private debugBytes = 0;
+  private debugPath: string;
   private queue: string[] = [];
   private writing = false;
   private closed = false;
-  private bytesWritten = 0;
-  private logPath: string;
+
+  constructor(logDir: string) {
+    mkdirSync(logDir, { recursive: true });
+    this.debugPath = join(logDir, "debug.log");
+    this.debugStream = createWriteStream(this.debugPath, { flags: "a" });
+    this.latestStream = createWriteStream(join(logDir, "latest.log"), { flags: "w" });
+    try { this.debugBytes = statSync(this.debugPath).size; } catch { this.debugBytes = 0; }
+  }
+
+  write(line: string, isImportant: boolean): void {
+    this.debugStream.write(line);
+    this.debugBytes += Buffer.byteLength(line);
+    if (this.debugBytes >= MAX_FILE_SIZE) this.rotateDebug();
+    if (isImportant) this.latestStream.write(line);
+  }
+
+  private rotateDebug(): void {
+    this.debugStream.end();
+    for (let i = MAX_ROTATIONS - 1; i >= 1; i--) {
+      const from = `${this.debugPath}.${i}`;
+      const to = `${this.debugPath}.${i + 1}`;
+      if (existsSync(from)) renameSync(from, to);
+    }
+    if (existsSync(this.debugPath)) renameSync(this.debugPath, `${this.debugPath}.1`);
+    this.debugStream = createWriteStream(this.debugPath, { flags: "a" });
+    this.debugBytes = 0;
+  }
+
+  close(): void {
+    this.debugStream.end();
+    this.latestStream.end();
+  }
+}
+
+export class Logger {
+  private pathManager: PathManagerAPI | null;
+  private brainLoggers = new Map<string, BrainFileLogger>();
+  private rootDir: string;
+  private globalDebugStream: WriteStream;
+  private globalDebugPath: string;
+  private globalDebugBytes = 0;
+  private closed = false;
   public level: LogLevel = LogLevel.DEBUG;
 
-  constructor(rootDir: string) {
-    this.logPath = join(rootDir, "debug.log");
-    this.stream = createWriteStream(this.logPath, { flags: "a" });
-    try {
-      this.bytesWritten = statSync(this.logPath).size;
-    } catch {
-      this.bytesWritten = 0;
-    }
+  constructor(rootDir: string, pathManager?: PathManagerAPI) {
+    this.rootDir = rootDir;
+    this.pathManager = pathManager ?? null;
+    this.globalDebugPath = join(rootDir, "debug.log");
+    this.globalDebugStream = createWriteStream(this.globalDebugPath, { flags: "a" });
+    try { this.globalDebugBytes = statSync(this.globalDebugPath).size; } catch { this.globalDebugBytes = 0; }
   }
 
   debug(brainId: string, turn: number, msg: string, err?: Error): void {
@@ -70,48 +113,58 @@ export class Logger {
     if (err) line += `\n  ${err.stack ?? err.message}`;
     line += "\n";
 
-    if (level >= LogLevel.INFO) process.stdout.write(line);
+    switch (level) {
+      case LogLevel.DEBUG:
+        process.stderr.write(line);
+        break;
+      case LogLevel.INFO:
+        process.stdout.write(line);
+        break;
+      case LogLevel.WARN:
+      case LogLevel.ERROR:
+        process.stderr.write(line);
+        break;
+    }
 
-    this.queue.push(line);
-    this.drainQueue();
+    this.globalDebugStream.write(line);
+    this.globalDebugBytes += Buffer.byteLength(line);
+    if (this.globalDebugBytes >= MAX_FILE_SIZE) this.rotateGlobal();
+
+    const baseBrainId = brainId.split(":")[0];
+    if (baseBrainId && baseBrainId !== "scheduler" && this.pathManager) {
+      const logger = this.getOrCreateBrainLogger(baseBrainId);
+      logger.write(line, level >= LogLevel.INFO);
+    }
   }
 
-  private drainQueue(): void {
-    if (this.writing || this.closed || this.queue.length === 0) return;
-    this.writing = true;
-
-    const chunk = this.queue.join("");
-    this.queue.length = 0;
-
-    this.stream.write(chunk, (writeErr) => {
-      this.writing = false;
-      if (!writeErr) {
-        this.bytesWritten += Buffer.byteLength(chunk);
-        if (this.bytesWritten >= MAX_FILE_SIZE) this.rotate();
-      }
-      if (this.queue.length > 0) this.drainQueue();
-    });
+  private getOrCreateBrainLogger(brainId: string): BrainFileLogger {
+    let bl = this.brainLoggers.get(brainId);
+    if (!bl) {
+      const logDir = join(this.pathManager!.brainDir(brainId), "logs");
+      bl = new BrainFileLogger(logDir);
+      this.brainLoggers.set(brainId, bl);
+    }
+    return bl;
   }
 
-  private rotate(): void {
-    this.stream.end();
+  private rotateGlobal(): void {
+    this.globalDebugStream.end();
     for (let i = MAX_ROTATIONS - 1; i >= 1; i--) {
-      const from = `${this.logPath}.${i}`;
-      const to = `${this.logPath}.${i + 1}`;
+      const from = `${this.globalDebugPath}.${i}`;
+      const to = `${this.globalDebugPath}.${i + 1}`;
       if (existsSync(from)) renameSync(from, to);
     }
-    if (existsSync(this.logPath)) renameSync(this.logPath, `${this.logPath}.1`);
-    this.stream = createWriteStream(this.logPath, { flags: "a" });
-    this.bytesWritten = 0;
+    if (existsSync(this.globalDebugPath)) renameSync(this.globalDebugPath, `${this.globalDebugPath}.1`);
+    this.globalDebugStream = createWriteStream(this.globalDebugPath, { flags: "a" });
+    this.globalDebugBytes = 0;
   }
 
   async flush(): Promise<void> {
-    if (this.queue.length > 0) this.drainQueue();
     return new Promise((resolve) => {
-      if (!this.stream.writableNeedDrain) {
+      if (!this.globalDebugStream.writableNeedDrain) {
         resolve();
       } else {
-        this.stream.once("drain", resolve);
+        this.globalDebugStream.once("drain", resolve);
       }
     });
   }
@@ -119,6 +172,8 @@ export class Logger {
   async close(): Promise<void> {
     this.closed = true;
     await this.flush();
-    return new Promise((resolve) => this.stream.end(resolve));
+    for (const bl of this.brainLoggers.values()) bl.close();
+    this.brainLoggers.clear();
+    return new Promise((resolve) => this.globalDebugStream.end(resolve));
   }
 }

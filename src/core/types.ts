@@ -24,11 +24,15 @@ export interface EventQueueInterface {
 
 export type ContentPart =
   | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
+  | { type: "image"; data: string; mimeType: string }
+  | { type: "video"; data: string; mimeType: string }
+  | { type: "audio"; data: string; mimeType: string };
 
 export type SerializedPart =
   | ContentPart
-  | { type: "image_ref"; path: string; mimeType: string };
+  | { type: "image_ref"; path: string; mimeType: string }
+  | { type: "video_ref"; path: string; mimeType: string }
+  | { type: "audio_ref"; path: string; mimeType: string };
 
 // ─── Model Spec ───
 
@@ -64,6 +68,8 @@ export interface BrainJson {
   slots?: CapabilitySelector;
   session?: { keepToolResults?: number; keepMedias?: number };
   env?: Record<string, string>;
+  vars?: Record<string, string>;
+  timezone?: string;
 }
 
 export interface MineclawConfig {
@@ -79,6 +85,7 @@ export type ToolOutput = string | ContentPart[];
 export interface ToolDefinition {
   name: string;
   description: string;
+  ccVersion?: string;
   input_schema: {
     type: "object";
     properties: Record<string, any>;
@@ -96,6 +103,8 @@ export interface ToolContext {
   pathManager: PathManagerAPI;
   terminalManager: TerminalManagerAPI;
   workspace: string;
+  /** Register a background promise so the parent brain can await it on shutdown. */
+  trackBackgroundTask?: (p: Promise<unknown>) => void;
 }
 
 export interface DynamicSlotAPI {
@@ -113,8 +122,13 @@ export interface BrainBoardAPI {
   set(brainId: string, key: string, value: unknown): void;
   get(brainId: string, key: string): unknown;
   remove(brainId: string, key: string): void;
+  removeAll(brainId: string): void;
+  removeByPrefix(prefix: string): void;
   getAll(brainId: string): Record<string, unknown>;
+  brainIds(): string[];
   watch(brainId: string, key: string, cb: WatchCallback): () => void;
+  loadFromDisk(): void;
+  registerFSWatcher(watcher: FSWatcherAPI): void;
 }
 
 // ─── EventSource (pluggable subscription, factory pattern) ───
@@ -124,6 +138,8 @@ export interface SourceContext {
   brainDir: string;
   config?: Record<string, unknown>;
   brainBoard: BrainBoardAPI;
+  hooks: import("../hooks/types.js").BrainHooksAPI;
+  onCommand?: (toolName: string, args: Record<string, string>, target?: string, reason?: string) => void;
 }
 
 export type EventSourceFactory = (ctx: SourceContext) => EventSource;

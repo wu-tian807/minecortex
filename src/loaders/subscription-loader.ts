@@ -8,6 +8,7 @@ import type {
   BrainBoardAPI,
   Event,
 } from "../core/types.js";
+import type { BrainHooksAPI } from "../hooks/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
 
@@ -19,6 +20,8 @@ interface SubscriptionEntry {
 export class SubscriptionLoader extends BaseLoader<EventSourceFactory, SubscriptionEntry> {
   private emitter: ((event: Event) => void) | null = null;
   private brainBoard: BrainBoardAPI | null = null;
+  private hooks: BrainHooksAPI | null = null;
+  private commandHandler: ((toolName: string, args: Record<string, string>, target?: string, reason?: string) => void) | null = null;
 
   setEmitter(emit: (event: Event) => void): void {
     this.emitter = emit;
@@ -26,6 +29,14 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
 
   setBrainBoard(board: BrainBoardAPI): void {
     this.brainBoard = board;
+  }
+
+  setHooks(hooks: BrainHooksAPI): void {
+    this.hooks = hooks;
+  }
+
+  setCommandHandler(handler: (toolName: string, args: Record<string, string>, target?: string, reason?: string) => void): void {
+    this.commandHandler = handler;
   }
 
   async importFactory(path: string): Promise<EventSourceFactory> {
@@ -39,6 +50,10 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
       brainDir: ctx.brainDir,
       config: ctx.selector.config?.[name] ?? undefined,
       brainBoard: this.brainBoard!,
+      hooks: this.hooks!,
+      onCommand: this.commandHandler
+        ? (toolName, args, target, reason) => this.commandHandler!(toolName, args, target, reason)
+        : undefined,
     };
     const source = factory(sourceCtx);
     return { source, name: source.name };
@@ -66,17 +81,33 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
     } catch { /* already stopped */ }
   }
 
+  private lastCtx: LoaderContext | null = null;
+  private pathMap = new Map<string, string>();
+
   registerWatchPatterns(watcher: FSWatcherAPI): void {
-    watcher.register(/subscriptions\/[^/]+\.ts$/, () => {});
-    watcher.register(/brains\/[^/]+\/subscriptions\/[^/]+\.ts$/, () => {});
+    const self = this;
+    const handler = (event: import("../core/types.js").FSChangeEvent) => {
+      if (!self.lastCtx) return;
+      const name = event.path.replace(/\.ts$/, "").split("/").pop() ?? "";
+      const fullPath = self.pathMap.get(name);
+      if (fullPath) {
+        self.reload(name, fullPath, self.lastCtx)
+          .then(entry => { if (entry) console.log(`[SubscriptionLoader] hot-reloaded: ${name}`); })
+          .catch(err => console.error(`[SubscriptionLoader] hot-reload failed: ${name}`, err));
+      }
+    };
+    watcher.register(/subscriptions\/[^/]+\.ts$/, handler);
+    watcher.register(/brains\/[^/]+\/subscriptions\/[^/]+\.ts$/, handler);
     watcher.register(/brains\/[^/]+\/brain\.json$/, () => {});
   }
 
   async load(ctx: LoaderContext): Promise<EventSource[]> {
+    this.lastCtx = ctx;
     const paths = await this.discover(
       join(ctx.globalDir, "subscriptions"),
       join(ctx.brainDir, "subscriptions"),
     );
+    this.pathMap = paths;
     await this.loadAll(paths, ctx);
     return [...this.registry.values()].map((e) => e.source);
   }

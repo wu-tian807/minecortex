@@ -22,6 +22,10 @@ import type { EventBus } from "./event-bus.js";
 import type { EventSource } from "./types.js";
 import { assembleResponse } from "../llm/stream.js";
 import { getModelSpec } from "../llm/provider.js";
+import { microCompact } from "../session/compaction.js";
+import { renderEventDisplay } from "../context/event-router.js";
+import { HookEvent } from "../hooks/types.js";
+import type { BrainHooks } from "../hooks/brain-hooks.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -34,7 +38,8 @@ export interface AgentLoopOpts {
   provider: LLMProvider;
   tools: ToolDefinition[];
   contextEngine: ContextEngine;
-  sessionHistory: LLMMessage[];
+  /** Ephemeral in-memory history (for spawn_thought). Ignored when sessionManager is provided. */
+  sessionHistory?: LLMMessage[];
   modelSpec: ModelSpec;
   maxIterations: number;
   signal: AbortSignal;
@@ -45,19 +50,25 @@ export interface AgentLoopOpts {
   workspace: string;
   emit: (event: Event) => void;
   logger?: Logger;
+  /** Persistent session — when provided, history is read from file each iteration (no in-memory cache). */
   sessionManager?: SessionManager;
   turn?: number;
   onAssistantMessage?: (msg: LLMMessage) => void;
+  hooks?: BrainHooks;
+  keepToolResults?: number;
+  trackBackgroundTask?: (p: Promise<unknown>) => void;
 }
 
 export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | null> {
   const {
-    brainId, provider, tools, contextEngine, sessionHistory,
+    brainId, provider, tools, contextEngine,
     modelSpec, maxIterations, signal, brainBoard, slotRegistry,
     pathManager, terminalManager, workspace, emit, logger,
-    sessionManager, turn = 0, onAssistantMessage,
+    sessionManager, turn = 0, onAssistantMessage, hooks,
+    keepToolResults = 8,
   } = opts;
 
+  const ephemeralHistory = opts.sessionHistory;
   let iterations = 0;
   let lastResponse: LLMResponse | null = null;
 
@@ -70,24 +81,37 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     pathManager,
     terminalManager,
     workspace,
+    trackBackgroundTask: opts.trackBackgroundTask,
   };
 
   for (;;) {
     if (signal.aborted || iterations >= maxIterations) break;
     iterations++;
 
-    const vars: Record<string, string> = {
-      BRAIN_ID: brainId,
-      MODEL: brainBoard.get(brainId, "model.name") as string ?? "unknown",
-      TIMESTAMP: new Date().toISOString(),
-    };
+    const rawHistory = sessionManager
+      ? await sessionManager.loadSession()
+      : (ephemeralHistory ?? []);
+
+    const sessionHistory = microCompact(rawHistory, { keepToolResults });
+
+    const boardEntries = brainBoard.getAll(brainId);
+    const vars: Record<string, string> = {};
+    for (const [k, v] of Object.entries(boardEntries)) {
+      vars[k] = typeof v === "string" ? v : JSON.stringify(v);
+    }
+    vars.BRAIN_ID = brainId;
+    vars.WORKSPACE = pathManager.resolve({ path: "." }, brainId);
+    const tz = (brainBoard.get(brainId, "timezone") as string) ?? "Asia/Shanghai";
+    vars.CURRENT_TIME = new Date().toLocaleString("zh-CN", { timeZone: tz });
     const messages = contextEngine.assemblePrompt(
-      [],
       sessionHistory,
       modelSpec,
       undefined,
       vars,
     );
+
+    logger?.debug(brainId, turn,
+      `LLM call: ${messages.length} msgs, ${tools.length} tools, session=${sessionHistory.length}`);
 
     let response: LLMResponse;
     try {
@@ -95,51 +119,68 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       response = await assembleResponse(stream);
     } catch (err: any) {
       if (signal.aborted) {
-        logger?.warn(brainId, turn, "LLM call aborted by steer/stop");
+        logger?.warn(brainId, turn, "LLM call aborted");
         break;
       }
+      logger?.error(brainId, turn, `LLM call failed: ${err.message}`);
       throw err;
     }
+
+    logger?.debug(brainId, turn,
+      `LLM response: content=${typeof response.content === "string" ? response.content.length : "multimodal"} chars, tools=${response.toolCalls?.length ?? 0}`);
 
     lastResponse = response;
 
     if (response.usage) {
-      brainBoard.set(brainId, "tokens.lastInputTokens", response.usage.inputTokens);
-      brainBoard.set(brainId, "tokens.lastOutputTokens", response.usage.outputTokens);
-      const prevIn = (brainBoard.get(brainId, "tokens.totalIn") as number) ?? 0;
-      const prevOut = (brainBoard.get(brainId, "tokens.totalOut") as number) ?? 0;
-      brainBoard.set(brainId, "tokens.totalIn", prevIn + response.usage.inputTokens);
-      brainBoard.set(brainId, "tokens.totalOut", prevOut + response.usage.outputTokens);
+      brainBoard.set(brainId, "currentContextUsage",
+        response.usage.inputTokens + response.usage.outputTokens);
+    }
+
+    let content = response.content;
+    if (response.thinking) {
+      const thinkingBlock = `<thinking>${response.thinking}</thinking>`;
+      if (typeof content === "string") {
+        content = content ? `${thinkingBlock}\n${content}` : thinkingBlock;
+      }
     }
 
     const assistantMsg: LLMMessage = {
       role: "assistant",
-      content: response.content,
-      thinking: response.thinking,
+      content,
       toolCalls: response.toolCalls,
+      usage: response.usage
+        ? { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens }
+        : undefined,
       ts: Date.now(),
     };
 
     if (signal.aborted) {
       assistantMsg.truncated = true;
-      sessionHistory.push(assistantMsg);
-      await sessionManager?.appendMessage(assistantMsg);
+      if (sessionManager) await sessionManager.appendMessage(assistantMsg);
+      else ephemeralHistory?.push(assistantMsg);
       break;
     }
 
-    sessionHistory.push(assistantMsg);
-    await sessionManager?.appendMessage(assistantMsg);
+    if (sessionManager) await sessionManager.appendMessage(assistantMsg);
+    else ephemeralHistory?.push(assistantMsg);
+
+    hooks?.emit(HookEvent.AssistantMessage, { msg: assistantMsg, turn });
     onAssistantMessage?.(assistantMsg);
 
-    if (response.content && typeof response.content === "string" && response.content.trim()) {
-      logger?.info(brainId, turn, response.content);
+    const textContent = typeof content === "string" ? content : "";
+    const displayContent = textContent.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
+    if (displayContent) {
+      logger?.info(brainId, turn, displayContent);
     }
 
     if (!response.toolCalls || response.toolCalls.length === 0) break;
 
     const results = await Promise.all(
       response.toolCalls.map(async (tc) => {
+        hooks?.emit(HookEvent.ToolCall, { name: tc.name, args: tc.arguments, toolCall: tc });
+        const t0 = Date.now();
         const result = await executeTool(tc, tools, toolCtx, logger, brainId, turn);
+        hooks?.emit(HookEvent.ToolResult, { name: tc.name, result, durationMs: Date.now() - t0 });
         return { tc, result };
       }),
     );
@@ -152,8 +193,8 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
         toolCallId: tc.id,
         ts: Date.now(),
       };
-      sessionHistory.push(toolMsg);
-      await sessionManager?.appendMessage(toolMsg);
+      if (sessionManager) await sessionManager.appendMessage(toolMsg);
+      else ephemeralHistory?.push(toolMsg);
     }
   }
 
@@ -185,25 +226,6 @@ async function executeTool(
   }
 }
 
-// ─── Micro-compact: trim old tool results to save tokens ───
-
-function microCompact(history: LLMMessage[], keepToolResults = 5): void {
-  let toolResultCount = 0;
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === "tool") {
-      toolResultCount++;
-      if (toolResultCount > keepToolResults) {
-        const content = typeof history[i].content === "string"
-          ? history[i].content as string
-          : JSON.stringify(history[i].content);
-        if (content.length > 200) {
-          history[i] = { ...history[i], content: content.slice(0, 100) + "… [truncated]" };
-        }
-      }
-    }
-  }
-}
-
 // ─── ConsciousBrain ───
 
 export interface ConsciousBrainOpts {
@@ -226,11 +248,11 @@ export interface ConsciousBrainOpts {
   eventBus: EventBus;
   sources: EventSource[];
   workspace: string;
+  hooks: BrainHooks;
 }
 
 export class ConsciousBrain implements BrainInterface {
   readonly id: string;
-  private model: string;
   private provider: LLMProvider;
   private tools: ToolDefinition[];
   private brainConfig: BrainJson;
@@ -244,17 +266,18 @@ export class ConsciousBrain implements BrainInterface {
   private terminalManager: TerminalManagerAPI;
   private logger: Logger;
   private sessionManager: SessionManager;
-  private sessionHistory: LLMMessage[] = [];
   private modelSpec: ModelSpec;
   private eventBus: EventBus;
   private sources: EventSource[];
   private workspace: string;
+  private hooks: BrainHooks;
   private currentTurn = 0;
   private turnAbort: AbortController | null = null;
+  private pendingTasks = new Set<Promise<unknown>>();
+  private commandQueue: Array<{ toolName: string; args: Record<string, string>; reason?: string }> = [];
 
   constructor(opts: ConsciousBrainOpts) {
     this.id = opts.id;
-    this.model = opts.model;
     this.provider = opts.provider;
     this.tools = opts.tools;
     this.brainConfig = opts.brainConfig;
@@ -272,20 +295,28 @@ export class ConsciousBrain implements BrainInterface {
     this.eventBus = opts.eventBus;
     this.sources = opts.sources;
     this.workspace = opts.workspace;
+    this.hooks = opts.hooks;
   }
 
   async run(signal: AbortSignal): Promise<void> {
-    this.brainBoard.set(this.id, "status", "running");
-    this.brainBoard.set(this.id, "currentTurn", 0);
-    this.brainBoard.set(this.id, "model.name", this.model);
-    this.brainBoard.set(this.id, "model.contextWindow", this.modelSpec.contextWindow);
-
-    const existing = await this.sessionManager.loadSession();
-    if (existing.length > 0) {
-      this.sessionHistory = existing;
-    }
-
     while (!signal.aborted) {
+      // Process any queued commands first (from stdin /xxx or auto_compact)
+      while (this.commandQueue.length > 0 && !signal.aborted) {
+        const cmd = this.commandQueue.shift()!;
+        this.currentTurn++;
+        this.turnAbort = new AbortController();
+        const combinedSignal = combineSignals(signal, this.turnAbort.signal);
+        try {
+          await this.executeCommand(cmd.toolName, cmd.args, cmd.reason, combinedSignal);
+        } catch (err: any) {
+          if (!combinedSignal.aborted) {
+            this.logger.error(this.id, this.currentTurn, "command failed", err);
+          }
+        } finally {
+          this.turnAbort = null;
+        }
+      }
+
       let trigger: Event;
       try {
         trigger = await this.eventQueue.waitForEvent(signal);
@@ -299,13 +330,10 @@ export class ConsciousBrain implements BrainInterface {
         await sleep(this.coalesceMs);
       }
 
-      const events = this.eventQueue.drain();
+      const events = this.eventQueue.drain().filter(e => e.type !== "_wake");
       if (events.length === 0) continue;
 
       this.currentTurn++;
-      this.brainBoard.set(this.id, "currentTurn", this.currentTurn);
-      this.brainBoard.set(this.id, "lastActivity", Date.now());
-
       this.turnAbort = new AbortController();
       const combinedSignal = combineSignals(signal, this.turnAbort.signal);
 
@@ -318,7 +346,9 @@ export class ConsciousBrain implements BrainInterface {
       try {
         await this.process(events, combinedSignal);
       } catch (err: any) {
-        if (!combinedSignal.aborted) {
+        if (combinedSignal.aborted) {
+          this.logger.warn(this.id, this.currentTurn, "turn aborted");
+        } else {
           this.logger.error(this.id, this.currentTurn, "process failed", err);
         }
       } finally {
@@ -326,15 +356,22 @@ export class ConsciousBrain implements BrainInterface {
         this.turnAbort = null;
       }
     }
-
-    this.brainBoard.set(this.id, "status", "stopped");
   }
 
   private async process(events: Event[], signal: AbortSignal): Promise<void> {
-    const eventSlots = new (await import("../context/event-router.js")).EventRouter().routeEvents(events);
-    for (const slot of eventSlots) {
-      this.slotRegistry.registerSlot(slot);
-    }
+    if (events.length === 0) return;
+
+    const lines = events.map(e =>
+      `[${e.source}:${e.type}] ${renderEventDisplay(e)}`
+    );
+    await this.sessionManager.appendMessage({
+      role: "user",
+      content: lines.join("\n"),
+      ts: Date.now(),
+    });
+
+    this.hooks.emit(HookEvent.TurnStart, { turn: this.currentTurn, eventCount: events.length });
+    let aborted = false;
 
     try {
       await runAgentLoop({
@@ -342,7 +379,6 @@ export class ConsciousBrain implements BrainInterface {
         provider: this.provider,
         tools: this.tools,
         contextEngine: this.contextEngine,
-        sessionHistory: this.sessionHistory,
         modelSpec: this.modelSpec,
         maxIterations: 20,
         signal,
@@ -355,27 +391,109 @@ export class ConsciousBrain implements BrainInterface {
         logger: this.logger,
         sessionManager: this.sessionManager,
         turn: this.currentTurn,
+        hooks: this.hooks,
+        keepToolResults: this.brainConfig.session?.keepToolResults ?? 8,
+        trackBackgroundTask: (p) => {
+          this.pendingTasks.add(p);
+          p.finally(() => this.pendingTasks.delete(p));
+        },
       });
+    } catch {
+      aborted = signal.aborted;
     } finally {
-      for (const slot of eventSlots) {
-        this.slotRegistry.removeSlot(slot.id);
-      }
+      this.hooks.emit(HookEvent.TurnEnd, { turn: this.currentTurn, aborted });
+    }
+  }
+
+  private async executeCommand(
+    toolName: string, args: Record<string, string>, reason: string | undefined, signal: AbortSignal,
+  ): Promise<void> {
+    const tool = this.tools.find(t => t.name === toolName);
+    if (!tool) {
+      this.logger.warn(this.id, this.currentTurn, `command: unknown tool '${toolName}'`);
+      return;
     }
 
-    const keepToolResults = this.brainConfig.session?.keepToolResults ?? 8;
-    microCompact(this.sessionHistory, keepToolResults);
+    const callId = `cmd_${Date.now()}`;
+    const toolCall: LLMToolCall = { id: callId, name: toolName, arguments: args };
+
+    await this.sessionManager.appendMessage({
+      role: "user",
+      content: `[command] ${reason ?? toolName}`,
+      ts: Date.now(),
+    });
+
+    const assistantMsg: LLMMessage = {
+      role: "assistant",
+      content: reason ?? `Executing: ${toolName}`,
+      toolCalls: [toolCall],
+      ts: Date.now(),
+    };
+    await this.sessionManager.appendMessage(assistantMsg);
+
+    this.hooks.emit(HookEvent.ToolCall, { name: toolName, args, toolCall });
+
+    const toolCtx: ToolContext = {
+      brainId: this.id,
+      signal,
+      emit: this.emitFn,
+      brainBoard: this.brainBoard,
+      slot: this.slotRegistry,
+      pathManager: this.pathManager,
+      terminalManager: this.terminalManager,
+      workspace: this.workspace,
+      trackBackgroundTask: (p) => {
+        this.pendingTasks.add(p);
+        p.finally(() => this.pendingTasks.delete(p));
+      },
+    };
+
+    const t0 = Date.now();
+    let result: unknown;
+    try {
+      result = await tool.execute(args, toolCtx);
+    } catch (err: any) {
+      result = { error: err.message };
+    }
+    this.hooks.emit(HookEvent.ToolResult, { name: toolName, result, durationMs: Date.now() - t0 });
+
+    const resultStr = typeof result === "string" ? result : JSON.stringify(result);
+    const toolMsg: LLMMessage = {
+      role: "tool",
+      content: resultStr,
+      toolCallId: callId,
+      ts: Date.now(),
+    };
+    await this.sessionManager.appendMessage(toolMsg);
+
+    this.logger.info(this.id, this.currentTurn, `command /${toolName} → ${resultStr.slice(0, 200)}`);
+  }
+
+  queueCommand(toolName: string, args: Record<string, string>, reason?: string): void {
+    this.commandQueue.push({ toolName, args, reason });
+    if (this.turnAbort) {
+      this.turnAbort.abort();
+    } else {
+      this.eventQueue.push({ source: "_system", type: "_wake", payload: {}, ts: Date.now(), silent: false, priority: -1 });
+    }
   }
 
   // ─── Lifecycle: 3 levels ───
 
   stop(): void {
     this.turnAbort?.abort();
-    this.brainBoard.set(this.id, "status", "stopped");
     this.logger.info(this.id, this.currentTurn, "stop() called — aborting current LLM call");
   }
 
   async shutdown(): Promise<void> {
     this.stop();
+
+    if (this.pendingTasks.size > 0) {
+      this.logger.info(this.id, this.currentTurn, `awaiting ${this.pendingTasks.size} background task(s)...`);
+      const timeout = new Promise<void>(r => setTimeout(r, 5000));
+      await Promise.race([Promise.allSettled([...this.pendingTasks]), timeout]);
+      this.pendingTasks.clear();
+    }
 
     for (const source of this.sources) {
       try { source.stop(); } catch { /* already stopped */ }
@@ -384,28 +502,15 @@ export class ConsciousBrain implements BrainInterface {
     this.slotRegistry.clear();
     this.eventBus.unregister(this.id);
 
-    await this.sessionManager.appendMessage({
-      role: "assistant",
-      content: "[session ended — shutdown]",
-      ts: Date.now(),
-    });
-
-    this.brainBoard.set(this.id, "status", "shutdown");
     this.logger.info(this.id, this.currentTurn, "shutdown() complete");
   }
 
   async free(): Promise<void> {
     await this.shutdown();
 
-    this.brainBoard.remove(this.id, "status");
-    this.brainBoard.remove(this.id, "currentTurn");
-    this.brainBoard.remove(this.id, "lastActivity");
-    this.brainBoard.remove(this.id, "model.name");
-    this.brainBoard.remove(this.id, "model.contextWindow");
-    this.brainBoard.remove(this.id, "tokens.lastInputTokens");
-    this.brainBoard.remove(this.id, "tokens.lastOutputTokens");
-    this.brainBoard.remove(this.id, "tokens.totalIn");
-    this.brainBoard.remove(this.id, "tokens.totalOut");
+    this.brainBoard.removeByPrefix(`${this.id}:`);
+    this.brainBoard.removeAll(this.id);
+    this.hooks.clear();
 
     this.emitFn({
       source: `brain:${this.id}`,
@@ -415,7 +520,7 @@ export class ConsciousBrain implements BrainInterface {
       silent: true,
     });
 
-    this.logger.info(this.id, this.currentTurn, "free() complete — brainBoard entries deleted");
+    this.logger.info(this.id, this.currentTurn, "free() complete — brainBoard cleared");
   }
 }
 

@@ -1,5 +1,4 @@
 import type { DynamicSlotAPI } from "../core/types.js";
-import type { LLMMessage } from "../llm/types.js";
 import type { ContextSlot } from "./types.js";
 
 export class SlotRegistry implements DynamicSlotAPI {
@@ -34,29 +33,16 @@ export class SlotRegistry implements DynamicSlotAPI {
   // ─── Render helpers ───
 
   renderSystem(): string {
-    const systemSlots = [...this.slots.values()]
-      .filter((s) => s.kind === "system" || s.kind === "dynamic")
+    const sorted = [...this.slots.values()]
       .filter((s) => !s.condition || s.condition())
       .sort((a, b) => a.order - b.order);
 
     const parts: string[] = [];
-    for (const slot of systemSlots) {
+    for (const slot of sorted) {
       const text = typeof slot.content === "function" ? slot.content() : slot.content;
       if (text) parts.push(text);
     }
     return parts.join("\n\n");
-  }
-
-  renderMessages(): LLMMessage[] {
-    const messageSlots = [...this.slots.values()]
-      .filter((s) => s.kind === "message")
-      .filter((s) => !s.condition || s.condition())
-      .sort((a, b) => a.order - b.order);
-
-    return messageSlots.map((slot) => {
-      const text = typeof slot.content === "function" ? slot.content() : slot.content;
-      return { role: "user" as const, content: text };
-    });
   }
 
   // ─── DynamicSlotAPI (for tools via ToolContext.slot) ───
@@ -64,7 +50,6 @@ export class SlotRegistry implements DynamicSlotAPI {
   register(id: string, content: string): void {
     this.slots.set(id, {
       id,
-      kind: "dynamic",
       order: 100,
       priority: 3,
       content,
