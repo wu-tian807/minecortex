@@ -63,17 +63,18 @@ function scanSkills(dir: string): Map<string, SkillMeta> {
 }
 
 const create: SlotFactory = (ctx): ContextSlot => {
-  const globalSkills = scanSkills(join(ROOT, "skills"));
-  const localSkills = scanSkills(join(ROOT, "brains", ctx.brainId, "skills"));
-
-  // local overrides global
-  const merged = new Map([...globalSkills, ...localSkills]);
+  const globalDir = join(ROOT, "skills");
+  const localDir = join(ROOT, "brains", ctx.brainId, "skills");
 
   return {
     id: "skills",
     order: 40,
     priority: 7,
     content: () => {
+      const globalSkills = scanSkills(globalDir);
+      const localSkills = scanSkills(localDir);
+      const merged = new Map([...globalSkills, ...localSkills]);
+
       if (merged.size === 0) return "";
       const lines: string[] = ["## Available Skills"];
       for (const skill of merged.values()) {
@@ -83,7 +84,7 @@ const create: SlotFactory = (ctx): ContextSlot => {
       }
       lines.push(
         "",
-        'Use the read_skill tool to read the full content of a skill when needed.',
+        'IMPORTANT: When a task matches a skill, you MUST call read_skill first to get detailed instructions before proceeding.',
       );
       return lines.join("\n");
     },
