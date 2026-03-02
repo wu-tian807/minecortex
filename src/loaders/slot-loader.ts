@@ -10,6 +10,8 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
   private slotCtx: SlotContext | null = null;
   private onSlotChange: ((slots: ContextSlot[]) => void) | null = null;
   private onSlotRemove: ((names: string[]) => void) | null = null;
+  private loaderCtx: LoaderContext | null = null;
+  private slotPaths: Map<string, string> = new Map();
 
   setSlotContext(ctx: SlotContext): void {
     this.slotCtx = ctx;
@@ -81,10 +83,20 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
       if (existing) {
         this.onUnregister(name, existing);
         this.registry.delete(name);
+        this.slotPaths.delete(name);
       }
     } else {
-      this.invalidateSlot(name);
+      this.reloadSlot(name, event.path);
     }
+  }
+
+  private async reloadSlot(name: string, relativePath: string): Promise<void> {
+    if (!this.loaderCtx) return;
+
+    const absolutePath = join(this.loaderCtx.globalDir, relativePath);
+    this.slotPaths.set(name, absolutePath);
+
+    await this.reload(name, absolutePath, this.loaderCtx);
   }
 
   invalidateSlot(name: string): void {
@@ -100,10 +112,12 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
   }
 
   async load(ctx: LoaderContext): Promise<ContextSlot[]> {
+    this.loaderCtx = ctx;
     const paths = await this.discover(
       join(ctx.globalDir, "slots"),
       join(ctx.brainDir, "slots"),
     );
+    this.slotPaths = paths;
     await this.loadAll(paths, ctx);
     return [...this.registry.values()].flat();
   }

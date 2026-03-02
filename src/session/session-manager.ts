@@ -89,8 +89,10 @@ export class SessionManager {
   }
 
   async appendMessage(msg: LLMMessage, sid?: string): Promise<void> {
-    const id = sid ?? (await this.currentSessionId());
-    if (!id) throw new Error("No active session");
+    let id = sid ?? (await this.currentSessionId());
+    if (!id) {
+      id = await this.createSession();
+    }
 
     const serialized = await this.serializeMessage(msg, id);
     const line = JSON.stringify(serialized) + "\n";
