@@ -88,7 +88,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
   };
 
   for (;;) {
-    if (signal.aborted || iterations >= maxIterations) break;
+    if (signal.aborted || (maxIterations != -1 && iterations >= maxIterations) ) break;
     iterations++;
 
     const rawHistory = sessionManager
@@ -372,7 +372,7 @@ export class ConsciousBrain implements BrainInterface {
         tools: this.tools,
         contextEngine: this.contextEngine,
         modelSpec: this.modelSpec,
-        maxIterations: 20,
+        maxIterations: this.brainConfig.maxIterations ?? 200,
         signal,
         brainBoard: this.brainBoard,
         slotRegistry: this.slotRegistry,

@@ -3,9 +3,18 @@ import type { ToolDefinition, FSWatcherAPI, FSChangeEvent } from "../core/types.
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
 
-type ToolFactory = { default: ToolDefinition };
+type ToolFactory = { default?: ToolDefinition };
 
-export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition> {
+/**
+ * Loads tool definitions from tools/ directories.
+ *
+ * Files that don't export a valid ToolDefinition (with name + execute) are
+ * silently skipped. This allows placing shared utilities in the same folder.
+ *
+ * Naming convention: prefix helper files with underscore (e.g. `_utils.ts`)
+ * to clearly indicate they are not tools.
+ */
+export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
   private loaderCtx: LoaderContext | null = null;
   private toolPaths: Map<string, string> = new Map();
   private onToolsChange: ((tools: ToolDefinition[]) => void) | null = null;
@@ -18,19 +27,25 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition> {
     return await import(path);
   }
 
-  createInstance(factory: ToolFactory, _ctx: LoaderContext, _name: string): ToolDefinition {
-    return factory.default;
+  createInstance(factory: ToolFactory, _ctx: LoaderContext, _name: string): ToolDefinition | null {
+    const def = factory.default;
+    if (!def || typeof def.name !== "string" || typeof def.execute !== "function") {
+      return null;
+    }
+    return def;
   }
 
   private notifyChange(): void {
-    this.onToolsChange?.([...this.registry.values()].filter(Boolean));
+    this.onToolsChange?.(
+      [...this.registry.values()].filter((t): t is ToolDefinition => t !== null),
+    );
   }
 
-  onRegister(_name: string, _instance: ToolDefinition): void {
+  onRegister(_name: string, _instance: ToolDefinition | null): void {
     this.notifyChange();
   }
 
-  onUnregister(_name: string, _instance: ToolDefinition): void {
+  onUnregister(_name: string, _instance: ToolDefinition | null): void {
     this.notifyChange();
   }
 
@@ -67,6 +82,6 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition> {
     );
     this.toolPaths = paths;
     await this.loadAll(paths, ctx);
-    return [...this.registry.values()].filter(Boolean);
+    return [...this.registry.values()].filter((t): t is ToolDefinition => t !== null);
   }
 }

@@ -67,6 +67,7 @@ export interface BrainJson {
   subscriptions?: CapabilitySelector;
   tools?: CapabilitySelector;
   slots?: CapabilitySelector;
+  maxIterations?: number;
   session?: { keepToolResults?: number; keepMedias?: number };
   env?: Record<string, string>;
   vars?: Record<string, string>;
