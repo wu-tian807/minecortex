@@ -285,6 +285,11 @@ export class ConsciousBrain implements BrainInterface {
     this.hooks = opts.hooks;
   }
 
+  updateTools(tools: ToolDefinition[]): void {
+    this.tools = tools;
+    this.logger.info(this.id, 0, `tools reloaded: ${tools.length} total`);
+  }
+
   async run(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       // Process any queued commands first (from stdin /xxx or auto_compact)

@@ -252,6 +252,7 @@ export class Scheduler {
 
     const selectorTools = brainConfig.tools ?? { global: "all" as const };
     const toolLoader = new ToolLoader();
+    if (this.fsWatcher) toolLoader.registerWatchPatterns(this.fsWatcher);
     const tools = await toolLoader.load({
       brainId,
       brainDir,
@@ -338,6 +339,8 @@ export class Scheduler {
 
     brainRef = brain;
     this.brains.set(brainId, { brain, queue, abortController, sources, hooks });
+
+    toolLoader.setCallback((tools) => brain.updateTools(tools));
 
     this.logger.info(
       "scheduler", 0,

@@ -49,6 +49,8 @@ export default {
     if (!skillPath) {
       return `Skill "${name}" not found.`;
     }
-    return readFileSync(skillPath, "utf-8");
+    const raw = readFileSync(skillPath, "utf-8");
+    const stripped = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
+    return stripped.trim();
   },
 } satisfies ToolDefinition;

@@ -1,13 +1,18 @@
-import { join, basename } from "node:path";
-import type { ToolDefinition, FSWatcherAPI } from "../core/types.js";
+import { join } from "node:path";
+import type { ToolDefinition, FSWatcherAPI, FSChangeEvent } from "../core/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
 
 type ToolFactory = { default: ToolDefinition };
 
 export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition> {
-  private lastCtx: LoaderContext | null = null;
-  private pathMap = new Map<string, string>();
+  private loaderCtx: LoaderContext | null = null;
+  private toolPaths: Map<string, string> = new Map();
+  private onToolsChange: ((tools: ToolDefinition[]) => void) | null = null;
+
+  setCallback(onChange: (tools: ToolDefinition[]) => void): void {
+    this.onToolsChange = onChange;
+  }
 
   async importFactory(path: string): Promise<ToolFactory> {
     return await import(path);
@@ -17,32 +22,50 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition> {
     return factory.default;
   }
 
-  onRegister(_name: string, _instance: ToolDefinition): void {}
-  onUnregister(_name: string, _instance: ToolDefinition): void {}
+  private notifyChange(): void {
+    this.onToolsChange?.([...this.registry.values()].filter(Boolean));
+  }
+
+  onRegister(_name: string, _instance: ToolDefinition): void {
+    this.notifyChange();
+  }
+
+  onUnregister(_name: string, _instance: ToolDefinition): void {
+    this.notifyChange();
+  }
 
   registerWatchPatterns(watcher: FSWatcherAPI): void {
-    const self = this;
-    const handler = (event: import("../core/types.js").FSChangeEvent) => {
-      if (!self.lastCtx) return;
-      const name = basename(event.path, ".ts");
-      const fullPath = self.pathMap.get(name);
-      if (fullPath) {
-        self.reload(name, fullPath, self.lastCtx)
-          .then(inst => { if (inst) console.log(`[ToolLoader] hot-reloaded: ${name}`); })
-          .catch(err => console.error(`[ToolLoader] hot-reload failed: ${name}`, err));
+    watcher.register(/^tools\/[^/]+\.ts$/, (e) => this.handleChange(e));
+    watcher.register(/^brains\/[^/]+\/tools\/[^/]+\.ts$/, (e) => this.handleChange(e));
+  }
+
+  private handleChange(event: FSChangeEvent): void {
+    if (!this.loaderCtx) return;
+    const name = event.path.replace(/.*\//, "").replace(/\.ts$/, "");
+
+    if (event.type === "delete") {
+      if (this.registry.has(name)) {
+        this.registry.delete(name);
+        this.toolPaths.delete(name);
+        this.notifyChange();
+        console.log(`[ToolLoader] removed: ${name}`);
       }
-    };
-    watcher.register(/tools\/[^/]+\.ts$/, handler);
-    watcher.register(/brains\/[^/]+\/tools\/[^/]+\.ts$/, handler);
+    } else {
+      const absolutePath = join(this.loaderCtx.globalDir, event.path);
+      this.toolPaths.set(name, absolutePath);
+      this.reload(name, absolutePath, this.loaderCtx)
+        .then(inst => { if (inst) console.log(`[ToolLoader] hot-reloaded: ${name}`); })
+        .catch(err => console.error(`[ToolLoader] reload failed: ${name}`, err));
+    }
   }
 
   async load(ctx: LoaderContext): Promise<ToolDefinition[]> {
-    this.lastCtx = ctx;
+    this.loaderCtx = ctx;
     const paths = await this.discover(
       join(ctx.globalDir, "tools"),
       join(ctx.brainDir, "tools"),
     );
-    this.pathMap = paths;
+    this.toolPaths = paths;
     await this.loadAll(paths, ctx);
     return [...this.registry.values()].filter(Boolean);
   }
