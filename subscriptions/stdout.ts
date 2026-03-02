@@ -6,6 +6,21 @@ import type { Event, EventSource, SourceContext, BrainJson } from "../src/core/t
 import { HookEvent } from "../src/hooks/types.js";
 import { QARecorder } from "../src/session/qa-recorder.js";
 
+type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
+
+interface TodoItem {
+  id: string;
+  content: string;
+  status: TodoStatus;
+}
+
+const STATUS_ICON: Record<TodoStatus, string> = {
+  pending: "○",
+  in_progress: "▶",
+  completed: "✓",
+  cancelled: "✗",
+};
+
 function brainHasStdin(ctx: SourceContext): boolean {
   try {
     const raw = readFileSync(join(ctx.brainDir, "brain.json"), "utf-8");
@@ -19,6 +34,14 @@ function brainHasStdin(ctx: SourceContext): boolean {
   } catch {
     return true;
   }
+}
+
+function formatTodoList(todos: TodoItem[]): string {
+  if (!todos || todos.length === 0) return "";
+  const total = todos.length;
+  const done = todos.filter((t) => t.status === "completed").length;
+  const lines = todos.map((t) => `  ${STATUS_ICON[t.status]} [${t.id}] ${t.content}`);
+  return `[todos] ${done}/${total} completed\n${lines.join("\n")}`;
 }
 
 export default function create(ctx: SourceContext): EventSource {
@@ -61,6 +84,15 @@ export default function create(ctx: SourceContext): EventSource {
         process.stdout.write(line + "\n");
         qa.recordToolResult(name, resultStr, durationMs).catch(() => {});
       }));
+
+      const unwatchTodos = ctx.brainBoard.watch(ctx.brainId, "todo-list", (value) => {
+        const todos = value as TodoItem[] | undefined;
+        const formatted = formatTodoList(todos ?? []);
+        if (formatted) {
+          process.stdout.write("\n" + formatted + "\n\n");
+        }
+      });
+      unsubs.push(unwatchTodos);
     },
 
     stop() {

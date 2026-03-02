@@ -30,3 +30,21 @@
 - edit_file 失败一次：重新 read_file，从输出中精确复制 old_string 再试
 - edit_file 失败两次：放弃 edit，改用 write_file 重写整个文件
 - shell 命令失败：先读报错信息自行排查，搞不定再告知用户
+
+## 任务管理 (todo_write)
+
+**何时使用**：
+- 复杂多步骤任务（3+ 步骤）
+- 用户给出多个任务时
+- 需要追踪进度的场景
+
+**何时不用**：
+- 单步简单任务
+- 纯对话/问答
+
+**使用原则**：
+- 收到新任务后，用 `merge: false` 创建完整的 todo 列表
+- 完成某项后，用 `merge: true` 更新状态为 completed
+- 同一时间只保持一个任务为 in_progress
+- 任务完成后立即标记，不要等多个任务一起标
+- todo 列表会持久化到 BrainBoard，跨 session 保留
