@@ -1,0 +1,383 @@
+# MineClaw vs AgenticOS 架构对比与多脑区设计讨论
+
+日期：2026-03-02
+
+## 主题概览
+1. AgenticOS 动态工具扩展能力
+2. MineClaw vs AgenticOS 架构核心差异
+3. Agentic Pipeline 的框架选择
+4. 多脑区分布式认知系统设计
+5. BrainBoard 观测能力分析
+6. Teammate vs Brain 概念对比
+7. 工具热加载机制实现
+
+---
+
+## 1. AgenticOS 动态工具扩展能力
+
+### 问题
+> agentic_os支持动态拓展工具吗，我指的是我可以不让他用比如通用write工具，只给他write到指定地方的write工具
+
+### 回答
+AgenticOS 完全支持动态扩展/定制工具，有多种方式：
+
+**方法 1：创建自定义受限的 write 工具**
+```typescript
+export const writeToWorkspaceDef: ToolDef = {
+  name: 'write_workspace_file',
+  description: '只能写入 workspace/ 目录的受限写文件工具',
+  // ...
+};
+
+export function createRestrictedWriteHandler(cwd: string, allowedDir: string): ToolHandler {
+  const baseDir = resolve(cwd, allowedDir);
+  return (args) => {
+    const filePath = resolve(baseDir, args.path as string);
+    if (!filePath.startsWith(baseDir)) {
+      return 'Error: 路径必须在 ' + allowedDir + ' 目录内';
+    }
+    // ...
+  };
+}
+```
+
+**方法 2：使用 ToolRegistry 动态注册/移除工具**
+```typescript
+registry.register(def, handler);
+registry.unregister(name);
+```
+
+**方法 3：利用现有的 PermissionEngine**
+- 已有沙箱模式 (`sandbox`) 和演进模式 (`evolve`)
+- 可以扩展支持自定义路径白名单
+
+---
+
+## 2. MineClaw vs AgenticOS 架构核心差异
+
+### 核心架构理念
+
+| 维度 | MineClaw | AgenticOS |
+|------|----------|-----------|
+| **设计哲学** | **多脑区协作系统** — 多个独立 Brain 并行运行 | **单 Agent 循环** — 单一 agent loop 驱动 |
+| **运行模式** | **事件驱动 + 响应式** — 基于 EventQueue 触发 | **请求-响应** — 基于用户 prompt 驱动 |
+| **扩展方式** | **约定目录 + 热加载** — 放文件即生效 | **代码注册** — 显式调用 `registry.register()` |
+
+### 工具系统对比
+
+**AgenticOS — 中心化注册**
+```typescript
+export function createDefaultTools(...): ToolRegistry {
+  const registry = new ToolRegistry();
+  registry.register(bashDef, createBashHandler(...));
+  registry.register(readFileDef, createReadFileHandler(...));
+  // ... 硬编码注册每个工具
+  return registry;
+}
+```
+
+**MineClaw — 约定目录 + 自动发现**
+```typescript
+async load(ctx: LoaderContext): Promise<ToolDefinition[]> {
+  const paths = await this.discover(
+    join(ctx.globalDir, "tools"),      // 全局 tools/
+    join(ctx.brainDir, "tools"),       // 脑区私有 brains/xxx/tools/
+  );
+  // 自动扫描并加载
+}
+```
+
+**关键区别：**
+- AgenticOS：修改代码 → 重新注册 → 重启生效
+- MineClaw：**在 `tools/` 目录下放一个 `.ts` 文件 → 自动热加载生效**
+
+### 上下文管理
+
+**AgenticOS — 静态 system prompt**
+- 字符串或函数生成
+
+**MineClaw — Slot 系统 (动态可插拔上下文)**
+```typescript
+interface ContextSlot {
+  id: string;
+  order: number;           // 排序
+  priority: number;        // 优先级
+  condition?: () => boolean;  // 条件渲染
+  content: string | (() => string);  // 静态或动态内容
+  version: number;
+}
+```
+
+---
+
+## 3. Agentic Pipeline 的框架选择
+
+### 用户需求
+> 设计一个agentic管线来代替传统workflow管线来执行一次性任务，有特别多的自定义工具，自定义directives与skills需求，还需要引导模型列出特定的todo-list
+
+### 核心发现
+
+**AgenticOS Pipeline 不支持工具调用！** 它是一个**纯 prompt 链**，不是 agent loop：
+
+```typescript
+// engine.ts
+if (resolvedPrompt) {
+  const response = await this.opts.provider.chat({
+    model,
+    system: role,
+    messages: [{ role: 'user', content: prompt }],
+    maxTokens: 8192,
+    // ❌ 没有传 tools 参数！
+  });
+}
+```
+
+### 两种不同的 Pipeline 范式
+
+**AgenticOS Pipeline — 预编排式 (Orchestrated)**
+- 每个 Step 是一次 LLM 调用，不是一个 agent loop
+- 流程是预编排的 — `Step A → Step B → Step C`
+- 模型不能调用工具 — 只能生成文本/JSON
+- 适合固定流程 — 例如：生成标题 → 写大纲 → 逐章写作
+
+**MineClaw Brain — 自主式 (Agentic)**
+- 模型有工具访问权，自己决定调用什么
+- 流程是动态的 — 模型自己规划步骤
+- 适合探索性任务 — 例如：分析代码库、调试问题
+
+### 对比总结
+
+| 你的需求 | AgenticOS Pipeline | MineClaw run-task |
+|----------|-------------------|-------------------|
+| 模型自主调用自定义工具 | ❌ Step 只能生成文本 | ✅ 有完整工具系统 |
+| 大量自定义工具 | ❌ 没有工具调用机制 | ✅ 约定目录自动加载 |
+| 自定义 directives/skills | ❌ 需要硬编码在 Step 里 | ✅ 原生支持 |
+| 模型生成 todo-list | ❌ 需要用 JSON schema 约束 | ✅ `todo_write` 工具 |
+| 一次性执行 | ✅ 原生设计 | ✅ `run-task.ts` |
+| 可恢复/序列化 | ❌ PipelineMemory 不持久化 | ✅ Session 持久化 |
+
+### MineClaw run-task 的优势
+
+MineClaw 已经有了核心能力：
+1. ✅ **一次性任务执行** — `run-task.ts`
+2. ✅ **可序列化/恢复** — Session 持久化 + `--id` 恢复
+3. ✅ **自定义工具** — `brains/xxx/tools/` 目录
+4. ✅ **自定义 Directives/Skills** — `brains/xxx/directives/` 和 `brains/xxx/skills/`
+5. ✅ **Todo-list** — `todo_write` 工具 + 动态 Slot
+
+---
+
+## 4. 多脑区分布式认知系统设计
+
+### 用户提出的核心问题
+> 其实我是想要mineclaw能自主通过不同脑不同频率的心跳与事件触发的分工，实现不同的职责。比如反应脑，决策脑，反思脑形成一个基本闭环，元认知脑，对话脑，防止单一上下文的偏执情况发生。
+> 
+> 这是我玩了openclaw，以及自己改造了一些multi-state heartbeating机制后的反思，单agent很容易出现偏执幻觉和惰性
+
+### 设计目标：分布式认知闭环
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        用户/环境输入                              │
+└──────────────────────────────┬──────────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│   反应脑 (reactor)                                                │
+│   - 高频心跳 (500ms-1s)                                           │
+│   - 快速响应外部事件                                               │
+│   - 不做深度推理，只做分发                                          │
+└──────────────────────────────┬──────────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│   决策脑 (decider)                                                │
+│   - 中频心跳 (5-10s)                                              │
+│   - 接收反应脑的任务请求                                           │
+│   - 规划 + 调用工具执行                                            │
+└──────────────────────────────┬──────────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│   反思脑 (reflector)                                              │
+│   - 低频心跳 (30s-1min)                                           │
+│   - 监控决策脑的行为模式                                           │
+│   - 检测偏执/重复/惰性                                             │
+└──────────────────────────────┬──────────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│   元认知脑 (metacognitive)                                        │
+│   - 更低频 (5-10min)                                              │
+│   - 评估整体系统状态                                               │
+│   - 调整其他脑的参数/策略                                          │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### MineClaw 现有能力 vs 需求
+
+| 需求 | MineClaw 现状 | 差距 |
+|------|--------------|------|
+| **多脑区并行** | ✅ Scheduler 支持多 Brain | 无 |
+| **不同频率心跳** | ✅ heartbeat 可配置 `intervalMs` | 无 |
+| **脑间通信** | ✅ `send_message` + EventBus | 无 |
+| **Hook 观察** | ✅ `TurnEnd/ToolCall/ToolResult` | 无 |
+| **BrainBoard 共享状态** | ✅ 跨脑可读写 | 无 |
+| **检测偏执/重复** | ❌ 没有内置机制 | **需要实现** |
+| **动态调参** | ❌ 没有 API | **需要实现** |
+| **元认知干预** | ❌ 没有跨脑控制机制 | **需要实现** |
+
+### 问题解决机制
+
+**问题 1：偏执幻觉**
+`brain_watcher` 订阅检测重复模式 → 发送事件给 `reflector` → `reflector` 向 `decider` 发送干预消息
+
+**问题 2：惰性**
+低频心跳 + 活动检测，超时未响应则发送提醒
+
+**问题 3：单一上下文偏见**
+多脑区独立上下文 + 交叉验证
+
+---
+
+## 5. BrainBoard 观测能力分析
+
+### 现有能力
+- ✅ 跨脑读写：`get(brainId, key)` / `set(brainId, key, value)`
+- ✅ 响应式监听：`watch(brainId, key, callback)`
+- ✅ 持久化：自动写入 `brainboard.json`
+- ✅ 热加载：FSWatcher 监听文件变化
+
+### 不够用的地方
+- ❌ 时序历史：只存最新值，没有历史
+- ❌ 结构化观测：只是 key-value，没有 schema
+- ❌ 批量查询：没有 `watchPrefix` 或 `getByPattern`
+- ❌ 事件溯源：没有变更日志
+
+### 建议的增量路径
+
+```
+阶段 1: 先用现有 BrainBoard
+├── 定义观测 key 的命名约定
+├── 手动在每个 brain 的 soul.md 中约定上报格式
+└── 用 brain_watcher 订阅 + watch() 实现基础监控
+
+阶段 2: 增加 ObservationStore（时序数据）
+
+阶段 3: 增加 TaskTopology（声明式脑区构型）
+
+阶段 4: 元认知层（adjust_brain 工具）
+```
+
+---
+
+## 6. Teammate vs Brain 概念对比
+
+### AgenticOS Teammate vs MineClaw Brain
+
+| 维度 | AgenticOS Teammate | MineClaw Brain |
+|------|-------------------|----------------|
+| **拓扑结构** | **树形** — team-lead 是根，teammate 是子节点 | **图形** — 任意脑区可以互相通信 |
+| **生命周期** | **任务绑定** — 任务完成就结束 | **独立持续** — 可以一直运行 |
+| **启动方式** | `spawn_agent(name="xxx")` **被动启动** | `scheduler.start()` **主动启动** |
+| **通信模型** | 单向：teammate → team-lead（request_approval） | 双向：任意脑区互发消息 |
+
+### 控制权归属
+
+**AgenticOS：**
+- team-lead 是中心，所有 teammate 都向它汇报
+- `request_approval` 工具让 teammate 请求 team-lead 批准
+- 人通过 team-lead 控制整个系统
+
+**MineClaw：**
+- 没有"根节点"，脑区是**对等的**
+- 任意脑区可以 `send_message` 给任意脑区
+- 脑区可以自主运行，不需要被启动
+
+### 设计意图差异
+
+**AgenticOS：** 任务分解工具，让中心 agent（team-lead）分派子任务
+**MineClaw：** 自主协作架构，多脑区独立运行、自主协调
+
+---
+
+## 7. 范式对比总结
+
+| 维度 | AgenticOS | MineClaw |
+|------|-----------|----------|
+| **交互模式** | 请求-响应 (Synchronous) | 事件驱动 (Asynchronous) |
+| **控制模型** | 单一 Agent + 子 Agent (树形) | 多 Brain 对等协作 (图形) |
+| **人的角色** | 每轮在场审查 | 可以离场，周期性检查 |
+| **安全模型** | 权限 + 人审查 | 能力隔离 + 多脑制衡 |
+| **状态管理** | Session 内存 + 可选持久化 | BrainBoard 响应式 + 强制持久化 |
+| **扩展方式** | 代码注册 | 约定目录 + 热加载 |
+| **生命周期** | 请求开始 → 响应结束 | 启动 → 持续运行 → 关闭 |
+
+### 类比
+
+**AgenticOS 像 CLI 工具：**
+- 你调用它，它执行，返回结果
+- 你不调用，它就不动
+- 每次调用是独立的
+
+**MineClaw 像操作系统：**
+- 系统启动后持续运行
+- 各组件自主响应事件
+- 组件之间可以互相影响
+
+---
+
+## 8. 工具热加载机制实现（本次对话新增）
+
+### 问题发现
+用户发现修改 `read_skill.ts` 后，运行中的 MineClaw 没有重新加载工具代码。
+
+### 原因分析
+`ToolLoader.registerWatchPatterns()` 没有被调用，所以工具文件变更不会触发热重载。
+
+### 修复内容
+
+1. **scheduler.ts** — 添加 FSWatcher 注册
+```typescript
+const toolLoader = new ToolLoader();
+if (this.fsWatcher) toolLoader.registerWatchPatterns(this.fsWatcher);
+```
+
+2. **tool-loader.ts** — 添加回调机制
+```typescript
+setCallback(onChange: (tools: ToolDefinition[]) => void): void {
+  this.onToolsChange = onChange;
+}
+
+private notifyChange(): void {
+  this.onToolsChange?.([...this.registry.values()].filter(Boolean));
+}
+```
+
+3. **brain.ts** — 添加工具更新方法
+```typescript
+updateTools(tools: ToolDefinition[]): void {
+  this.tools = tools;
+  this.logger.info(this.id, 0, `tools reloaded: ${tools.length} total`);
+}
+```
+
+4. **连接回调**
+```typescript
+toolLoader.setCallback((tools) => brain.updateTools(tools));
+```
+
+### 设计决策
+- **全量推送**：工具变更频率低，每次变更推送完整工具列表
+- **与 SlotLoader 设计一致**：使用相同的 FSWatcher 机制
+- **支持 delete 事件**：删除工具文件时也会触发 notifyChange
+
+### 目录结构支持
+```
+mineclaw/
+├── tools/                    # global tools（所有 brain 共享）
+│   ├── read_file.ts
+│   └── read_skill.ts
+└── brains/
+    └── coder/
+        └── tools/            # local tools（仅 coder brain）
+            └── custom_tool.ts   # 可覆盖同名 global tool
+```
+
+加载顺序：先 global，后 local，同名工具 local 覆盖 global。
