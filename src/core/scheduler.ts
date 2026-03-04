@@ -66,7 +66,7 @@ export class Scheduler {
   private brainBoard = new BrainBoard(join(ROOT, "brains"));
   private pathManager = new PathManager(ROOT);
   private terminalManager = new TerminalManager(this.pathManager);
-  private logger = new Logger(ROOT, this.pathManager);
+  private logger = new Logger(this.pathManager);
   private get fsWatcher(): FSWatcher | null { return getFSWatcher(); }
   private brains = new Map<string, BaseBrain>();
   private shuttingDown = false;
@@ -352,19 +352,23 @@ export class Scheduler {
   ): Promise<import("./types.js").EventSource[]> {
     const subLoader = new SubscriptionLoader();
     subLoader.setEmitter((event) => brain.pushEvent(event));
-    subLoader.setBrainBoard(this.brainBoard);
-    subLoader.setHooks(brain.hooks);
-    subLoader.setCommandHandler((toolName, args, target, reason) => {
-      const effectiveTarget = (!target || target === "/") ? brainId : target;
-      const targetBrain = this.brains.get(effectiveTarget);
-      if (targetBrain instanceof ConsciousBrain) {
-        targetBrain.queueCommand(toolName, args, reason);
-      } else if (effectiveTarget === brainId && brain instanceof ConsciousBrain) {
-        brain.queueCommand(toolName, args, reason);
-      } else {
-        this.logger.warn("scheduler", 0, `command target '${effectiveTarget}' not found or not a ConsciousBrain`);
-      }
-    });
+
+    // Build BrainContextAPI for subscriptions
+    const brainContext: import("./types.js").BrainContextAPI = {
+      id: brainId,
+      brainDir,
+      hooks: brain.hooks,
+      brainBoard: this.brainBoard,
+      pathManager: this.pathManager,
+      queueCommand: (toolName, args, reason) => {
+        if (brain instanceof ConsciousBrain) {
+          brain.queueCommand(toolName, args, reason);
+        } else {
+          this.logger.warn("scheduler", 0, `queueCommand on non-ConsciousBrain: ${brainId}`);
+        }
+      },
+    };
+    subLoader.setBrainContext(brainContext);
 
     if (this.fsWatcher) subLoader.registerWatchPatterns(this.fsWatcher);
 

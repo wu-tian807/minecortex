@@ -19,8 +19,8 @@ export default function create(ctx: SourceContext): EventSource {
 
         if (trimmed.startsWith("/")) {
           const cmd = parseCommand(trimmed);
-          if (cmd && ctx.onCommand) {
-            ctx.onCommand(cmd.toolName, cmd.args, cmd.target);
+          if (cmd) {
+            ctx.brain.queueCommand(cmd.toolName, cmd.args);
             return;
           }
         }

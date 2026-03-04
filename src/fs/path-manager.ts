@@ -16,6 +16,7 @@ export class PathManager implements PathManagerAPI {
       ["skills", join(this.projectRoot, "skills")],
       ["workspace", this.projectRoot],
       ["key", join(this.projectRoot, "key")],
+      ["logs", join(this.projectRoot, "logs")],
     ]);
   }
 
@@ -31,6 +32,11 @@ export class PathManager implements PathManagerAPI {
 
   brainDir(brainId: string): string {
     return join(this.knownDirs.get("brains")!, brainId);
+  }
+
+  logsDir(brainId?: string): string {
+    const base = this.knownDirs.get("logs")!;
+    return brainId ? join(base, brainId) : base;
   }
 
   resolve(input: { path: string; brain?: string }, callerBrainId: string): string {

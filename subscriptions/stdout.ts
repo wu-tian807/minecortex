@@ -47,7 +47,7 @@ const C = {
 
 function brainHasStdin(ctx: SourceContext): boolean {
   try {
-    const raw = readFileSync(join(ctx.brainDir, "brain.json"), "utf-8");
+    const raw = readFileSync(join(ctx.brain.brainDir, "brain.json"), "utf-8");
     const config: BrainJson = JSON.parse(raw);
     const sub = config.subscriptions;
     if (!sub) return true;
@@ -191,7 +191,8 @@ class CLIRenderer {
 
 export default function create(ctx: SourceContext): EventSource {
   const unsubs: (() => void)[] = [];
-  const renderer = new CLIRenderer(join(ctx.brainDir, "logs"));
+  const logsDir = ctx.brain.pathManager.logsDir(ctx.brain.id);
+  const renderer = new CLIRenderer(logsDir);
 
   return {
     name: "stdout",
@@ -199,7 +200,7 @@ export default function create(ctx: SourceContext): EventSource {
     start(_emit: (event: Event) => void) {
       if (!brainHasStdin(ctx)) return;
 
-      unsubs.push(ctx.hooks.on(HookEvent.EventReceived, ({ events }) => {
+      unsubs.push(ctx.brain.hooks.on(HookEvent.EventReceived, ({ events }) => {
         for (const e of events) {
           if (e.source === "stdin" && e.type === "user_input") {
             const text = (e.payload as { text?: string })?.text ?? "";
@@ -208,27 +209,27 @@ export default function create(ctx: SourceContext): EventSource {
         }
       }));
 
-      unsubs.push(ctx.hooks.on(HookEvent.TurnStart, () => {
+      unsubs.push(ctx.brain.hooks.on(HookEvent.TurnStart, () => {
         renderer.onTurnStart();
       }));
 
-      unsubs.push(ctx.hooks.on(HookEvent.StreamChunk, ({ chunk }) => {
+      unsubs.push(ctx.brain.hooks.on(HookEvent.StreamChunk, ({ chunk }) => {
         renderer.onStreamChunk(chunk);
       }));
 
-      unsubs.push(ctx.hooks.on(HookEvent.ToolCall, ({ name, args }) => {
+      unsubs.push(ctx.brain.hooks.on(HookEvent.ToolCall, ({ name, args }) => {
         renderer.onToolCall(name, args);
       }));
 
-      unsubs.push(ctx.hooks.on(HookEvent.ToolResult, ({ name, result, durationMs }) => {
+      unsubs.push(ctx.brain.hooks.on(HookEvent.ToolResult, ({ name, result, durationMs }) => {
         renderer.onToolResult(name, result, durationMs);
       }));
 
-      unsubs.push(ctx.hooks.on(HookEvent.TurnEnd, () => {
+      unsubs.push(ctx.brain.hooks.on(HookEvent.TurnEnd, () => {
         renderer.onTurnEnd();
       }));
 
-      const unwatchTodos = ctx.brainBoard.watch(ctx.brainId, "todo-list", (value) => {
+      const unwatchTodos = ctx.brain.brainBoard.watch(ctx.brain.id, "todo-list", (value) => {
         const todos = value as TodoItem[] | undefined;
         if (todos) renderer.onTodoUpdate(todos);
       });

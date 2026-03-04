@@ -75,17 +75,18 @@ class BrainFileLogger {
 export class Logger {
   private pathManager: PathManagerAPI | null;
   private brainLoggers = new Map<string, BrainFileLogger>();
-  private rootDir: string;
+  private logsDir: string;
   private globalDebugStream: WriteStream;
   private globalDebugPath: string;
   private globalDebugBytes = 0;
   private closed = false;
   public level: LogLevel = LogLevel.DEBUG;
 
-  constructor(rootDir: string, pathManager?: PathManagerAPI) {
-    this.rootDir = rootDir;
-    this.pathManager = pathManager ?? null;
-    this.globalDebugPath = join(rootDir, "debug.log");
+  constructor(pathManager: PathManagerAPI) {
+    this.pathManager = pathManager;
+    this.logsDir = pathManager.logsDir();
+    mkdirSync(this.logsDir, { recursive: true });
+    this.globalDebugPath = join(this.logsDir, "debug.log");
     this.globalDebugStream = createWriteStream(this.globalDebugPath, { flags: "a" });
     try { this.globalDebugBytes = statSync(this.globalDebugPath).size; } catch { this.globalDebugBytes = 0; }
   }
@@ -140,7 +141,7 @@ export class Logger {
   private getOrCreateBrainLogger(brainId: string): BrainFileLogger {
     let bl = this.brainLoggers.get(brainId);
     if (!bl) {
-      const logDir = join(this.pathManager!.brainDir(brainId), "logs");
+      const logDir = this.pathManager!.logsDir(brainId);
       bl = new BrainFileLogger(logDir);
       this.brainLoggers.set(brainId, bl);
     }

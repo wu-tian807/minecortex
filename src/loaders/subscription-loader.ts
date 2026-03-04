@@ -6,6 +6,8 @@ import type {
   CapabilitySelector,
   FSWatcherAPI,
   BrainBoardAPI,
+  BrainContextAPI,
+  PathManagerAPI,
   Event,
 } from "../core/types.js";
 import type { BrainHooksAPI } from "../hooks/types.js";
@@ -19,24 +21,14 @@ interface SubscriptionEntry {
 
 export class SubscriptionLoader extends BaseLoader<EventSourceFactory, SubscriptionEntry> {
   private emitter: ((event: Event) => void) | null = null;
-  private brainBoard: BrainBoardAPI | null = null;
-  private hooks: BrainHooksAPI | null = null;
-  private commandHandler: ((toolName: string, args: Record<string, string>, target?: string, reason?: string) => void) | null = null;
+  private brainContext: BrainContextAPI | null = null;
 
   setEmitter(emit: (event: Event) => void): void {
     this.emitter = emit;
   }
 
-  setBrainBoard(board: BrainBoardAPI): void {
-    this.brainBoard = board;
-  }
-
-  setHooks(hooks: BrainHooksAPI): void {
-    this.hooks = hooks;
-  }
-
-  setCommandHandler(handler: (toolName: string, args: Record<string, string>, target?: string, reason?: string) => void): void {
-    this.commandHandler = handler;
+  setBrainContext(ctx: BrainContextAPI): void {
+    this.brainContext = ctx;
   }
 
   async importFactory(path: string): Promise<EventSourceFactory> {
@@ -46,14 +38,8 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
 
   createInstance(factory: EventSourceFactory, ctx: LoaderContext, name: string): SubscriptionEntry {
     const sourceCtx: SourceContext = {
-      brainId: ctx.brainId,
-      brainDir: ctx.brainDir,
-      config: ctx.selector.config?.[name] ?? undefined,
-      brainBoard: this.brainBoard!,
-      hooks: this.hooks!,
-      onCommand: this.commandHandler
-        ? (toolName, args, target, reason) => this.commandHandler!(toolName, args, target, reason)
-        : undefined,
+      brain: this.brainContext!,
+      eventConfig: ctx.selector.config?.[name] ?? undefined,
     };
     const source = factory(sourceCtx);
     return { source, name: source.name };

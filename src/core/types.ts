@@ -170,13 +170,19 @@ export interface BrainBoardAPI {
 
 // ─── EventSource (pluggable subscription, factory pattern) ───
 
+/** Brain 暴露给 Subscription 的能力接口 */
+export interface BrainContextAPI {
+  readonly id: string;
+  readonly brainDir: string;
+  readonly hooks: import("../hooks/types.js").BrainHooksAPI;
+  readonly brainBoard: BrainBoardAPI;
+  readonly pathManager: PathManagerAPI;
+  queueCommand(toolName: string, args: Record<string, string>, reason?: string): void;
+}
+
 export interface SourceContext {
-  brainId: string;
-  brainDir: string;
-  config?: Record<string, unknown>;
-  brainBoard: BrainBoardAPI;
-  hooks: import("../hooks/types.js").BrainHooksAPI;
-  onCommand?: (toolName: string, args: Record<string, string>, target?: string, reason?: string) => void;
+  brain: BrainContextAPI;
+  eventConfig?: Record<string, unknown>;
 }
 
 export type EventSourceFactory = (ctx: SourceContext) => EventSource;
@@ -193,6 +199,7 @@ export interface PathManagerAPI {
   root(): string;
   dir(name: string): string;
   brainDir(brainId: string): string;
+  logsDir(brainId?: string): string;
   resolve(input: { path: string; brain?: string }, callerBrainId: string): string;
   checkPermission(absPath: string, op: "read" | "write", callerBrainId: string, evolve: boolean): boolean;
 }
