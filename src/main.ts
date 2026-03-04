@@ -7,11 +7,14 @@ import "./llm/openai-compat.js";
 import "./llm/deepseek-reasoning.js";
 
 import { Scheduler } from "./core/scheduler.js";
+import { ensureDefaultConfigs } from "./defaults/index.js";
 
 async function main() {
   console.log("╔════════════════════════════════╗");
   console.log("║        MineClaw v0.2.0         ║");
   console.log("╚════════════════════════════════╝\n");
+
+  await ensureDefaultConfigs(process.cwd());
 
   const scheduler = new Scheduler();
   await scheduler.start();

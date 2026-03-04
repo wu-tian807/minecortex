@@ -28,6 +28,7 @@ import { SessionManager } from "../session/session-manager.js";
 import { Logger } from "./logger.js";
 import { createProvider, createFallbackProvider, getModelSpec } from "../llm/provider.js";
 import { BrainHooks } from "../hooks/brain-hooks.js";
+import { DEFAULT_BRAIN_JSON } from "../defaults/templates.js";
 
 const ROOT = process.cwd();
 
@@ -380,13 +381,6 @@ export class Scheduler {
 
   // ─── Public API ───
 
-  private static readonly DEFAULT_BRAIN_JSON = {
-    model: null,
-    subscriptions: { global: "none", enable: ["stdin"] },
-    tools: { global: "all", disable: ["manage_brain"] },
-    slots: { global: "all" },
-  };
-
   private static defaultSoul(id: string): string {
     return `# ${id}\n\n你是 MineClaw 多脑系统中的 ${id} 脑区。\n\n## 职责\n- (请编辑此处)\n\n## 约束\n- 默认中文回复，代码注释用英文\n- 每步完成后简短汇报\n\n## 关系\n- 通过 send_message 与其他脑区协作\n- 用 manage_brain list 查看系统中所有活跃脑区\n\n## 工作方式\n1. 理解任务 → 拆解步骤\n2. 用工具直接执行\n3. 遇到问题先自己排查\n`;
   }
@@ -436,8 +430,10 @@ export class Scheduler {
     } catch { /* doesn't exist — proceed */ }
 
     await mkdir(brainDir, { recursive: true });
-    const brainJson = { ...Scheduler.DEFAULT_BRAIN_JSON } as Record<string, unknown>;
-    if (opts?.model) brainJson.model = opts.model;
+    const brainJson = { ...DEFAULT_BRAIN_JSON } as Record<string, unknown>;
+    if (opts?.model) {
+      brainJson.models = { ...(brainJson.models as object ?? {}), model: opts.model };
+    }
     if (opts?.subscriptions) brainJson.subscriptions = opts.subscriptions;
     await writeFile(join(brainDir, "brain.json"), JSON.stringify(brainJson, null, 2) + "\n", "utf-8");
     await writeFile(join(brainDir, "soul.md"), opts?.soul ?? Scheduler.defaultSoul(id), "utf-8");
