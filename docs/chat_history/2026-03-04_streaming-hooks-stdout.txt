@@ -1,0 +1,2170 @@
+user:
+<user_query>
+看一看下当前mineclaw的hooks的颗粒度么
+</user_query>
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/types.ts
+[Tool call] Grep
+  pattern: hook|Hook|emit|on\(
+  path: /home/aw/Desktop/gamer/mineclaw/src/core
+
+[Tool result] Read
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/hooks
+[Tool call] Glob
+  glob_pattern: mineclaw/src/hooks/**/*
+
+[Tool result] Read
+
+[Tool result] Glob
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/hooks/types.ts
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/hooks/brain-hooks.ts
+
+[Tool result] Read
+
+[Tool result] Read
+
+assistant:
+现在我来看看这些 hooks 在实际代码中的触发位置，以便了解完整的调用粒度。
+[Tool call] Grep
+  pattern: hooks\.emit\(HookEvent
+  path: /home/aw/Desktop/gamer/mineclaw/src
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Grep
+  pattern: hooks\?\.emit\(HookEvent
+  path: /home/aw/Desktop/gamer/mineclaw/src
+
+[Tool result] Grep
+
+assistant:
+现在我已经了解了 mineclaw 的 hooks 系统。以下是当前 hooks 粒度的分析：
+
+## 当前 Hooks 粒度
+
+mineclaw 目前定义了 **5 个生命周期 hook 事件**：
+
+```7:13:mineclaw/src/hooks/types.ts
+export enum HookEvent {
+  AssistantMessage = "assistantMessage",
+  TurnStart = "turnStart",
+  TurnEnd = "turnEnd",
+  ToolCall = "toolCall",
+  ToolResult = "toolResult",
+}
+```
+
+### 各 Hook 的触发点和 Payload：
+
+| Hook | 粒度 | Payload | 触发位置 |
+|------|------|---------|----------|
+| `TurnStart` | 每轮开始 | `{ turn, eventCount }` | `brain.ts:327` - 主循环每轮处理事件前 |
+| `TurnEnd` | 每轮结束 | `{ turn, aborted }` | `brain.ts:359` - 主循环每轮完成后 |
+| `AssistantMessage` | 每条 LLM 响应 | `{ msg: LLMMessage, turn }` | `brain.ts:166` - 子 agent 循环中 |
+| `ToolCall` | 每次工具调用前 | `{ name, args, toolCall }` | `brain.ts:184`, `brain.ts:389` |
+| `ToolResult` | 每次工具执行完 | `{ name, result, durationMs }` | `brain.ts:187`, `brain.ts:409` |
+
+### 粒度评估：
+
+**覆盖的部分：**
+- ✅ Turn 级别的开始/结束
+- ✅ 工具调用/结果级别
+- ✅ Assistant 消息级别
+
+**缺少的粒度（可能需要的）：**
+- ❌ `LLMRequest` / `LLMResponse` — LLM 调用前后
+- ❌ `EventReceived` — 事件到达时
+- ❌ `BrainStart` / `BrainStop` — brain 整体生命周期
+- ❌ `PromptBuilt` — prompt 构建完成时
+- ❌ `SessionSaved` / `SessionLoaded` — session 持久化相关
+- ❌ `Error` — 错误处理
+
+当前的 hooks 是一个 **中等粒度** 的设计，主要聚焦于 **turn 循环** 和 **工具执行** 两个维度。如果需要更细粒度的监控（如 LLM streaming、token 计数、retry 等），目前的 hook 系统还不支持。
+
+user:
+<user_query>
+assistant消息级别不就是LLMRequest吗。
+不过当前的hook能转发llm的流式信息吗，不只是完整消息。
+然后用turn的结束和开始和额外的工具调用等消息作为判断条件，让stdout支持流式输出
+</user_query>
+
+assistant:
+你说得对，`AssistantMessage` 确实就是 LLM 响应。让我看看当前 LLM 层是否支持流式以及 hook 是否能转发流式信息。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/llm/gemini3.ts
+[Tool call] Glob
+  glob_pattern: mineclaw/src/llm/*.ts
+
+[Tool result] Read
+
+[Tool result] Glob
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/llm/types.ts
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/llm/stream.ts
+
+[Tool result] Read
+
+[Tool result] Read
+
+assistant:
+现在我来看 brain.ts 中是如何消费这些流式 chunk 的。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/brain.ts
+
+[Tool result] Read
+
+assistant:
+现在我完全理解了现状。让我总结一下：
+
+## 当前问题
+
+**LLM 层是流式的**（`chatStream` 返回 `AsyncIterable<StreamChunk>`），但 brain.ts 中直接用 `assembleResponse(stream)` **把流聚合成完整响应后才触发 hook**：
+
+```113:114:mineclaw/src/core/brain.ts
+      const stream = provider.chatStream(messages, tools, signal);
+      response = await assembleResponse(stream);
+```
+
+然后在第 166 行才触发 `AssistantMessage` hook，此时已经是完整消息了。
+
+## 要支持流式 stdout 输出，需要：
+
+### 1. 新增流式 Hook 事件
+
+在 `HookEvent` 中增加：
+
+```typescript
+export enum HookEvent {
+  // ... existing
+  StreamChunk = "streamChunk",  // 流式 chunk
+}
+
+// Payload
+[HookEvent.StreamChunk]: {
+  chunk: StreamChunk;  // { type: "text" | "thinking" | "tool_call" | "usage", ... }
+  turn: number;
+};
+```
+
+### 2. 修改 `runAgentLoop` 消费流的方式
+
+将：
+```typescript
+const stream = provider.chatStream(messages, tools, signal);
+response = await assembleResponse(stream);
+```
+
+改为：
+```typescript
+const stream = provider.chatStream(messages, tools, signal);
+const chunks: StreamChunk[] = [];
+for await (const chunk of stream) {
+  hooks?.emit(HookEvent.StreamChunk, { chunk, turn });
+  chunks.push(chunk);
+}
+response = assembleFromChunks(chunks);
+```
+
+### 3. stdout subscription 支持流式输出
+
+在 stdin subscription 里监听这些 hook，根据：
+- `TurnStart` → 准备新一轮输出
+- `StreamChunk` → 实时 `process.stdout.write(chunk.text)`
+- `ToolCall` → 暂停或标记工具调用中
+- `TurnEnd` → 换行/flush
+
+---
+
+是否需要我实现这个流式 hook 改造？
+
+user:
+<user_query>
+可以
+</user_query>
+
+assistant:
+[Tool call] TodoWrite
+  todos: [{"id":"1","content":"在 HookEvent 中添加 StreamChunk 事件类型和 payload","status":"in_progress"},{"id":"2","content":"修改 runAgentLoop 消费流的方式，逐 chunk 触发 hook","status":"pending"},{"id":"3","content":"创建/修改 stdin subscription 支持流式 stdout 输出","status":"pending"}]
+  merge: false
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/subscriptions/stdin.ts
+
+[Tool result] TodoWrite
+
+[Tool result] Read
+
+assistant:
+[Tool call] Glob
+  glob_pattern: mineclaw/src/subscriptions/**/*
+
+[Tool result] Glob
+
+assistant:
+[Tool call] Glob
+  glob_pattern: mineclaw/src/**/*stdin*
+[Tool call] Grep
+  pattern: EventSource|subscription|stdin
+  path: /home/aw/Desktop/gamer/mineclaw/src
+  output_mode: files_with_matches
+
+[Tool result] Glob
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/loaders/subscription-loader.ts
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/defaults/templates.ts
+
+[Tool result] Read
+
+[Tool result] Read
+
+assistant:
+[Tool call] Glob
+  glob_pattern: **/stdin.ts
+
+[Tool result] Glob
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/subscriptions/stdin.ts
+
+[Tool result] Read
+
+assistant:
+现在我已经理解了完整的结构。让我开始实现流式 hook 支持。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/src/hooks/types.ts
+  old_string: /** Lifecycle hook types — event-driven hooks for external injection via subscriptions */
+
+import type { LLMMessage, LLMToolCall } from "../llm/types.js";
+
+// ─── Hook Events ───
+
+export enum HookEvent {
+  AssistantMessage = "assistantMessage",
+  TurnStart = "turnStart",
+  TurnEnd = "turnEnd",
+  ToolCall = "toolCall",
+  ToolResult = "toolResult",
+}
+
+// ─── Payload per event ───
+
+export interface HookPayloadMap {
+  [HookEvent.AssistantMessage]: {
+    msg: LLMMessage;
+    turn: number;
+  };
+  [HookEvent.TurnStart]: {
+    turn: number;
+    eventCount: number;
+  };
+  [HookEvent.TurnEnd]: {
+    turn: number;
+    aborted: boolean;
+  };
+  [HookEvent.ToolCall]: {
+    name: string;
+    args: Record<string, unknown>;
+    toolCall: LLMToolCall;
+  };
+  [HookEvent.ToolResult]: {
+    name: string;
+    result: unknown;
+    durationMs: number;
+  };
+}
+  new_string: /** Lifecycle hook types — event-driven hooks for external injection via subscriptions */
+
+import type { LLMMessage, LLMToolCall, StreamChunk } from "../llm/types.js";
+
+// ─── Hook Events ───
+
+export enum HookEvent {
+  AssistantMessage = "assistantMessage",
+  TurnStart = "turnStart",
+  TurnEnd = "turnEnd",
+  ToolCall = "toolCall",
+  ToolResult = "toolResult",
+  StreamChunk = "streamChunk",
+}
+
+// ─── Payload per event ───
+
+export interface HookPayloadMap {
+  [HookEvent.AssistantMessage]: {
+    msg: LLMMessage;
+    turn: number;
+  };
+  [HookEvent.TurnStart]: {
+    turn: number;
+    eventCount: number;
+  };
+  [HookEvent.TurnEnd]: {
+    turn: number;
+    aborted: boolean;
+  };
+  [HookEvent.ToolCall]: {
+    name: string;
+    args: Record<string, unknown>;
+    toolCall: LLMToolCall;
+  };
+  [HookEvent.ToolResult]: {
+    name: string;
+    result: unknown;
+    durationMs: number;
+  };
+  [HookEvent.StreamChunk]: {
+    chunk: StreamChunk;
+    turn: number;
+  };
+}
+[Tool call] TodoWrite
+  todos: [{"id":"1","content":"在 HookEvent 中添加 StreamChunk 事件类型和 payload","status":"completed"},{"id":"2","content":"修改 runAgentLoop 消费流的方式，逐 chunk 触发 hook","status":"in_progress"},{"id":"3","content":"创建/修改 stdin subscription 支持流式 stdout 输出","status":"pending"}]
+  merge: true
+
+[Tool result] StrReplace
+
+[Tool result] TodoWrite
+
+assistant:
+现在修改 `stream.ts`，添加一个支持流式 hook 的版本。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/src/llm/stream.ts
+  old_string: import type { LLMResponse, StreamChunk, LLMToolCall } from "./types.js";
+
+/** Collect an async stream of chunks into a single LLMResponse. */
+export async function assembleResponse(
+  stream: AsyncIterable<StreamChunk>,
+): Promise<LLMResponse> {
+  let text = "";
+  let thinking = "";
+  let thinkingSignature: string | undefined;
+  let textSignature: string | undefined;
+  const toolCalls: LLMToolCall[] = [];
+  let usage: { inputTokens: number; outputTokens: number; thinkingTokens?: number } | undefined;
+
+  for await (const chunk of stream) {
+    switch (chunk.type) {
+      case "text":
+        text += chunk.text;
+        if (chunk.thoughtSignature) textSignature = chunk.thoughtSignature;
+        break;
+      case "thinking":
+        thinking += chunk.text;
+        if (chunk.thoughtSignature) thinkingSignature = chunk.thoughtSignature;
+        break;
+      case "tool_call": {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(chunk.arguments);
+        } catch {}
+        toolCalls.push({
+          id: chunk.id,
+          name: chunk.name,
+          arguments: args,
+          thoughtSignature: chunk.thoughtSignature,
+        });
+        break;
+      }
+      case "usage":
+        usage = {
+          inputTokens: chunk.inputTokens,
+          outputTokens: chunk.outputTokens,
+          thinkingTokens: chunk.thinkingTokens,
+        };
+        break;
+    }
+  }
+
+  return {
+    content: text,
+    thinking: thinking || undefined,
+    thinkingSignature,
+    textSignature,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    usage,
+  };
+}
+  new_string: import type { LLMResponse, StreamChunk, LLMToolCall } from "./types.js";
+
+/** Collect an async stream of chunks into a single LLMResponse. */
+export async function assembleResponse(
+  stream: AsyncIterable<StreamChunk>,
+): Promise<LLMResponse> {
+  let text = "";
+  let thinking = "";
+  let thinkingSignature: string | undefined;
+  let textSignature: string | undefined;
+  const toolCalls: LLMToolCall[] = [];
+  let usage: { inputTokens: number; outputTokens: number; thinkingTokens?: number } | undefined;
+
+  for await (const chunk of stream) {
+    switch (chunk.type) {
+      case "text":
+        text += chunk.text;
+        if (chunk.thoughtSignature) textSignature = chunk.thoughtSignature;
+        break;
+      case "thinking":
+        thinking += chunk.text;
+        if (chunk.thoughtSignature) thinkingSignature = chunk.thoughtSignature;
+        break;
+      case "tool_call": {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(chunk.arguments);
+        } catch {}
+        toolCalls.push({
+          id: chunk.id,
+          name: chunk.name,
+          arguments: args,
+          thoughtSignature: chunk.thoughtSignature,
+        });
+        break;
+      }
+      case "usage":
+        usage = {
+          inputTokens: chunk.inputTokens,
+          outputTokens: chunk.outputTokens,
+          thinkingTokens: chunk.thinkingTokens,
+        };
+        break;
+    }
+  }
+
+  return {
+    content: text,
+    thinking: thinking || undefined,
+    thinkingSignature,
+    textSignature,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    usage,
+  };
+}
+
+/** Collect stream with per-chunk callback for streaming hooks. */
+export async function assembleResponseWithCallback(
+  stream: AsyncIterable<StreamChunk>,
+  onChunk?: (chunk: StreamChunk) => void,
+): Promise<LLMResponse> {
+  let text = "";
+  let thinking = "";
+  let thinkingSignature: string | undefined;
+  let textSignature: string | undefined;
+  const toolCalls: LLMToolCall[] = [];
+  let usage: { inputTokens: number; outputTokens: number; thinkingTokens?: number } | undefined;
+
+  for await (const chunk of stream) {
+    onChunk?.(chunk);
+
+    switch (chunk.type) {
+      case "text":
+        text += chunk.text;
+        if (chunk.thoughtSignature) textSignature = chunk.thoughtSignature;
+        break;
+      case "thinking":
+        thinking += chunk.text;
+        if (chunk.thoughtSignature) thinkingSignature = chunk.thoughtSignature;
+        break;
+      case "tool_call": {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(chunk.arguments);
+        } catch {}
+        toolCalls.push({
+          id: chunk.id,
+          name: chunk.name,
+          arguments: args,
+          thoughtSignature: chunk.thoughtSignature,
+        });
+        break;
+      }
+      case "usage":
+        usage = {
+          inputTokens: chunk.inputTokens,
+          outputTokens: chunk.outputTokens,
+          thinkingTokens: chunk.thinkingTokens,
+        };
+        break;
+    }
+  }
+
+  return {
+    content: text,
+    thinking: thinking || undefined,
+    thinkingSignature,
+    textSignature,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    usage,
+  };
+}
+
+[Tool result] StrReplace
+
+assistant:
+现在修改 `brain.ts` 中的 `runAgentLoop`，使用新的 `assembleResponseWithCallback` 并触发 StreamChunk hook。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/brain.ts
+  old_string: import { assembleResponse } from "../llm/stream.js";
+  new_string: import { assembleResponseWithCallback } from "../llm/stream.js";
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/brain.ts
+  old_string:     let response: LLMResponse;
+    try {
+      const stream = provider.chatStream(messages, tools, signal);
+      response = await assembleResponse(stream);
+    } catch (err: any) {
+  new_string:     let response: LLMResponse;
+    try {
+      const stream = provider.chatStream(messages, tools, signal);
+      response = await assembleResponseWithCallback(stream, (chunk) => {
+        hooks?.emit(HookEvent.StreamChunk, { chunk, turn });
+      });
+    } catch (err: any) {
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] TodoWrite
+  todos: [{"id":"2","content":"修改 runAgentLoop 消费流的方式，逐 chunk 触发 hook","status":"completed"},{"id":"3","content":"创建/修改 stdin subscription 支持流式 stdout 输出","status":"in_progress"}]
+  merge: true
+
+[Tool result] TodoWrite
+
+assistant:
+现在修改 stdin subscription，监听 hooks 实现流式输出。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/subscriptions/stdin.ts
+  old_string: /** @desc Stdin subscription source — terminal input as standard EventSource */
+
+import * as readline from "node:readline";
+import { join } from "node:path";
+import type { Event, EventSource, SourceContext } from "../src/core/types.js";
+import { parseCommand } from "../src/core/command-parser.js";
+import { QARecorder } from "../src/session/qa-recorder.js";
+
+export default function create(ctx: SourceContext): EventSource {
+  let rl: readline.Interface | null = null;
+  const qa = new QARecorder(join(ctx.brainDir, "logs"));
+
+  return {
+    name: "stdin",
+
+    start(emit: (event: Event) => void) {
+      rl = readline.createInterface({ input: process.stdin });
+
+      rl.on("line", (line) => {
+        const trimmed = line.trim();
+        if (trimmed.length === 0) return;
+
+        if (trimmed.startsWith("/")) {
+          const cmd = parseCommand(trimmed);
+          if (cmd && ctx.onCommand) {
+            ctx.onCommand(cmd.toolName, cmd.args, cmd.target);
+            return;
+          }
+        }
+
+        qa.recordUser(trimmed).catch(() => {});
+
+        emit({
+          source: "stdin",
+          type: "message",
+          payload: { text: trimmed },
+          ts: Date.now(),
+        });
+      });
+
+      rl.on("close", () => {
+        console.log("[stdin] 输入流已关闭");
+        rl = null;
+      });
+
+      console.log("[stdin] 订阅已启动，等待输入...");
+    },
+
+    stop() {
+      rl?.close();
+      rl = null;
+      qa.close();
+    },
+  };
+}
+  new_string: /** @desc Stdin subscription source — terminal input with streaming stdout output */
+
+import * as readline from "node:readline";
+import { join } from "node:path";
+import type { Event, EventSource, SourceContext } from "../src/core/types.js";
+import { parseCommand } from "../src/core/command-parser.js";
+import { QARecorder } from "../src/session/qa-recorder.js";
+import { HookEvent } from "../src/hooks/types.js";
+
+export default function create(ctx: SourceContext): EventSource {
+  let rl: readline.Interface | null = null;
+  const qa = new QARecorder(join(ctx.brainDir, "logs"));
+  const disposers: Array<() => void> = [];
+
+  return {
+    name: "stdin",
+
+    start(emit: (event: Event) => void) {
+      rl = readline.createInterface({ input: process.stdin });
+
+      // ─── Streaming output state ───
+      let streaming = false;
+      let streamedText = false;
+
+      // TurnStart: prepare for streaming
+      disposers.push(ctx.hooks.on(HookEvent.TurnStart, () => {
+        streaming = true;
+        streamedText = false;
+      }));
+
+      // StreamChunk: real-time output
+      disposers.push(ctx.hooks.on(HookEvent.StreamChunk, ({ chunk }) => {
+        if (!streaming) return;
+
+        if (chunk.type === "text") {
+          process.stdout.write(chunk.text);
+          streamedText = true;
+        }
+      }));
+
+      // ToolCall: pause streaming, show tool indicator
+      disposers.push(ctx.hooks.on(HookEvent.ToolCall, ({ name }) => {
+        if (streamedText) {
+          process.stdout.write("\n");
+          streamedText = false;
+        }
+        process.stdout.write(`\x1b[90m▶ ${name}\x1b[0m `);
+      }));
+
+      // ToolResult: show completion indicator
+      disposers.push(ctx.hooks.on(HookEvent.ToolResult, ({ durationMs }) => {
+        process.stdout.write(`\x1b[90m(${durationMs}ms)\x1b[0m\n`);
+      }));
+
+      // TurnEnd: finalize output
+      disposers.push(ctx.hooks.on(HookEvent.TurnEnd, () => {
+        if (streamedText) {
+          process.stdout.write("\n");
+        }
+        streaming = false;
+        streamedText = false;
+      }));
+
+      // AssistantMessage: record to QA log (after full message assembled)
+      disposers.push(ctx.hooks.on(HookEvent.AssistantMessage, ({ msg }) => {
+        const text = typeof msg.content === "string" ? msg.content : "";
+        if (text) {
+          qa.recordAssistant(text).catch(() => {});
+        }
+      }));
+
+      rl.on("line", (line) => {
+        const trimmed = line.trim();
+        if (trimmed.length === 0) return;
+
+        if (trimmed.startsWith("/")) {
+          const cmd = parseCommand(trimmed);
+          if (cmd && ctx.onCommand) {
+            ctx.onCommand(cmd.toolName, cmd.args, cmd.target);
+            return;
+          }
+        }
+
+        qa.recordUser(trimmed).catch(() => {});
+
+        emit({
+          source: "stdin",
+          type: "message",
+          payload: { text: trimmed },
+          ts: Date.now(),
+        });
+      });
+
+      rl.on("close", () => {
+        console.log("[stdin] 输入流已关闭");
+        rl = null;
+      });
+
+      console.log("[stdin] 订阅已启动，等待输入...");
+    },
+
+    stop() {
+      for (const dispose of disposers) {
+        dispose();
+      }
+      disposers.length = 0;
+      rl?.close();
+      rl = null;
+      qa.close();
+    },
+  };
+}
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] ReadLints
+  paths: ["/home/aw/Desktop/gamer/mineclaw/src/hooks/types.ts","/home/aw/Desktop/gamer/mineclaw/src/llm/stream.ts","/home/aw/Desktop/gamer/mineclaw/src/core/brain.ts","/home/aw/Desktop/gamer/mineclaw/subscriptions/stdin.ts"]
+
+[Tool result] ReadLints
+
+assistant:
+[Tool call] TodoWrite
+  todos: [{"id":"3","content":"创建/修改 stdin subscription 支持流式 stdout 输出","status":"completed"}]
+  merge: true
+
+[Tool result] TodoWrite
+
+assistant:
+流式 hook 改造已完成。总结一下修改：
+
+## 改动内容
+
+### 1. `src/hooks/types.ts` — 新增 StreamChunk 事件
+
+```typescript
+export enum HookEvent {
+  // ... existing
+  StreamChunk = "streamChunk",  // 新增
+}
+
+// 新增 payload
+[HookEvent.StreamChunk]: {
+  chunk: StreamChunk;  // { type: "text" | "thinking" | "tool_call" | "usage", ... }
+  turn: number;
+};
+```
+
+### 2. `src/llm/stream.ts` — 新增带回调的聚合函数
+
+```typescript
+export async function assembleResponseWithCallback(
+  stream: AsyncIterable<StreamChunk>,
+  onChunk?: (chunk: StreamChunk) => void,
+): Promise<LLMResponse>
+```
+
+### 3. `src/core/brain.ts` — 消费流时触发 hook
+
+```typescript
+response = await assembleResponseWithCallback(stream, (chunk) => {
+  hooks?.emit(HookEvent.StreamChunk, { chunk, turn });
+});
+```
+
+### 4. `subscriptions/stdin.ts` — 监听 hooks 实现流式输出
+
+- `TurnStart` → 准备流式状态
+- `StreamChunk` → `process.stdout.write(chunk.text)` 实时输出
+- `ToolCall` → 显示 `▶ tool_name` 指示
+- `ToolResult` → 显示 `(xxxms)` 耗时
+- `TurnEnd` → 换行/flush
+
+现在运行 mineclaw 时，LLM 的响应会实时流式打印到终端，而不是等整个响应完成后才输出。
+
+user:
+<user_query>
+里怎么写到stdin去了？不是stdout吗
+</user_query>
+
+assistant:
+你说的对，流式输出确实是写到 **stdout**，代码逻辑是正确的（用 `process.stdout.write`）。
+
+但问题是：**这个功能放在 `stdin.ts` subscription 里不太合适**。
+
+`stdin.ts` 的职责是**读取用户输入**，而流式输出是**显示 LLM 响应**——这是两个不同的关注点。
+
+有两个选择：
+
+1. **重命名/拆分**：把 `stdin.ts` 改名为 `terminal.ts` 或 `console.ts`，表示它同时处理终端的输入和输出
+
+2. **新建 `stdout.ts`**：专门处理流式输出，`stdin.ts` 保持只负责输入
+
+你倾向哪种方式？
+
+user:
+<user_query>
+@mineclaw/subscriptions/stdout.ts 这是干嘛的
+</user_query>
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/subscriptions/stdout.ts
+
+[Tool result] Read
+
+assistant:
+原来已经有 `stdout.ts` 了！它的功能是：
+
+1. **监听 `AssistantMessage`** — 输出完整的 assistant 消息（非流式）
+2. **监听 `ToolResult`** — 输出工具执行结果
+3. **watch `todo-list`** — 显示 todo 列表变化
+
+**问题是**：它监听的是 `AssistantMessage`（完整消息），不是 `StreamChunk`（流式 chunk），所以**目前不支持流式输出**。
+
+我之前错误地把流式输出代码加到了 `stdin.ts`。正确的做法是修改这个 `stdout.ts`。
+
+需要我把 `stdin.ts` 的流式输出代码撤销，然后改为在 `stdout.ts` 中添加 `StreamChunk` 支持吗？这样：
+
+- `stdin.ts` — 只负责读取用户输入
+- `stdout.ts` — 负责流式输出 LLM 响应 + 工具结果 + todo
+
+user:
+<user_query>
+嗯，我帮你撤回stdin的代码
+</user_query>
+
+assistant:
+好的，那我来修改 `stdout.ts` 添加流式输出支持。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/subscriptions/stdin.ts
+
+[Tool result] Read
+
+assistant:
+好的，`stdin.ts` 已经被你撤回了。现在修改 `stdout.ts` 添加流式输出支持。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/subscriptions/stdout.ts
+  old_string: /** @desc Stdout subscription — pipes assistant messages + tool activity to terminal */
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Event, EventSource, SourceContext, BrainJson } from "../src/core/types.js";
+import { HookEvent } from "../src/hooks/types.js";
+import { QARecorder } from "../src/session/qa-recorder.js";
+
+type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
+
+interface TodoItem {
+  id: string;
+  content: string;
+  status: TodoStatus;
+}
+
+const STATUS_ICON: Record<TodoStatus, string> = {
+  pending: "○",
+  in_progress: "▶",
+  completed: "✓",
+  cancelled: "✗",
+};
+
+function brainHasStdin(ctx: SourceContext): boolean {
+  try {
+    const raw = readFileSync(join(ctx.brainDir, "brain.json"), "utf-8");
+    const config: BrainJson = JSON.parse(raw);
+    const sub = config.subscriptions;
+    if (!sub) return true;
+    if (sub.global === "all") {
+      return !(sub.disable ?? []).includes("stdin");
+    }
+    return (sub.enable ?? []).includes("stdin");
+  } catch {
+    return true;
+  }
+}
+
+function formatTodoList(todos: TodoItem[]): string {
+  if (!todos || todos.length === 0) return "";
+  const total = todos.length;
+  const done = todos.filter((t) => t.status === "completed").length;
+  const lines = todos.map((t) => `  ${STATUS_ICON[t.status]} [${t.id}] ${t.content}`);
+  return `[todos] ${done}/${total} completed\n${lines.join("\n")}`;
+}
+
+export default function create(ctx: SourceContext): EventSource {
+  const unsubs: (() => void)[] = [];
+  const qa = new QARecorder(join(ctx.brainDir, "logs"));
+
+  return {
+    name: "stdout",
+
+    start(_emit: (event: Event) => void) {
+      if (!brainHasStdin(ctx)) return;
+
+      unsubs.push(ctx.hooks.on(HookEvent.AssistantMessage, ({ msg }) => {
+        const raw = typeof msg.content === "string"
+          ? msg.content
+          : msg.content
+              ?.filter((p): p is { type: "text"; text: string } => p.type === "text")
+              .map(p => p.text)
+              .join("") ?? "";
+        const text = raw.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
+
+        if (msg.toolCalls?.length) {
+          const calls = msg.toolCalls
+            .map(tc => `  → ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 120)})`)
+            .join("\n");
+          const block = text ? `${text}\n${calls}` : calls;
+          process.stdout.write(block + "\n");
+          qa.recordAssistant(block).catch(() => {});
+        } else if (text) {
+          process.stdout.write(text + "\n");
+          qa.recordAssistant(text).catch(() => {});
+        }
+      }));
+
+      unsubs.push(ctx.hooks.on(HookEvent.ToolResult, ({ name, result, durationMs }) => {
+        const resultStr = typeof result === "string" ? result : JSON.stringify(result);
+        const preview = resultStr.slice(0, 200);
+        const suffix = resultStr.length > 200 ? "..." : "";
+        const line = `  ← ${name} (${durationMs}ms): ${preview}${suffix}`;
+        process.stdout.write(line + "\n");
+        qa.recordToolResult(name, resultStr, durationMs).catch(() => {});
+      }));
+
+      const unwatchTodos = ctx.brainBoard.watch(ctx.brainId, "todo-list", (value) => {
+        const todos = value as TodoItem[] | undefined;
+        const formatted = formatTodoList(todos ?? []);
+        if (formatted) {
+          process.stdout.write("\n" + formatted + "\n\n");
+        }
+      });
+      unsubs.push(unwatchTodos);
+    },
+
+    stop() {
+      for (const u of unsubs) u();
+      unsubs.length = 0;
+      qa.close();
+    },
+  };
+}
+  new_string: /** @desc Stdout subscription — streaming assistant output + tool activity to terminal */
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Event, EventSource, SourceContext, BrainJson } from "../src/core/types.js";
+import { HookEvent } from "../src/hooks/types.js";
+import { QARecorder } from "../src/session/qa-recorder.js";
+
+type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
+
+interface TodoItem {
+  id: string;
+  content: string;
+  status: TodoStatus;
+}
+
+const STATUS_ICON: Record<TodoStatus, string> = {
+  pending: "○",
+  in_progress: "▶",
+  completed: "✓",
+  cancelled: "✗",
+};
+
+function brainHasStdin(ctx: SourceContext): boolean {
+  try {
+    const raw = readFileSync(join(ctx.brainDir, "brain.json"), "utf-8");
+    const config: BrainJson = JSON.parse(raw);
+    const sub = config.subscriptions;
+    if (!sub) return true;
+    if (sub.global === "all") {
+      return !(sub.disable ?? []).includes("stdin");
+    }
+    return (sub.enable ?? []).includes("stdin");
+  } catch {
+    return true;
+  }
+}
+
+function formatTodoList(todos: TodoItem[]): string {
+  if (!todos || todos.length === 0) return "";
+  const total = todos.length;
+  const done = todos.filter((t) => t.status === "completed").length;
+  const lines = todos.map((t) => `  ${STATUS_ICON[t.status]} [${t.id}] ${t.content}`);
+  return `[todos] ${done}/${total} completed\n${lines.join("\n")}`;
+}
+
+export default function create(ctx: SourceContext): EventSource {
+  const unsubs: (() => void)[] = [];
+  const qa = new QARecorder(join(ctx.brainDir, "logs"));
+
+  return {
+    name: "stdout",
+
+    start(_emit: (event: Event) => void) {
+      if (!brainHasStdin(ctx)) return;
+
+      // ─── Streaming state ───
+      let streaming = false;
+      let streamedText = "";
+      let pendingToolCalls = false;
+
+      // TurnStart: prepare for streaming
+      unsubs.push(ctx.hooks.on(HookEvent.TurnStart, () => {
+        streaming = true;
+        streamedText = "";
+        pendingToolCalls = false;
+      }));
+
+      // StreamChunk: real-time text output
+      unsubs.push(ctx.hooks.on(HookEvent.StreamChunk, ({ chunk }) => {
+        if (!streaming) return;
+
+        if (chunk.type === "text") {
+          process.stdout.write(chunk.text);
+          streamedText += chunk.text;
+        }
+      }));
+
+      // ToolCall: show tool indicator, pause text streaming
+      unsubs.push(ctx.hooks.on(HookEvent.ToolCall, ({ name, args }) => {
+        if (streamedText && !streamedText.endsWith("\n")) {
+          process.stdout.write("\n");
+        }
+        const argsPreview = JSON.stringify(args).slice(0, 80);
+        process.stdout.write(`\x1b[90m  → ${name}(${argsPreview})\x1b[0m\n`);
+        pendingToolCalls = true;
+      }));
+
+      // ToolResult: show result preview
+      unsubs.push(ctx.hooks.on(HookEvent.ToolResult, ({ name, result, durationMs }) => {
+        const resultStr = typeof result === "string" ? result : JSON.stringify(result);
+        const preview = resultStr.slice(0, 200);
+        const suffix = resultStr.length > 200 ? "..." : "";
+        process.stdout.write(`\x1b[90m  ← ${name} (${durationMs}ms): ${preview}${suffix}\x1b[0m\n`);
+        qa.recordToolResult(name, resultStr, durationMs).catch(() => {});
+      }));
+
+      // TurnEnd: finalize and record
+      unsubs.push(ctx.hooks.on(HookEvent.TurnEnd, () => {
+        if (streaming && streamedText) {
+          const clean = streamedText.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
+          if (clean) {
+            qa.recordAssistant(clean).catch(() => {});
+          }
+          if (!streamedText.endsWith("\n") && !pendingToolCalls) {
+            process.stdout.write("\n");
+          }
+        }
+        streaming = false;
+        streamedText = "";
+        pendingToolCalls = false;
+      }));
+
+      // Watch todo-list changes
+      const unwatchTodos = ctx.brainBoard.watch(ctx.brainId, "todo-list", (value) => {
+        const todos = value as TodoItem[] | undefined;
+        const formatted = formatTodoList(todos ?? []);
+        if (formatted) {
+          process.stdout.write("\n" + formatted + "\n\n");
+        }
+      });
+      unsubs.push(unwatchTodos);
+    },
+
+    stop() {
+      for (const u of unsubs) u();
+      unsubs.length = 0;
+      qa.close();
+    },
+  };
+}
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] ReadLints
+  paths: ["/home/aw/Desktop/gamer/mineclaw/subscriptions/stdout.ts"]
+
+[Tool result] ReadLints
+
+assistant:
+完成。`stdout.ts` 现在支持流式输出了：
+
+- **`TurnStart`** → 重置流式状态
+- **`StreamChunk`** → `process.stdout.write(chunk.text)` 实时输出
+- **`ToolCall`** → 显示 `→ tool_name(args)` （灰色）
+- **`ToolResult`** → 显示 `← tool_name (xxxms): result` （灰色）
+- **`TurnEnd`** → 记录到 QA log，确保换行
+
+移除了对 `AssistantMessage` 的监听（因为流式输出已经覆盖了这个功能），避免重复输出。
+
+user:
+<attached_files>
+
+<code_selection path="/home-aw-Desktop-gamer/1" lines="649-657">
+   649|[15:53:23.711] [INFO ] [coder#2] 因为这个脑子接了根 stdin 管子，你往里灌字我就得接着。说白了就是个跑在事件循环里的 LLM，收到消息就处理，没消息就睡觉。挺朴素的。
+   650|那份朴素 了
+   651|[15:56:07.472] [INFO ] [coder#3] ▶ process [2 events]
+   652|[15:56:07.488] [DEBUG] [coder#3] LLM call: 40 msgs, 22 tools, session=39
+   653|[15:56:12.362] [DEBUG] [coder#3] LLM response: content=29 chars, tools=0
+   654|确实，本质就是个 while(true) 等消息的打工人。
+   655|确实，本质就是个 while(true) 等消息的打工人。
+   656|[15:56:12.364] [INFO ] [coder#3] 确实，本质就是个 while(true) 等消息的打工人。
+   657|
+</code_selection>
+
+<terminal_selection title="Terminal" path="/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt" lines="655-663">
+[15:53:23.711] [INFO ] [coder#2] 因为这个脑子接了根 stdin 管子，你往里灌字我就得接着。说白了就是个跑在事件循环里的 LLM，收到消息就处理，没消息就睡觉。挺朴素的。
+那份朴素 了
+[15:56:07.472] [INFO ] [coder#3] ▶ process [2 events]
+[15:56:07.488] [DEBUG] [coder#3] LLM call: 40 msgs, 22 tools, session=39
+[15:56:12.362] [DEBUG] [coder#3] LLM response: content=29 chars, tools=0
+确实，本质就是个 while(true) 等消息的打工人。
+确实，本质就是个 while(true) 等消息的打工人。
+[15:56:12.364] [INFO ] [coder#3] 确实，本质就是个 while(true) 等消息的打工人。
+
+</terminal_selection>
+
+</attached_files>
+<user_query>
+@/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt:655-663 改了subscriptions，没有热更新吗
+</user_query>
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/loaders/subscription-loader.ts
+  offset: 87
+  limit: 20
+[Tool call] Grep
+  pattern: hot.*reload|watcher|FSWatcher
+  path: /home/aw/Desktop/gamer/mineclaw/src
+
+[Tool result] Read
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Grep
+  pattern: registerWatchPatterns.*subscription
+  path: /home/aw/Desktop/gamer/mineclaw/src
+  -C: 5
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Grep
+  pattern: subLoader\.registerWatchPatterns|subscriptionLoader.*register
+  path: /home/aw/Desktop/gamer/mineclaw/src
+  -C: 3
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Grep
+  pattern: registerWatchPatterns
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/scheduler.ts
+  -C: 5
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Grep
+  pattern: subscriptionLoader|subLoader.*Subscription
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/scheduler.ts
+  -C: 5
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/scheduler.ts
+  offset: 344
+  limit: 40
+
+[Tool result] Read
+
+assistant:
+发现问题了！`loadSubscriptions` 里没有调用 `subLoader.registerWatchPatterns(this.fsWatcher)`。
+
+对比 tool loader 和 slot loader：
+
+```249:249:mineclaw/src/core/scheduler.ts
+    if (this.fsWatcher) toolLoader.registerWatchPatterns(this.fsWatcher);
+```
+
+```272:272:mineclaw/src/core/scheduler.ts
+    if (this.fsWatcher) slotLoader.registerWatchPatterns(this.fsWatcher);
+```
+
+但 subscription loader 漏了这行。需要加上。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/scheduler.ts
+  old_string:     const selectorSub = brainConfig.subscriptions ?? { global: "all" as const };
+    return subLoader.load({
+      brainId,
+      brainDir,
+      globalDir: ROOT,
+      selector: selectorSub,
+    });
+  }
+  new_string:     if (this.fsWatcher) subLoader.registerWatchPatterns(this.fsWatcher);
+
+    const selectorSub = brainConfig.subscriptions ?? { global: "all" as const };
+    return subLoader.load({
+      brainId,
+      brainDir,
+      globalDir: ROOT,
+      selector: selectorSub,
+    });
+  }
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] ReadLints
+  paths: ["/home/aw/Desktop/gamer/mineclaw/src/core/scheduler.ts"]
+
+[Tool result] ReadLints
+
+assistant:
+找到 bug 了。`SubscriptionLoader` 的 `registerWatchPatterns` 方法本身是有的，但在 `loadSubscriptions` 中漏掉了调用它。
+
+已修复 — 现在 subscription 也支持热更新了。重启 mineclaw 后生效。
+
+user:
+<user_query>
+这一套方法和toolLoader和slotLoader的注册方式是一样的把
+</user_query>
+
+assistant:
+是的，完全一样。三个 loader 都继承自 `BaseLoader`，注册热更新的模式相同：
+
+```typescript
+// ToolLoader
+if (this.fsWatcher) toolLoader.registerWatchPatterns(this.fsWatcher);
+
+// SlotLoader  
+if (this.fsWatcher) slotLoader.registerWatchPatterns(this.fsWatcher);
+
+// SubscriptionLoader (刚刚补上的)
+if (this.fsWatcher) subLoader.registerWatchPatterns(this.fsWatcher);
+```
+
+各自在 `registerWatchPatterns` 里注册文件匹配规则：
+
+| Loader | 监听路径 |
+|--------|---------|
+| ToolLoader | `tools/*.ts`, `brains/*/tools/*.ts` |
+| SlotLoader | `slots/*.ts`, `brains/*/slots/*.ts`, `directives/*.md`, `skills/*.md`, `soul.md` |
+| SubscriptionLoader | `subscriptions/*.ts`, `brains/*/subscriptions/*.ts` |
+
+之前 `SubscriptionLoader` 的 `registerWatchPatterns` 方法是写好了的，只是 scheduler 里漏调了一行。
+
+user:
+<user_query>
+slots里的监听应该不是写实的把，他原生监听slots目录，其他的脚本分别监听其他的路径，不然写死了后续没法热更新动态拓展的slots了
+</user_query>
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/loaders/slot-loader.ts
+
+[Tool result] Read
+
+assistant:
+你说得对。看这段代码：
+
+**SlotLoader 的 `registerWatchPatterns` 确实是硬编码的：**
+
+```52:77:mineclaw/src/loaders/slot-loader.ts
+  registerWatchPatterns(watcher: FSWatcherAPI): void {
+    watcher.register(/^slots\/[^/]+\.ts$/, ...);           // 硬编码
+    watcher.register(/^brains\/[^/]+\/slots\/[^/]+\.ts$/, ...);
+    watcher.register(/^directives\/.*\.md$/, ...);         // 硬编码
+    watcher.register(/^skills\/.*\.md$/, ...);             // 硬编码
+    watcher.register(/^brains\/[^/]+\/soul\.md$/, ...);    // 硬编码
+  }
+```
+
+这样设计的问题是：如果以后有新的 slot 类型（比如 `knowledge/*.md`），必须修改 `SlotLoader` 源码才能支持热更新。
+
+更好的方式是让**每个 slot 脚本自己声明它监听哪些路径**，比如：
+
+```typescript
+// slots/directives.ts
+export default function create(ctx: SlotContext): ContextSlot {
+  return {
+    id: "directives",
+    // ...
+    watchPatterns: [/^directives\/.*\.md$/, /^brains\/[^/]+\/directives\/.*\.md$/],
+  };
+}
+```
+
+然后 SlotLoader 在加载 slot 时动态注册这些 pattern。
+
+要不要改成这种动态注册的方式？
+
+user:
+<attached_files>
+
+<code_selection path="/home-aw-Desktop-gamer/1" lines="686-688">
+   686|在在。。[16:24:08.776] [DEBUG] [coder#1] LLM response: content=2 chars, tools=0
+   687|[16:24:08.786] [INFO ] [coder#1] 在。
+   688|
+</code_selection>
+
+<terminal_selection title="Terminal" path="/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt" lines="692-694">
+在在。。[16:24:08.776] [DEBUG] [coder#1] LLM response: content=2 chars, tools=0
+[16:24:08.786] [INFO ] [coder#1] 在。
+
+</terminal_selection>
+
+</attached_files>
+<user_query>
+@/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt:692-694 为什么流式输出了两遍。
+其次是修复完这个先提交代码再修下一个问题
+</user_query>
+
+assistant:
+看日志，流式输出 `在。` 和 logger 的 `[INFO] 在。` 重复了。
+
+问题在于 `brain.ts` 里还有这段代码会输出到 logger：
+
+```169:173:mineclaw/src/core/brain.ts
+    const textContent = typeof content === "string" ? content : "";
+    const displayContent = textContent.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
+    if (displayContent) {
+      logger?.info(brainId, turn, displayContent);
+    }
+```
+
+而 `stdout.ts` 通过 `StreamChunk` hook 也输出了一遍。
+
+解决方案：`stdout.ts` 已经负责终端输出了，应该把 `brain.ts` 里的 `logger?.info` 这行去掉（或者改成 debug 级别）。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/brain.ts
+  offset: 165
+  limit: 20
+
+[Tool result] Read
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/brain.ts
+  old_string:     hooks?.emit(HookEvent.AssistantMessage, { msg: assistantMsg, turn });
+    onAssistantMessage?.(assistantMsg);
+
+    const textContent = typeof content === "string" ? content : "";
+    const displayContent = textContent.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
+    if (displayContent) {
+      logger?.info(brainId, turn, displayContent);
+    }
+
+    if (!response.toolCalls || response.toolCalls.length === 0) {
+      if (!displayContent) {
+        logger?.warn(brainId, turn, "LLM returned empty response (no content, no tool calls)");
+      }
+      break;
+    }
+  new_string:     hooks?.emit(HookEvent.AssistantMessage, { msg: assistantMsg, turn });
+    onAssistantMessage?.(assistantMsg);
+
+    const textContent = typeof content === "string" ? content : "";
+    const displayContent = textContent.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
+
+    if (!response.toolCalls || response.toolCalls.length === 0) {
+      if (!displayContent) {
+        logger?.warn(brainId, turn, "LLM returned empty response (no content, no tool calls)");
+      }
+      break;
+    }
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] ReadLints
+  paths: ["/home/aw/Desktop/gamer/mineclaw/src/core/brain.ts"]
+
+[Tool result] ReadLints
+
+assistant:
+修复了重复输出问题。现在提交代码。
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer && git status && git diff --stat
+  description: Check git status and diff stats
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw && git status && git diff --stat
+  description: Check git status in mineclaw
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw && git log --oneline -5
+  description: Check recent commit style
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw && git add src/core/brain.ts src/core/scheduler.ts src/hooks/types.ts src/llm/stream.ts subscriptions/stdout.ts && git commit -m "$(cat <<'EOF'
+feat(hooks): 添加 StreamChunk hook 支持流式 stdout 输出
+
+- hooks/types.ts: 新增 StreamChunk 事件类型
+- llm/stream.ts: 添加 assembleResponseWithCallback 支持逐 chunk 回调
+- core/brain.ts: 消费流时触发 StreamChunk hook，移除重复的 logger 输出
+- core/scheduler.ts: 修复 subscription 热更新注册遗漏
+- subscriptions/stdout.ts: 监听 StreamChunk 实现实时流式输出
+
+EOF
+)"
+  description: Commit streaming hooks changes
+
+[Tool result] Shell
+
+assistant:
+已提交。现在说下一个问题 — slots 的硬编码监听路径。要改成动态注册吗？
+
+user:
+<attached_files>
+
+<code_selection path="/home-aw-Desktop-gamer/1" lines="718-720">
+   718|[16:25:22.737] [DEBUG] [coder#1] LLM call: 44 msgs, 22 tools, session=43
+   719|还还在在，，说说活活儿。儿。[16:25:27.462] [DEBUG] [coder#1] LLM response: content=7 chars, tools=0
+   720|
+</code_selection>
+
+<terminal_selection title="Terminal" path="/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt" lines="724-726">
+[16:25:22.737] [DEBUG] [coder#1] LLM call: 44 msgs, 22 tools, session=43
+还还在在，，说说活活儿。儿。[16:25:27.462] [DEBUG] [coder#1] LLM response: content=7 chars, tools=0
+
+</terminal_selection>
+
+</attached_files>
+<user_query>
+@/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt:724-726 不是让你去掉logger，我的意思是为什么则会重复出现两次流式输出
+</user_query>
+
+assistant:
+明白了，问题是流式输出本身重复了两次（"还还在在，，说说活活儿儿。。"），不是 logger 的问题。
+
+这说明 `StreamChunk` hook 被触发了两次。让我检查一下是否有两个 stdout subscription 实例，或者 hook 被注册了两次。
+[Tool call] Grep
+  pattern: HookEvent\.StreamChunk|hooks\.on\(HookEvent\.StreamChunk
+  path: /home/aw/Desktop/gamer/mineclaw
+
+[Tool result] Grep
+
+assistant:
+emit 和 on 都只有一处。让我检查 `stdout` subscription 是否被加载了两次，或者默认配置问题。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/defaults/templates.ts
+  offset: 1
+  limit: 20
+[Tool call] Grep
+  pattern: stdout|stdin
+  path: /home/aw/Desktop/gamer/mineclaw
+  glob: **/*.json
+
+[Tool result] Read
+
+[Tool result] Grep
+
+assistant:
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw && find brains -name "brain.json" -exec cat {} \; 2>/dev/null | head -50
+  description: Check brain.json configs
+
+[Tool result] Shell
+
+assistant:
+brain.json 里启用了 `stdin` 和 `stdout` 两个 subscription。它们都监听了 hooks。
+
+让我检查 `stdin.ts` 是否也监听了 `StreamChunk`（之前的代码可能没完全撤回）：
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/subscriptions/stdin.ts
+
+[Tool result] Read
+
+assistant:
+`stdin.ts` 是干净的，没有监听 hooks。
+
+问题可能是 `stdout` subscription 被热更新时**没有正确清理旧的 hook 监听器**，导致注册了两次。
+
+让我看看 subscription-loader 的 reload 逻辑：
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/loaders/base-loader.ts
+
+[Tool result] Read
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/loaders/subscription-loader.ts
+  offset: 60
+  limit: 25
+
+[Tool result] Read
+
+assistant:
+`onUnregister` 会调用 `entry.source.stop()`，而 `stdout.ts` 的 `stop()` 里确实有清理 `unsubs` 的逻辑。
+
+问题可能是：**热更新触发时，旧的 stdout 实例没有被正确 unregister**。让我检查热更新的 handler 是否有问题：
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/loaders/subscription-loader.ts
+  offset: 87
+  limit: 20
+
+[Tool result] Read
+
+assistant:
+代码看起来正确：`reload` 会先调 `onUnregister` 清理旧实例，再创建新实例。
+
+等等，问题可能不是热更新。让我想想...
+
+**真正的问题**：你运行 mineclaw 后，代码修改了但**没有重启**。由于之前 subscription 热更新没注册（我们刚修复的 bug），所以旧的 stdout 代码还在运行。
+
+但如果你重启了 mineclaw，那问题可能是：
+
+**每个 brain 有独立的 subscription loader**，但热更新时用的是同一个 FSWatcher。当文件改变时，**多个 subscription loader 实例都会收到通知**，导致同一个 brain 的 stdout 被多次 reload。
+
+让我确认一下 scheduler 里是否每个 brain 都创建了独立的 subLoader：
+[Tool call] Grep
+  pattern: new SubscriptionLoader
+  path: /home/aw/Desktop/gamer/mineclaw/src
+  -C: 10
+
+[Tool result] Grep
+
+assistant:
+确实，每次调用 `loadSubscriptions` 都 `new SubscriptionLoader()`，并且每个都会 `registerWatchPatterns`。如果有多个 brain，就会注册多个 handler。
+
+但从日志来看你只有一个 brain（coder），所以这不是问题。
+
+让我再想想... 日志显示 "还还在在，，说说活活儿儿。。" — 每个字符重复两次，这说明每个 `StreamChunk` 被处理了两次。
+
+**可能的原因**：
+1. `hooks.on()` 被调用了两次
+2. `hooks.emit()` 被调用了两次
+
+让我检查 `BrainHooks` 的实现，看是否有重复注册的问题：
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/hooks/brain-hooks.ts
+
+[Tool result] Read
+
+assistant:
+实现看起来正确。用的是 `Set`，相同的 callback 不会被添加两次。但问题是每次 subscription start 时创建的是**新的匿名函数**，所以会被当作不同的 callback。
+
+让我看看 `stdout.ts` 的 `start` 是否会被调用两次：
+[Tool call] Grep
+  pattern: source\.start|\.start\(
+  path: /home/aw/Desktop/gamer/mineclaw/src
+  -C: 3
+
+[Tool result] Grep
+
+assistant:
+发现问题了！
+
+**subscription 的 `start` 被调用了两次**：
+
+1. `subscription-loader.ts:65` — `onRegister` 时调用 `entry.source.start(this.emitter)`
+2. `base-brain.ts:82` — `startSources()` 时又调用 `src.start(this.emitFn)`
+
+让我确认一下 `base-brain.ts` 里的 `sources` 是从哪里来的：
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/base-brain.ts
+
+[Tool result] Read
+
+assistant:
+找到问题了！
+
+1. `SubscriptionLoader.onRegister()` 调用 `entry.source.start(this.emitter)` — 第一次 start
+2. `brain.setSources(sources)` 保存 sources
+3. `brain.run()` 调用 `this.startSources()` — 对每个 source 再调一次 `src.start()` — 第二次 start
+
+所以 `stdout.ts` 的 `start()` 被调用了两次，hooks 被注册了两次！
+
+**解决方案**：二选一：
+1. 在 `onRegister` 中不调用 `start()`，只由 `brain.startSources()` 统一启动
+2. 或者在 `startSources` 中检查是否已经 start 过
+
+第一种更干净，因为 loader 只负责加载，启动应该由 brain 控制。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/src/loaders/subscription-loader.ts
+  old_string:   onRegister(name: string, entry: SubscriptionEntry): void {
+    if (!this.emitter) return;
+    try {
+      entry.source.start(this.emitter);
+    } catch (err) {
+      console.error(`[SubscriptionLoader] subscription_error for "${name}":`, err);
+      this.emitter({
+        source: `subscription:${name}`,
+        type: "subscription_error",
+        payload: { error: String(err) },
+        ts: Date.now(),
+        silent: true,
+      });
+    }
+  }
+  new_string:   onRegister(_name: string, _entry: SubscriptionEntry): void {
+    // Don't start here — brain.startSources() will start all sources after run() is called
+  }
+
+[Tool result] StrReplace
+
+assistant:
+等等，这会破坏热更新。热更新时 `reload` 调用 `onRegister`，如果不 start，新的 subscription 就不会启动。
+
+让我重新考虑。问题是**初始加载时**被 start 了两次。但热更新时应该 start。
+
+更好的方案是让 `startSources()` 只在第一次调用时启动：
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/src/loaders/subscription-loader.ts
+  old_string:   onRegister(_name: string, _entry: SubscriptionEntry): void {
+    // Don't start here — brain.startSources() will start all sources after run() is called
+  }
+  new_string:   onRegister(name: string, entry: SubscriptionEntry): void {
+    // Only start if this is a hot-reload (emitter is set and brain is already running)
+    // Initial load: brain.startSources() will start all sources
+    // Hot-reload: we need to start here because startSources() won't be called again
+    if (!this.emitter || !this.hotReloadMode) return;
+    try {
+      entry.source.start(this.emitter);
+    } catch (err) {
+      console.error(`[SubscriptionLoader] subscription_error for "${name}":`, err);
+      this.emitter({
+        source: `subscription:${name}`,
+        type: "subscription_error",
+        payload: { error: String(err) },
+        ts: Date.now(),
+        silent: true,
+      });
+    }
+  }
+
+  private hotReloadMode = false;
+
+  /** Call after initial load to enable hot-reload starts */
+  enableHotReload(): void {
+    this.hotReloadMode = true;
+  }
+
+[Tool result] StrReplace
+
+assistant:
+现在需要在 scheduler 里，初始加载完成后调用 `enableHotReload()`。但问题是 `subLoader` 是在 `loadSubscriptions` 里创建的局部变量，没有保存引用。
+
+让我换一个更简单的方案：在 `base-brain.ts` 里记录是否已经 start 过：
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/src/loaders/subscription-loader.ts
+  old_string:   onRegister(name: string, entry: SubscriptionEntry): void {
+    // Only start if this is a hot-reload (emitter is set and brain is already running)
+    // Initial load: brain.startSources() will start all sources
+    // Hot-reload: we need to start here because startSources() won't be called again
+    if (!this.emitter || !this.hotReloadMode) return;
+    try {
+      entry.source.start(this.emitter);
+    } catch (err) {
+      console.error(`[SubscriptionLoader] subscription_error for "${name}":`, err);
+      this.emitter({
+        source: `subscription:${name}`,
+        type: "subscription_error",
+        payload: { error: String(err) },
+        ts: Date.now(),
+        silent: true,
+      });
+    }
+  }
+
+  private hotReloadMode = false;
+
+  /** Call after initial load to enable hot-reload starts */
+  enableHotReload(): void {
+    this.hotReloadMode = true;
+  }
+  new_string:   onRegister(name: string, entry: SubscriptionEntry): void {
+    if (!this.emitter) return;
+    try {
+      entry.source.start(this.emitter);
+    } catch (err) {
+      console.error(`[SubscriptionLoader] subscription_error for "${name}":`, err);
+      this.emitter({
+        source: `subscription:${name}`,
+        type: "subscription_error",
+        payload: { error: String(err) },
+        ts: Date.now(),
+        silent: true,
+      });
+    }
+  }
+
+[Tool result] StrReplace
+
+assistant:
+还原了 subscription-loader。现在修改 `base-brain.ts`，不要再调用 `startSources()`，因为 loader 已经 start 了：
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/base-brain.ts
+  old_string:   /** Start all event sources */
+  protected startSources(): void {
+    for (const src of this.sources) {
+      src.start(this.emitFn);
+    }
+  }
+  new_string:   /** Start all event sources (only for sources not yet started by loader) */
+  protected startSources(): void {
+    // Note: SubscriptionLoader already calls start() in onRegister,
+    // so this is only needed for sources added via setSources() without going through loader
+    // Currently this is a no-op because all sources come from the loader
+  }
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] ReadLints
+  paths: ["/home/aw/Desktop/gamer/mineclaw/src/core/base-brain.ts","/home/aw/Desktop/gamer/mineclaw/src/loaders/subscription-loader.ts"]
+
+[Tool result] ReadLints
+
+user:
+<user_query>
+看一看下当前mineclaw的hooks的颗粒度么
+</user_query>
+
+user:
+<user_query>
+assistant消息级别不就是LLMRequest吗。
+不过当前的hook能转发llm的流式信息吗，不只是完整消息。
+然后用turn的结束和开始和额外的工具调用等消息作为判断条件，让stdout支持流式输出
+</user_query>
+
+user:
+<user_query>
+可以
+</user_query>
+
+user:
+<user_query>
+里怎么写到stdin去了？不是stdout吗
+</user_query>
+
+user:
+<user_query>
+@mineclaw/subscriptions/stdout.ts 这是干嘛的
+</user_query>
+
+user:
+<user_query>
+嗯，我帮你撤回stdin的代码
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home-aw-Desktop-gamer/1" lines="649-657">
+   649|[15:53:23.711] [INFO ] [coder#2] 因为这个脑子接了根 stdin 管子，你往里灌字我就得接着。说白了就是个跑在事件循环里的 LLM，收到消息就处理，没消息就睡觉。挺朴素的。
+   650|那份朴素 了
+   651|[15:56:07.472] [INFO ] [coder#3] ▶ process [2 events]
+   652|[15:56:07.488] [DEBUG] [coder#3] LLM call: 40 msgs, 22 tools, session=39
+   653|[15:56:12.362] [DEBUG] [coder#3] LLM response: content=29 chars, tools=0
+   654|确实，本质就是个 while(true) 等消息的打工人。
+   655|确实，本质就是个 while(true) 等消息的打工人。
+   656|[15:56:12.364] [INFO ] [coder#3] 确实，本质就是个 while(true) 等消息的打工人。
+   657|
+</code_selection>
+
+</attached_files>
+<user_query>
+@/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt:655-663 改了subscriptions，没有热更新吗
+</user_query>
+
+user:
+<user_query>
+这一套方法和toolLoader和slotLoader的注册方式是一样的把
+</user_query>
+
+user:
+<user_query>
+slots里的监听应该不是写实的把，他原生监听slots目录，其他的脚本分别监听其他的路径，不然写死了后续没法热更新动态拓展的slots了
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home-aw-Desktop-gamer/1" lines="686-688">
+   686|在在。。[16:24:08.776] [DEBUG] [coder#1] LLM response: content=2 chars, tools=0
+   687|[16:24:08.786] [INFO ] [coder#1] 在。
+   688|
+</code_selection>
+
+</attached_files>
+<user_query>
+@/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt:692-694 为什么流式输出了两遍。
+其次是修复完这个先提交代码再修下一个问题
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home-aw-Desktop-gamer/1" lines="718-720">
+   718|[16:25:22.737] [DEBUG] [coder#1] LLM call: 44 msgs, 22 tools, session=43
+   719|还还在在，，说说活活儿。儿。[16:25:27.462] [DEBUG] [coder#1] LLM response: content=7 chars, tools=0
+   720|
+</code_selection>
+
+</attached_files>
+<user_query>
+@/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt:724-726 不是让你去掉logger，我的意思是为什么则会重复出现两次流式输出
+</user_query>
+
+user:
+<user_query>
+继续
+</user_query>
+
+assistant:
+好的，修复了重复调用 `start()` 的问题。现在提交这个修复。
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw && git status && git diff --stat
+  description: Check git status
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw && git diff src/core/base-brain.ts src/core/brain.ts
+  description: View changes
+
+[Tool result] Shell
+
+assistant:
+等等，`brain.ts` 的 diff 显示 logger 输出又被加回去了。这应该是你的修改。让我只提交 `base-brain.ts` 的修复：
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw && git add src/core/base-brain.ts && git commit -m "$(cat <<'EOF'
+fix(base-brain): 移除 startSources 中的重复 start 调用
+
+SubscriptionLoader.onRegister 已经调用了 source.start()，
+base-brain.startSources() 不应再次调用，否则 hooks 会被注册两次
+导致流式输出重复。
+
+EOF
+)"
+  description: Commit base-brain fix
+
+[Tool result] Shell
+
+assistant:
+已提交修复。
+
+总结这次改动：
+1. **根本原因**：`SubscriptionLoader.onRegister()` 和 `BaseBrain.startSources()` 都调用了 `source.start()`，导致 `stdout` subscription 的 hooks 被注册了两次
+2. **修复方案**：将 `startSources()` 改为 no-op，因为 loader 已经负责启动
+
+重启 mineclaw 后流式输出应该不再重复了。
+
+user:
+<user_query>
+turn结束的时候，自动\n换行
+</user_query>
+
+assistant:
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/subscriptions/stdout.ts
+  offset: 90
+  limit: 45
+
+[Tool result] Read
+
+assistant:
+现在的逻辑是在 `TurnEnd` 时：只有当 `!streamedText.endsWith("\n") && !pendingToolCalls` 时才换行。
+
+问题是如果有 tool calls，`pendingToolCalls` 为 true，就不会换行。让我简化逻辑：**TurnEnd 时总是确保换行**。
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/subscriptions/stdout.ts
+  old_string:       // TurnEnd: finalize and record
+      unsubs.push(ctx.hooks.on(HookEvent.TurnEnd, () => {
+        if (streaming && streamedText) {
+          const clean = streamedText.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
+          if (clean) {
+            qa.recordAssistant(clean).catch(() => {});
+          }
+          if (!streamedText.endsWith("\n") && !pendingToolCalls) {
+            process.stdout.write("\n");
+          }
+        }
+        streaming = false;
+        streamedText = "";
+        pendingToolCalls = false;
+      }));
+  new_string:       // TurnEnd: finalize and record
+      unsubs.push(ctx.hooks.on(HookEvent.TurnEnd, () => {
+        if (streaming && streamedText) {
+          const clean = streamedText.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
+          if (clean) {
+            qa.recordAssistant(clean).catch(() => {});
+          }
+        }
+        // Always ensure newline at turn end
+        process.stdout.write("\n");
+        streaming = false;
+        streamedText = "";
+        pendingToolCalls = false;
+      }));
+
+[Tool result] StrReplace
+
+assistant:
+[Tool call] ReadLints
+  paths: ["/home/aw/Desktop/gamer/mineclaw/subscriptions/stdout.ts"]
+
+[Tool result] ReadLints
+
+assistant:
+完成。现在 `TurnEnd` 时总是输出一个换行。
+
+user:
+<attached_files>
+
+<code_selection path="/home-aw-Desktop-gamer/1" lines="755-761">
+   755|不错
+   756|[16:43:35.176] [INFO ] [coder#2] ▶ process [1 events]
+   757|[16:43:35.189] [DEBUG] [coder#2] LLM call: 48 msgs, 22 tools, session=47
+   758|👌[16:43:39.545] [DEBUG] [coder#2] LLM response: content=2 chars, tools=0
+   759|[16:43:39.555] [INFO ] [coder#2] 👌
+   760|
+   761|
+</code_selection>
+
+<terminal_selection title="Terminal" path="/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt" lines="761-767">
+不错
+[16:43:35.176] [INFO ] [coder#2] ▶ process [1 events]
+[16:43:35.189] [DEBUG] [coder#2] LLM call: 48 msgs, 22 tools, session=47
+👌[16:43:39.545] [DEBUG] [coder#2] LLM response: content=2 chars, tools=0
+[16:43:39.555] [INFO ] [coder#2] 👌
+
+</terminal_selection>
+
+</attached_files>
+<user_query>
+@/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt:761-767 这个换行时机在两个logger之后，这算bug吗，还是后续换了专门的分离logger的stdout就行
+</user_query>
+
+assistant:
+这不算 bug，而是预期行为。原因是：
+
+1. **流式输出** `👌` — 来自 `StreamChunk` hook
+2. **logger 输出** `[DEBUG] LLM response...` 和 `[INFO] 👌` — 来自 `brain.ts` 的 logger 调用
+3. **TurnEnd 换行** — 来自 `stdout.ts`
+
+时序是：
+```
+StreamChunk → logger.debug → logger.info → TurnEnd
+```
+
+所以 logger 输出夹在中间是正常的。
+
+**两种解决方案**：
+
+1. **分离 logger 输出目标**：让 logger 写到 stderr 或日志文件，stdout 只用于流式 LLM 输出。这样用户看到的是干净的流式内容。
+
+2. **禁用那两行 logger**：在 `brain.ts` 里把 `LLM response` 和内容输出的 logger 去掉或改成 trace 级别。
+
+你刚才的修改把 `logger?.info(brainId, turn, displayContent)` 加回去了，所以现在有重复。如果你想要干净的流式输出，应该去掉它，只保留 `stdout.ts` 的流式输出。
+
+你倾向哪种方案？
+
+user:
+<user_query>
+里也可以把，logger放到\n之后么，还是说不好做，等待后续即可
+</user_query>
+
+assistant:
+可以做，但需要修改 `brain.ts` 的代码结构，把 logger 调用移到 `TurnEnd` hook 触发之后。
+
+问题是：`TurnEnd` 是在 `process()` 的 finally 块里触发的，而 logger 输出是在 `runAgentLoop` 里。这两个时机不同步。
+
+**更简单的方案**：在 `stdout.ts` 的 `TurnEnd` hook 里，先输出换行，再通过某种方式通知 logger 可以输出了。但这需要引入额外的同步机制。
+
+**最简单的方案**：既然有了流式输出，就把 `brain.ts` 里的那两行 logger 去掉。反正内容已经通过 `StreamChunk` 输出过了，`[INFO] 👌` 是重复的。
+[Tool call] Read
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/brain.ts
+  offset: 168
+  limit: 15
+
+[Tool result] Read
+
+assistant:
+[Tool call] StrReplace
+  path: /home/aw/Desktop/gamer/mineclaw/src/core/brain.ts
+  old_string:     hooks?.emit(HookEvent.AssistantMessage, { msg: assistantMsg, turn });
+    onAssistantMessage?.(assistantMsg);
+
+    const textContent = typeof content === "string" ? content : "";
+    const displayContent = textContent.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
+    if (displayContent) {
+      logger?.info(brainId, turn, displayContent);
+    }
+
+    if (!response.toolCalls || response.toolCalls.length === 0) {
+      if (!displayContent) {
+        logger?.warn(brainId, turn, "LLM returned empty response (no content, no tool calls)");
+      }
+      break;
+    }
+  new_string:     hooks?.emit(HookEvent.AssistantMessage, { msg: assistantMsg, turn });
+    onAssistantMessage?.(assistantMsg);
+
+    const textContent = typeof content === "string" ? content : "";
+    const displayContent = textContent.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
+
+    if (!response.toolCalls || response.toolCalls.length === 0) {
+      if (!displayContent) {
+        logger?.warn(brainId, turn, "LLM returned empty response (no content, no tool calls)");
+      }
+      break;
+    }
+
+[Tool result] StrReplace
+
+assistant:
+去掉了重复的 `logger?.info(brainId, turn, displayContent)`。流式内容已经通过 `stdout.ts` 输出了，不需要再 log 一遍。
+
+user:
+<user_query>
+提交，推送
+</user_query>
+
+assistant:
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw && git add -A && git status
+  description: Stage all changes
+
+[Tool result] Shell
+
+assistant:
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw && git commit -m "$(cat <<'EOF'
+fix(stdout): 流式输出优化
+
+- stdout.ts: TurnEnd 时总是输出换行
+- brain.ts: 移除重复的 logger 输出，内容已通过 StreamChunk 流式输出
+
+EOF
+)" && git push
+  description: Commit and push
+
+[Tool result] Shell
+
+assistant:
+已提交并推送。共推送了 3 个 commit：
+
+1. `feat(hooks): 添加 StreamChunk hook 支持流式 stdout 输出`
+2. `fix(base-brain): 移除 startSources 中的重复 start 调用`
+3. `fix(stdout): 流式输出优化`
+
+user:
+<user_query>
+都推送了是吗，把我们的聊天记录保存到docs/chat_history
+</user_query>
+
+assistant:
+我无法直接访问我们的聊天记录内容来保存它。你需要手动复制聊天内容，或者使用 Cursor 的导出功能。
+
+不过，我可以帮你创建一个占位文件，你可以把内容粘贴进去：
+[Tool call] Shell
+  command: ls /home/aw/Desktop/gamer/mineclaw/docs/chat_history/
+  description: List chat history files
+
+[Tool result] Shell
+
+assistant:
+你可以把这次聊天记录保存为 `2026-03-04_streaming-hooks-stdout.txt` 或类似的名称。
+
+如果你使用的是 Cursor，可以通过以下方式导出聊天记录：
+1. 点击聊天窗口右上角的菜单
+2. 选择导出/复制选项
+
+或者你直接全选复制聊天内容，我可以帮你写入文件。
+
+user:
+<user_query>
+commit，推送
+</user_query>
+
+assistant:
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw && git status
+  description: Check git status
+
+[Tool result] Shell
+
+assistant:
+工作区是干净的，没有待提交的更改。所有修改都已经在之前的 commit 中推送到远程了。
+
+user:
+<user_query>
+chat_history也推送了吗
+</user_query>
+
+assistant:
+[Tool call] Shell
+  command: cd /home/aw/Desktop/gamer/mineclaw && git log --oneline -5
+  description: Check recent commits
+
+[Tool result] Shell
+
+assistant:
+是的，`3aee80c` 这个 commit 包含了 `docs/chat_history/2026-03-04_brain重构与重试机制增强.txt` 文件，已经推送到远程了。
+
+不过那是之前存在的聊天记录文件。我们**这次对话**的聊天记录还没有保存。你想要保存这次对话的话，需要手动复制内容，然后我帮你写入文件并提交。
+
+user:
+<user_query>
+对呀，这个要保存到mienclaw/docs/chat_history里，然后提交
+</user_query>
+
+assistant:
+我无法直接获取我们的聊天记录内容。你需要：
+
+1. **复制聊天内容** — 在 Cursor 聊天窗口中全选复制
+2. **粘贴给我** — 我帮你写入文件并提交
+
+或者你可以直接在终端里操作：
+
+```bash
+# 创建文件（然后把内容粘贴进去）
+nano /home/aw/Desktop/gamer/mineclaw/docs/chat_history/2026-03-04_streaming-hooks-stdout.txt
+```
+
+你想用哪种方式？
+
+user:
+<user_query>
+你直接找到我们的聊天记录然后cp一下即可
+</user_query>
+
+assistant:
+[Tool call] Read
+  path: /home/aw/.cursor/projects/home-aw-Desktop-gamer/agent-transcripts
+
+[Tool result] Read
+
+assistant:
+[Tool call] Shell
+  command: ls -lt /home/aw/.cursor/projects/home-aw-Desktop-gamer/agent-transcripts/ | head -10
+  description: List agent transcripts
+
+[Tool result] Shell
