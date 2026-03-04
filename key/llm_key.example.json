@@ -1,0 +1,25 @@
+{
+  "gemini": {
+    "api_key": "",
+    "api": "google-generative-ai",
+    "models": ["gemini-2.5-flash", "gemini-2.5-pro"]
+  },
+  "azure-claude": {
+    "api_key": "",
+    "api_base": "https://your-resource.services.ai.azure.com/anthropic/",
+    "api": "anthropic-messages",
+    "models": ["claude-sonnet-4-6"]
+  },
+  "deepseek": {
+    "api_key": "",
+    "api_base": "https://api.deepseek.com",
+    "api": "openai-completions",
+    "models": ["deepseek-chat"]
+  },
+  "qwen": {
+    "api_key": "",
+    "api_base": "https://dashscope.aliyuncs.com/compatible-mode",
+    "api": "openai-completions",
+    "models": ["qwen3.5-plus", "qwen-max", "qwen-plus"]
+  }
+}
