@@ -76,11 +76,11 @@ export abstract class BaseBrain implements BrainInterface {
     this.sources = sources;
   }
 
-  /** Start all event sources */
+  /** Start all event sources (only for sources not yet started by loader) */
   protected startSources(): void {
-    for (const src of this.sources) {
-      src.start(this.emitFn);
-    }
+    // Note: SubscriptionLoader already calls start() in onRegister,
+    // so this is only needed for sources added via setSources() without going through loader
+    // Currently this is a no-op because all sources come from the loader
   }
 
   /** Stop the brain loop (abort signal) */
