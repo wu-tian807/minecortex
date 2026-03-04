@@ -54,6 +54,63 @@ export async function assembleResponse(
   };
 }
 
+/** Collect stream with per-chunk callback for streaming hooks. */
+export async function assembleResponseWithCallback(
+  stream: AsyncIterable<StreamChunk>,
+  onChunk?: (chunk: StreamChunk) => void,
+): Promise<LLMResponse> {
+  let text = "";
+  let thinking = "";
+  let thinkingSignature: string | undefined;
+  let textSignature: string | undefined;
+  const toolCalls: LLMToolCall[] = [];
+  let usage: { inputTokens: number; outputTokens: number; thinkingTokens?: number } | undefined;
+
+  for await (const chunk of stream) {
+    onChunk?.(chunk);
+
+    switch (chunk.type) {
+      case "text":
+        text += chunk.text;
+        if (chunk.thoughtSignature) textSignature = chunk.thoughtSignature;
+        break;
+      case "thinking":
+        thinking += chunk.text;
+        if (chunk.thoughtSignature) thinkingSignature = chunk.thoughtSignature;
+        break;
+      case "tool_call": {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(chunk.arguments);
+        } catch {}
+        toolCalls.push({
+          id: chunk.id,
+          name: chunk.name,
+          arguments: args,
+          thoughtSignature: chunk.thoughtSignature,
+        });
+        break;
+      }
+      case "usage":
+        usage = {
+          inputTokens: chunk.inputTokens,
+          outputTokens: chunk.outputTokens,
+          thinkingTokens: chunk.thinkingTokens,
+        };
+        break;
+    }
+  }
+
+  return {
+    content: text,
+    thinking: thinking || undefined,
+    thinkingSignature,
+    textSignature,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    usage,
+  };
+}
+
 // ── <think> tag state-machine parser: NORMAL → IN_THINK → NORMAL ──
 
 type ThinkState = "NORMAL" | "IN_THINK";

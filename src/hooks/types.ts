@@ -1,6 +1,6 @@
 /** Lifecycle hook types — event-driven hooks for external injection via subscriptions */
 
-import type { LLMMessage, LLMToolCall } from "../llm/types.js";
+import type { LLMMessage, LLMToolCall, StreamChunk } from "../llm/types.js";
 
 // ─── Hook Events ───
 
@@ -10,6 +10,7 @@ export enum HookEvent {
   TurnEnd = "turnEnd",
   ToolCall = "toolCall",
   ToolResult = "toolResult",
+  StreamChunk = "streamChunk",
 }
 
 // ─── Payload per event ───
@@ -36,6 +37,10 @@ export interface HookPayloadMap {
     name: string;
     result: unknown;
     durationMs: number;
+  };
+  [HookEvent.StreamChunk]: {
+    chunk: StreamChunk;
+    turn: number;
   };
 }
 

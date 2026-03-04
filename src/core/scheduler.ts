@@ -365,6 +365,8 @@ export class Scheduler {
       }
     });
 
+    if (this.fsWatcher) subLoader.registerWatchPatterns(this.fsWatcher);
+
     const selectorSub = brainConfig.subscriptions ?? { global: "all" as const };
     return subLoader.load({
       brainId,

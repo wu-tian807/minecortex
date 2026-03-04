@@ -1,4 +1,4 @@
-/** @desc Stdout subscription — pipes assistant messages + tool activity to terminal */
+/** @desc Stdout subscription — streaming assistant output + tool activity to terminal */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -54,37 +54,64 @@ export default function create(ctx: SourceContext): EventSource {
     start(_emit: (event: Event) => void) {
       if (!brainHasStdin(ctx)) return;
 
-      unsubs.push(ctx.hooks.on(HookEvent.AssistantMessage, ({ msg }) => {
-        const raw = typeof msg.content === "string"
-          ? msg.content
-          : msg.content
-              ?.filter((p): p is { type: "text"; text: string } => p.type === "text")
-              .map(p => p.text)
-              .join("") ?? "";
-        const text = raw.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
+      // ─── Streaming state ───
+      let streaming = false;
+      let streamedText = "";
+      let pendingToolCalls = false;
 
-        if (msg.toolCalls?.length) {
-          const calls = msg.toolCalls
-            .map(tc => `  → ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 120)})`)
-            .join("\n");
-          const block = text ? `${text}\n${calls}` : calls;
-          process.stdout.write(block + "\n");
-          qa.recordAssistant(block).catch(() => {});
-        } else if (text) {
-          process.stdout.write(text + "\n");
-          qa.recordAssistant(text).catch(() => {});
+      // TurnStart: prepare for streaming
+      unsubs.push(ctx.hooks.on(HookEvent.TurnStart, () => {
+        streaming = true;
+        streamedText = "";
+        pendingToolCalls = false;
+      }));
+
+      // StreamChunk: real-time text output
+      unsubs.push(ctx.hooks.on(HookEvent.StreamChunk, ({ chunk }) => {
+        if (!streaming) return;
+
+        if (chunk.type === "text") {
+          process.stdout.write(chunk.text);
+          streamedText += chunk.text;
         }
       }));
 
+      // ToolCall: show tool indicator, pause text streaming
+      unsubs.push(ctx.hooks.on(HookEvent.ToolCall, ({ name, args }) => {
+        if (streamedText && !streamedText.endsWith("\n")) {
+          process.stdout.write("\n");
+        }
+        const argsPreview = JSON.stringify(args).slice(0, 80);
+        process.stdout.write(`\x1b[90m  → ${name}(${argsPreview})\x1b[0m\n`);
+        pendingToolCalls = true;
+      }));
+
+      // ToolResult: show result preview
       unsubs.push(ctx.hooks.on(HookEvent.ToolResult, ({ name, result, durationMs }) => {
         const resultStr = typeof result === "string" ? result : JSON.stringify(result);
         const preview = resultStr.slice(0, 200);
         const suffix = resultStr.length > 200 ? "..." : "";
-        const line = `  ← ${name} (${durationMs}ms): ${preview}${suffix}`;
-        process.stdout.write(line + "\n");
+        process.stdout.write(`\x1b[90m  ← ${name} (${durationMs}ms): ${preview}${suffix}\x1b[0m\n`);
         qa.recordToolResult(name, resultStr, durationMs).catch(() => {});
       }));
 
+      // TurnEnd: finalize and record
+      unsubs.push(ctx.hooks.on(HookEvent.TurnEnd, () => {
+        if (streaming && streamedText) {
+          const clean = streamedText.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
+          if (clean) {
+            qa.recordAssistant(clean).catch(() => {});
+          }
+          if (!streamedText.endsWith("\n") && !pendingToolCalls) {
+            process.stdout.write("\n");
+          }
+        }
+        streaming = false;
+        streamedText = "";
+        pendingToolCalls = false;
+      }));
+
+      // Watch todo-list changes
       const unwatchTodos = ctx.brainBoard.watch(ctx.brainId, "todo-list", (value) => {
         const todos = value as TodoItem[] | undefined;
         const formatted = formatTodoList(todos ?? []);

@@ -13,7 +13,7 @@ import type { LLMProvider, LLMMessage, LLMToolCall, LLMResponse } from "../llm/t
 import type { ContextEngine } from "../context/context-engine.js";
 import type { SlotRegistry } from "../context/slot-registry.js";
 import type { SessionManager } from "../session/session-manager.js";
-import { assembleResponse } from "../llm/stream.js";
+import { assembleResponseWithCallback } from "../llm/stream.js";
 import { microCompact } from "../session/compaction.js";
 import { renderEventDisplay } from "../context/event-router.js";
 import { HookEvent } from "../hooks/types.js";
@@ -111,7 +111,9 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     let response: LLMResponse;
     try {
       const stream = provider.chatStream(messages, tools, signal);
-      response = await assembleResponse(stream);
+      response = await assembleResponseWithCallback(stream, (chunk) => {
+        hooks?.emit(HookEvent.StreamChunk, { chunk, turn });
+      });
     } catch (err: any) {
       if (signal.aborted) {
         logger?.warn(brainId, turn, "LLM call aborted");
@@ -168,9 +170,6 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
 
     const textContent = typeof content === "string" ? content : "";
     const displayContent = textContent.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
-    if (displayContent) {
-      logger?.info(brainId, turn, displayContent);
-    }
 
     if (!response.toolCalls || response.toolCalls.length === 0) {
       if (!displayContent) {
