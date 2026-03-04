@@ -5,6 +5,7 @@ import type { LLMMessage, LLMToolCall, StreamChunk } from "../llm/types.js";
 // ─── Hook Events ───
 
 export enum HookEvent {
+  EventReceived = "eventReceived",
   AssistantMessage = "assistantMessage",
   TurnStart = "turnStart",
   TurnEnd = "turnEnd",
@@ -16,6 +17,10 @@ export enum HookEvent {
 // ─── Payload per event ───
 
 export interface HookPayloadMap {
+  [HookEvent.EventReceived]: {
+    events: import("../core/types.js").Event[];
+    turn: number;
+  };
   [HookEvent.AssistantMessage]: {
     msg: LLMMessage;
     turn: number;

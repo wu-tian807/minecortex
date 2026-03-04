@@ -318,6 +318,9 @@ export class ConsciousBrain extends BaseBrain {
   private async process(events: Event[], signal: AbortSignal): Promise<void> {
     if (events.length === 0) return;
 
+    // Emit EventReceived hook before processing
+    this.hooks.emit(HookEvent.EventReceived, { events, turn: this.currentTurn });
+
     const lines = events.map(e =>
       `[${e.source}:${e.type}] ${renderEventDisplay(e)}`
     );
