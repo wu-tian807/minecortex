@@ -57,12 +57,30 @@ export interface CapabilitySelector {
   config?: Record<string, Record<string, unknown>>;
 }
 
-export interface BrainJson {
+export interface ModelsConfig {
+  /** 模型名称，可以是单个或数组（fallback 链） */
   model?: string | string[];
+  /** 温度 */
   temperature?: number;
+  /** 最大输出 token 数 */
   maxTokens?: number;
+  /** 推理强度 */
   reasoningEffort?: ReasoningEffort;
+  /** 是否显示思考过程 */
   showThinking?: boolean;
+  /** 单个模型的最大重试次数，默认 3 */
+  maxRetries?: number;
+  /** 基础重试延迟（毫秒），默认 1000 */
+  baseDelayMs?: number;
+  /** 最大重试延迟（毫秒），默认 30000 */
+  maxDelayMs?: number;
+  /** LLM 调用超时（毫秒），-1 = 永不超时，默认 -1 */
+  timeout?: number;
+}
+
+export interface BrainJson {
+  /** 模型相关配置 */
+  models?: ModelsConfig;
   coalesceMs?: number;
   subscriptions?: CapabilitySelector;
   tools?: CapabilitySelector;
@@ -75,9 +93,8 @@ export interface BrainJson {
 }
 
 export interface MineclawConfig {
-  defaults?: {
-    model?: string;
-  };
+  /** 全局模型配置 */
+  models?: ModelsConfig;
 }
 
 // ─── Tool System ───

@@ -7,6 +7,7 @@ import type {
   BrainInterface,
   BrainJson,
   MineclawConfig,
+  ModelsConfig,
   Event,
   EventSource,
 } from "./types.js";
@@ -35,6 +36,30 @@ let _instance: Scheduler | null = null;
 /** Get the global Scheduler singleton (null if not yet created). */
 export function getScheduler(): Scheduler | null {
   return _instance;
+}
+
+/**
+ * 解析模型配置
+ * 优先级：brain.models > global.models
+ */
+function resolveModelsConfig(
+  brainConfig: BrainJson,
+  globalConfig: MineclawConfig,
+): ModelsConfig {
+  const globalModels = globalConfig.models ?? {};
+  const brainModels = brainConfig.models ?? {};
+
+  return {
+    model: brainModels.model ?? globalModels.model,
+    temperature: brainModels.temperature ?? globalModels.temperature,
+    maxTokens: brainModels.maxTokens ?? globalModels.maxTokens,
+    reasoningEffort: brainModels.reasoningEffort ?? globalModels.reasoningEffort,
+    showThinking: brainModels.showThinking ?? globalModels.showThinking,
+    maxRetries: brainModels.maxRetries ?? globalModels.maxRetries,
+    baseDelayMs: brainModels.baseDelayMs ?? globalModels.baseDelayMs,
+    maxDelayMs: brainModels.maxDelayMs ?? globalModels.maxDelayMs,
+    timeout: brainModels.timeout ?? globalModels.timeout,
+  };
 }
 
 interface ManagedBrain {
@@ -121,14 +146,19 @@ export class Scheduler {
         if (slot.brain instanceof ConsciousBrain) {
           const brainConfig = await this.loadBrainConfig(brainId);
           const globalCfg = await this.loadGlobalConfig();
-          const modelRaw = brainConfig.model ?? globalCfg.defaults?.model;
+          const modelsConfig = resolveModelsConfig(brainConfig, globalCfg);
+          const modelRaw = modelsConfig.model;
           if (modelRaw) {
             const modelName = Array.isArray(modelRaw) ? modelRaw[0] : modelRaw;
-            const provider = Array.isArray(modelRaw)
-              ? createFallbackProvider(modelRaw, brainConfig, (from, to, err) => {
-                  this.logger.warn(brainId, 0, `Fallback ${from} → ${to}: ${err.message}`);
-                })
-              : createProvider(modelRaw, brainConfig);
+            const models = Array.isArray(modelRaw) ? modelRaw : [modelRaw];
+            const provider = createFallbackProvider(models, modelsConfig, {
+              onRetry: (model, info) => {
+                this.logger.warn(brainId, 0, `[${model}] 重试 ${info.attempt}/${info.maxRetries}: ${info.error.message}`);
+              },
+              onFallback: (from, to, err) => {
+                this.logger.warn(brainId, 0, `Fallback ${from} → ${to}: ${err.message}`);
+              },
+            });
             const modelSpec = getModelSpec(modelName);
             slot.brain.updateConfig({ provider, modelSpec, brainConfig });
             this.logger.info("scheduler", 0, `脑区 '${brainId}' 热重载完成 (model: ${modelName})`);
@@ -244,8 +274,8 @@ export class Scheduler {
       return;
     }
 
-    const modelRaw = brainConfig.model ?? globalConfig.defaults?.model;
-    if (!modelRaw) {
+    const modelsConfig = resolveModelsConfig(brainConfig, globalConfig);
+    if (!modelsConfig.model) {
       this.logger.warn("scheduler", 0, `脑区 '${brainId}' 无 model，跳过`);
       return;
     }
@@ -282,17 +312,17 @@ export class Scheduler {
       selector: selectorSlots,
     });
 
-    let provider;
-    let modelName: string;
-    if (Array.isArray(modelRaw)) {
-      provider = createFallbackProvider(modelRaw, brainConfig, (from, to, err) => {
+    const modelRaw = modelsConfig.model!;
+    const models = Array.isArray(modelRaw) ? modelRaw : [modelRaw];
+    const modelName = models[0];
+    const provider = createFallbackProvider(models, modelsConfig, {
+      onRetry: (model, info) => {
+        this.logger.warn(brainId, 0, `[${model}] 重试 ${info.attempt}/${info.maxRetries}: ${info.error.message}`);
+      },
+      onFallback: (from, to, err) => {
         this.logger.warn(brainId, 0, `Fallback ${from} → ${to}: ${err.message}`);
-      });
-      modelName = modelRaw[0];
-    } else {
-      provider = createProvider(modelRaw, brainConfig);
-      modelName = modelRaw;
-    }
+      },
+    });
 
     const sessionManager = new SessionManager(brainId, this.pathManager);
     const existingSid = await sessionManager.currentSessionId();

@@ -385,7 +385,7 @@ export class ConsciousBrain implements BrainInterface {
         turn: this.currentTurn,
         hooks: this.hooks,
         keepToolResults: this.brainConfig.session?.keepToolResults ?? 8,
-        showThinking: this.brainConfig.showThinking ?? false,
+        showThinking: this.brainConfig.models?.showThinking ?? false,
         trackBackgroundTask: (p) => {
           this.pendingTasks.add(p);
           p.finally(() => this.pendingTasks.delete(p));
