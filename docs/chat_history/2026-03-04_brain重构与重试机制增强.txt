@@ -1,0 +1,1954 @@
+user:
+<user_query>
+你可以看下，mineclaw里的write和claude-code的实现是否有差异，主要write完文件通常是否应该把文件写的内容部分预览返回给模型？还是说通常不会
+</user_query>
+
+user:
+<user_query>
+这个diff好做么
+</user_query>
+
+user:
+<user_query>
+你看下edit_file，本来write_file就是覆盖写，应该用edit_file
+</user_query>
+
+user:
+<user_query>
+你看下，claude-code有edit-file工具么，有对应的返回值么
+</user_query>
+
+user:
+<user_query>
+claude-code你没法调研下代码吗
+</user_query>
+
+user:
+<user_query>
+ 那可以去websearch看一下
+</user_query>
+
+user:
+<user_query>
+mineclaw的返回值为什么是replaced N occurrence，这是什么意思
+</user_query>
+
+user:
+<user_query>
+能把brain.ts中对默认单轮限制做个调研吗，看看各个references下的轮次限制是多少
+</user_query>
+
+user:
+<user_query>
+那当前方案是没问题的对吧。
+接下来是模型调用因为外部因素，比如429，overload，503，或者单纯用户只及电脑断网等各种原因而无发连接上模型从而引发上的错误，这里mineclaw的机制非常不完善，里调研下其他框架怎么做的。
+在此之前，你在reference里再拉一下langchian这个智能体编排框架，也参考下它的做法
+</user_query>
+
+user:
+<user_query>
+当前mineclaw的重试是在重试什么情况？
+</user_query>
+
+user:
+<user_query>
+这个好像当时anthropic报了overload错误他也没正常处理，你可以查一下为什么这不被纳入重试逻辑吗，以及是不是可以把retry能力做的更好一些，给一个调研方案
+</user_query>
+
+user:
+<user_query>
+可以这么增强试一下。
+流开始后的重试可以是从流断的地方继续么？我不知道这能不能比较好的做到。
+fallback模型链当前是不是还没有实装，当时配置文件的时候其实有对应的设置。
+错误分类的话里看看其他人有没有做。
+4可以考虑
+然后所有的修改要考虑框架重试机制的统一性，并且还有个要考虑的，就是当前有些错误返回太模糊了，比如因为用户自身没忘调用失败，他logger就返回个fetch failed，是个人都会懵逼一下
+</user_query>
+
+user:
+<user_query>
+差不多，这样优化后，核心逻辑能否反而更加紧凑
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home/aw/.cursor/plans/retry-error-enhancement_b6f8ac20.plan.md" lines="1-197">
+     1|# LLM 重试机制增强方案
+     2|
+     3|## 一、问题分析
+     4|
+     5|### 1.1 当前 mineclaw 的问题
+     6|
+     7|[mineclaw/src/llm/retry.ts](mineclaw/src/llm/retry.ts) 存在以下不足：
+     8|
+     9|- **529 未纳入**：Anthropic overload 错误使用非标准状态码 529，当前 `retryableStatuses = [429, 500, 502, 503]` 不包含
+    10|- **网络错误不重试**：只检查 `err.status`，网络层错误（ECONNRESET, fetch failed）没有 status 属性，直接失败
+    11|- **无 jitter**：固定延迟 `2^n * baseDelay`，可能造成重试风暴
+    12|- **无 maxDelay 上限**：第 5 次重试要等 16 秒
+    13|- **错误消息模糊**：如用户断网时只报 "fetch failed"，缺乏诊断信息
+    14|
+    15|### 1.2 fallback 模型链现状
+    16|
+    17|[mineclaw/src/llm/provider.ts](mineclaw/src/llm/provider.ts) 已实现 `createFallbackProvider()`：
+    18|
+    19|```typescript
+    20|// 第 177-209 行
+    21|export function createFallbackProvider(
+    22|  models: string[],
+    23|  brainConfig?: BrainJson,
+    24|  onFallback?: (from: string, to: string, error: Error) => void,
+    25|): LLMProvider
+    26|```
+    27|
+    28|- 已支持 `brain.json` 中 `model: string[]` 配置
+    29|- 在 [scheduler.ts](mineclaw/src/core/scheduler.ts) 中已调用（第 127-130 行、第 288-290 行）
+    30|- **问题**：fallback 只在流开始前触发，不与 retry 协同
+    31|
+    32|### 1.3 流中断续传
+    33|
+    34|调研结果：**不可行**。LLM API 不支持从中断位置恢复流：
+    35|
+    36|- Anthropic/OpenAI 的流是无状态的，中断后无法从特定 token 位置继续
+    37|- agentic_os 的做法是 `if (chunksYielded) throw err`（流开始后直接抛出，不重试）
+    38|- gemini-cli 的测试用例 `client.test.ts` 中有 `"Please continue."` 的递归调用，但那是**新请求**而非续传
+    39|
+    40|## 二、参考框架对比
+    41|
+    42|
+    43|| 特性            | mineclaw 现有 | agentic_os | gemini-cli             | LangChain          |
+    44|| ------------- | ----------- | ---------- | ---------------------- | ------------------ |
+    45|| 529 状态码       | -           | ✓（正则匹配）    | ✓                      | -                  |
+    46|| 网络错误码         | -           | ✓          | ✓（含 SSL）               | ✓                  |
+    47|| Jitter        | -           | -          | ✓ (±30%)               | ✓ (±25%)           |
+    48|| MaxDelay      | -           | -          | 30s                    | 60s                |
+    49|| 错误分类          | -           | -          | ✓ (Terminal/Retryable) | ✓ (LangChainError) |
+    50|| 友好错误消息        | -           | -          | ✓ (toFriendlyError)    | ✓                  |
+    51|| Retry-After 头 | -           | -          | ✓                      | -                  |
+    52|
+    53|
+    54|## 三、实现方案
+    55|
+    56|### 3.1 新建错误分类模块
+    57|
+    58|新建 [mineclaw/src/llm/errors.ts](mineclaw/src/llm/errors.ts)：
+    59|
+    60|```typescript
+    61|// 终端错误（不重试）
+    62|export class TerminalLLMError extends Error {
+    63|  constructor(message: string, public readonly code: string, public readonly cause?: Error) {
+    64|    super(message);
+    65|    this.name = 'TerminalLLMError';
+    66|  }
+    67|}
+    68|
+    69|// 可重试错误
+    70|export class RetryableLLMError extends Error {
+    71|  constructor(
+    72|    message: string,
+    73|    public readonly code: string,
+    74|    public readonly retryDelayMs?: number,
+    75|    public readonly cause?: Error,
+    76|  ) {
+    77|    super(message);
+    78|    this.name = 'RetryableLLMError';
+    79|  }
+    80|}
+    81|
+    82|// 网络错误
+    83|export class NetworkError extends RetryableLLMError {
+    84|  constructor(message: string, code: string, cause?: Error) {
+    85|    super(message, code, undefined, cause);
+    86|    this.name = 'NetworkError';
+    87|  }
+    88|}
+    89|
+    90|// 错误分类函数
+    91|export function classifyLLMError(err: unknown): 
+    92|  | { kind: 'terminal'; error: TerminalLLMError }
+    93|  | { kind: 'retryable'; error: RetryableLLMError }
+    94|  | { kind: 'unknown'; error: Error }
+    95|
+    96|// 友好化错误消息
+    97|export function formatLLMError(err: unknown): string
+    98|```
+    99|
+   100|### 3.2 增强 retry.ts
+   101|
+   102|修改 [mineclaw/src/llm/retry.ts](mineclaw/src/llm/retry.ts)：
+   103|
+   104|```typescript
+   105|export interface RetryOptions {
+   106|  maxRetries?: number;        // 默认 3
+   107|  baseDelayMs?: number;       // 默认 1000
+   108|  maxDelayMs?: number;        // 新增：默认 30000
+   109|  jitter?: boolean;           // 新增：默认 true
+   110|  retryableStatuses?: number[]; // 默认包含 529
+   111|  signal?: AbortSignal;       // 新增
+   112|  onRetry?: (info: RetryInfo) => void; // 新增
+   113|}
+   114|
+   115|// 可重试状态码（包含 529）
+   116|const DEFAULT_RETRYABLE_STATUSES = [429, 500, 502, 503, 529];
+   117|
+   118|// 可重试网络错误码
+   119|const RETRYABLE_NETWORK_CODES = [
+   120|  'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE',
+   121|  'ENOTFOUND', 'EAI_AGAIN', 'EPROTO'
+   122|];
+   123|
+   124|// 可重试消息模式（补充状态码检测）
+   125|const RETRYABLE_MESSAGE_PATTERN = 
+   126|  /fetch failed|network|socket hang up|overloaded|ECONNRESET|ETIMEDOUT/i;
+   127|```
+   128|
+   129|### 3.3 统一重试与 fallback
+   130|
+   131|修改 [mineclaw/src/llm/provider.ts](mineclaw/src/llm/provider.ts)：
+   132|
+   133|```typescript
+   134|export function createFallbackProvider(
+   135|  models: string[],
+   136|  brainConfig?: BrainJson,
+   137|  retryOpts?: RetryOptions,  // 新增：允许传入重试配置
+   138|  onFallback?: (from: string, to: string, error: Error) => void,
+   139|): LLMProvider {
+   140|  // 每个模型先走 withRetry，重试耗尽后再 fallback 到下一个模型
+   141|}
+   142|```
+   143|
+   144|### 3.4 友好化错误消息
+   145|
+   146|新建/扩展错误格式化逻辑：
+   147|
+   148|
+   149|| 原始错误                 | 友好消息                                                  |
+   150|| -------------------- | ----------------------------------------------------- |
+   151|| `fetch failed` + 无网络 | `网络连接失败。请检查网络连接后重试。`                                  |
+   152|| `ECONNREFUSED`       | `无法连接到 API 服务器 (${host})。请检查网络或 API 地址配置。`            |
+   153|| `status: 529`        | `Anthropic 服务暂时过载，正在重试... (${attempt}/${maxRetries})` |
+   154|| `status: 429`        | `API 请求频率超限，${delay/1000}秒后重试...`                     |
+   155|| `status: 401`        | `API 认证失败。请检查 key/llm_key.json 中的 api_key 配置。`        |
+   156|| `status: 403`        | `API 权限不足。请检查 API key 权限或配额。`                         |
+   157|
+   158|
+   159|### 3.5 解析 Retry-After 头（可选增强）
+   160|
+   161|对于支持 `Retry-After` 响应头的 API（如 OpenAI、Anthropic），解析并使用服务器建议的等待时间：
+   162|
+   163|```typescript
+   164|function parseRetryAfter(headers: Headers): number | undefined {
+   165|  const retryAfter = headers.get('retry-after');
+   166|  if (!retryAfter) return undefined;
+   167|  const seconds = parseInt(retryAfter, 10);
+   168|  return isNaN(seconds) ? undefined : seconds * 1000;
+   169|}
+   170|```
+   171|
+   172|## 四、文件变更清单
+   173|
+   174|
+   175|| 操作  | 文件                         | 说明                               |
+   176|| --- | -------------------------- | -------------------------------- |
+   177|| 新建  | `src/llm/errors.ts`        | 错误分类 + 友好消息格式化                   |
+   178|| 重写  | `src/llm/retry.ts`         | 增强重试逻辑（529/网络错误/jitter/maxDelay） |
+   179|| 修改  | `src/llm/provider.ts`      | 统一 retry 与 fallback              |
+   180|| 修改  | `src/llm/anthropic.ts`     | 传递 response headers              |
+   181|| 修改  | `src/llm/openai-compat.ts` | 传递 response headers              |
+   182|
+   183|
+   184|## 五、流开始后的处理
+   185|
+   186|遵循 agentic_os 的做法：
+   187|
+   188|- 流开始前（`chunksYielded = false`）：重试 + fallback
+   189|- 流开始后（`chunksYielded = true`）：直接抛出错误，由上层 brain 处理
+   190|
+   191|不实现流续传，原因：
+   192|
+   193|1. LLM API 无此能力
+   194|2. 中断后用户上下文可能已变
+   195|3. 复杂度高收益低
+   196|
+   197|
+</code_selection>
+
+</attached_files>
+<user_query>
+Implement the plan as specified, it is attached for your reference. Do NOT edit the plan file itself.
+
+To-do's from the plan have already been created. Do not create them again. Mark them as in_progress as you work, starting with the first one. Don't stop until you have completed all the to-dos.
+</user_query>
+
+user:
+<user_query>
+jitter到底是干啥的。signal取消是可以用户直接比如ctrl+d取消调用么？还是单次ctrl+c取消调用？
+fallback模型的配置如何配置，请告诉我，单次重试次数是否可以配置？
+</user_query>
+
+user:
+<user_query>
+超时取消的配置在哪里，可以设置为-1代表永不超时么。
+还有我希望brain里面关于模型的配置都统一到models顶级键之下
+然后mineclaw.json也是，只不过这个是全局的
+可以让models键下面支持maxRetries的参数。
+</user_query>
+
+user:
+<user_query>
+删除deprecated的键，不保留旧配置，我们还在developing阶段
+</user_query>
+
+user:
+<user_query>
+当用brain.ts createBrain的时候，默认的brain.json数据是什么？
+以及系统初始启动的时候，如果没有mineclaw.json，能否也自动生成一个默认值，然后llm_key_example.json与models.json也是，如果没有能否把当前的变成默认模板填入。默认的这些文件可以在合适的文件夹写ts专门填写模板
+</user_query>
+
+user:
+<user_query>
+src/core/scheduler.ts
+让他来引用模板和调用初始化合适么，我感觉他不是负责调度brains的吗，感觉做这个不太合适，职责耦合了
+</user_query>
+
+user:
+<user_query>
+我希望不是scheduler引用模板，而是main发现没有对应的文件直接创建文件
+</user_query>
+
+user:
+<user_query>
+先分两波提交下刚才的修改，为这次修改留干净的工作区
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home/aw/.cursor/plans/默认配置模板生成_983f1dfd.plan.md" lines="1-128">
+     1|# 默认配置模板生成方案
+     2|
+     3|## 一、架构设计
+     4|
+     5|职责分离：
+     6|
+     7|- `**main.ts**`：程序入口，启动前检查并生成缺失的配置文件
+     8|- `**src/defaults/templates.ts**`：所有默认配置模板的定义
+     9|- `**src/defaults/init.ts**`：文件检查与生成逻辑
+    10|- `**scheduler.ts**`：从 defaults 导入 DEFAULT_BRAIN_JSON，只负责 brain 调度
+    11|
+    12|```mermaid
+    13|flowchart LR
+    14|    main["main.ts"] --> init["ensureDefaultConfigs()"]
+    15|    init --> templates["templates.ts"]
+    16|    init -->|"生成文件"| files["mineclaw.json\nkey/llm_key.json\nkey/models.json"]
+    17|    main --> scheduler["Scheduler.start()"]
+    18|    scheduler -->|"导入"| templates
+    19|```
+    20|
+    21|
+    22|
+    23|## 二、文件变更
+    24|
+    25|### 2.1 新建 src/defaults/templates.ts
+    26|
+    27|```typescript
+    28|import type { BrainJson, MineclawConfig, ModelSpec } from "../core/types.js";
+    29|
+    30|export const DEFAULT_BRAIN_JSON: BrainJson = {
+    31|  models: { model: null },
+    32|  subscriptions: { global: "none", enable: ["stdin"] },
+    33|  tools: { global: "all", disable: ["manage_brain"] },
+    34|  slots: { global: "all" },
+    35|};
+    36|
+    37|export const DEFAULT_MINECLAW_JSON: MineclawConfig = {
+    38|  models: { model: "gemini-2.5-flash", maxRetries: 3, timeout: -1 },
+    39|};
+    40|
+    41|export const DEFAULT_LLM_KEY_JSON = {
+    42|  gemini: { api_key: "", api: "google-generative-ai", models: ["gemini-2.5-flash", "gemini-2.5-pro"] },
+    43|  // ... 其他 provider 模板
+    44|};
+    45|
+    46|export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
+    47|  "gemini-2.5-flash": { input: ["text", "image", "video", "audio"], reasoning: true, ... },
+    48|  // ... 其他模型
+    49|};
+    50|```
+    51|
+    52|### 2.2 新建 src/defaults/init.ts
+    53|
+    54|```typescript
+    55|import { existsSync } from "node:fs";
+    56|import { mkdir, writeFile } from "node:fs/promises";
+    57|import { join } from "node:path";
+    58|import { DEFAULT_MINECLAW_JSON, DEFAULT_LLM_KEY_JSON, DEFAULT_MODELS_JSON } from "./templates.js";
+    59|
+    60|async function ensureFile(path: string, content: unknown): Promise<boolean> {
+    61|  if (existsSync(path)) return false;
+    62|  await writeFile(path, JSON.stringify(content, null, 2) + "\n", "utf-8");
+    63|  return true;
+    64|}
+    65|
+    66|export async function ensureDefaultConfigs(root: string): Promise<void> {
+    67|  await mkdir(join(root, "key"), { recursive: true });
+    68|  await mkdir(join(root, "brains"), { recursive: true });
+    69|
+    70|  if (await ensureFile(join(root, "mineclaw.json"), DEFAULT_MINECLAW_JSON)) {
+    71|    console.log("Created default mineclaw.json");
+    72|  }
+    73|  if (await ensureFile(join(root, "key/llm_key.json"), DEFAULT_LLM_KEY_JSON)) {
+    74|    console.log("Created default key/llm_key.json");
+    75|  }
+    76|  if (await ensureFile(join(root, "key/models.json"), DEFAULT_MODELS_JSON)) {
+    77|    console.log("Created default key/models.json");
+    78|  }
+    79|}
+    80|```
+    81|
+    82|### 2.3 新建 src/defaults/index.ts
+    83|
+    84|```typescript
+    85|export { ensureDefaultConfigs } from "./init.js";
+    86|export { DEFAULT_BRAIN_JSON, DEFAULT_MINECLAW_JSON } from "./templates.js";
+    87|```
+    88|
+    89|### 2.4 修改 src/main.ts
+    90|
+    91|```typescript
+    92|import { ensureDefaultConfigs } from "./defaults/index.js";
+    93|
+    94|async function main() {
+    95|  console.log("╔════════════════════════════════╗");
+    96|  console.log("║        MineClaw v0.2.0         ║");
+    97|  console.log("╚════════════════════════════════╝\n");
+    98|
+    99|  await ensureDefaultConfigs(process.cwd());  // 新增：确保配置文件存在
+   100|
+   101|  const scheduler = new Scheduler();
+   102|  await scheduler.start();
+   103|}
+   104|```
+   105|
+   106|### 2.5 修改 src/core/scheduler.ts
+   107|
+   108|删除内联的 `DEFAULT_BRAIN_JSON`，改为从 defaults 导入：
+   109|
+   110|```typescript
+   111|import { DEFAULT_BRAIN_JSON } from "../defaults/templates.js";
+   112|
+   113|// 删除原来的:
+   114|// private static readonly DEFAULT_BRAIN_JSON = { ... };
+   115|
+   116|// doCreate 中继续使用 DEFAULT_BRAIN_JSON（现在是导入的）
+   117|```
+   118|
+   119|## 三、文件清单
+   120|
+   121|- 新建 `src/defaults/templates.ts`
+   122|- 新建 `src/defaults/init.ts`
+   123|- 新建 `src/defaults/index.ts`
+   124|- 修改 `src/main.ts`
+   125|- 修改 `src/core/scheduler.ts`
+   126|- 保留 `key/llm_key.example.json`（作为 git 可追踪的参考）
+   127|
+   128|
+</code_selection>
+
+</attached_files>
+<user_query>
+Implement the plan as specified, it is attached for your reference. Do NOT edit the plan file itself.
+
+To-do's from the plan have already been created. Do not create them again. Mark them as in_progress as you work, starting with the first one. Don't stop until you have completed all the to-dos.
+</user_query>
+
+user:
+<user_query>
+llm_key默认创建的是模板对吧，别把握key带进去了就行
+</user_query>
+
+user:
+<user_query>
+提交下代码
+</user_query>
+
+user:
+<user_query>
+提交，但忽略llm_key.json本身，因为这是我的key，同时留着example文件
+</user_query>
+
+user:
+<user_query>
+先做一波推送
+</user_query>
+
+user:
+<user_query>
+然后接下来我们关注一个点，brain.ts的瘦身，其实我一直在想能不能不要掉managedBrain的结构，只要一个brain结构，把queue，logger啥的结构都装到brain本身里面去，你看看这样子设计时候更加扁平化，给我一个评价
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home/aw/Desktop/gamer" lines="1-11">
+     1|interface BrainConfig {
+     2|  id: string;
+     3|  brainDir: string;
+     4|  brainJson: BrainJson;
+     5|  // 共享单例（传入引用）
+     6|  brainBoard: BrainBoardAPI;
+     7|  pathManager: PathManagerAPI;
+     8|  terminalManager: TerminalManagerAPI;
+     9|  logger: Logger;
+    10|  eventBus: EventBus;
+    11|}
+</code_selection>
+
+</attached_files>
+<user_query>
+单一实例源那就直接创建时由scheduler传递全局实例。当前这里面的设计确实有点混乱。
+@code block (1-11) 里的这个设计很不错
+</user_query>
+
+user:
+<user_query>
+这里有个小问题，那到时候brain.json以及内部一些脚本文件的热更新职责要交给谁？现在是交给谁的
+</user_query>
+
+user:
+<user_query>
+ok。你说得对，那还有，因为brain创建出来了就是文件夹，这一层本地文件与大脑内存实例的映射关系，谁来管理，比如我删了一个brains，对应内存里的一个对象应该立即释放，不然后续就会出现各种找不到的问题（这个当前mienclaw的代码似乎也没很好的管理）。
+其次是brain内部的soul.md的引用，这应该是brain内部的slotLoader用pathManager去热访问的对吧？
+</user_query>
+
+user:
+<user_query>
+可以更新下计划，并且把当前对brainControl的操作也纳入重构时必须考量的地方
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home/aw/.cursor/plans/brain_结构扁平化_a3bef54e.plan.md" lines="1-260">
+     1|# Brain 结构扁平化重构
+     2|
+     3|## 当前问题
+     4|
+     5|```mermaid
+     6|flowchart TD
+     7|  subgraph scheduler_layer [Scheduler]
+     8|    brains["Map&lt;id, ManagedBrain&gt;"]
+     9|  end
+    10|  
+    11|  subgraph managed [ManagedBrain]
+    12|    queue[EventQueue]
+    13|    abort[AbortController]
+    14|    sources[EventSource 数组]
+    15|    hooks[BrainHooks]
+    16|    brain_ref[brain: ConsciousBrain]
+    17|  end
+    18|  
+    19|  subgraph conscious [ConsciousBrain]
+    20|    dup_queue[eventQueue 重复引用]
+    21|    dup_hooks[hooks 重复引用]
+    22|    dup_sources[sources 重复引用]
+    23|  end
+    24|  
+    25|  brains --> managed
+    26|  managed --> conscious
+    27|```
+    28|
+    29|
+    30|
+    31|问题：
+    32|
+    33|- `ManagedBrain` 和 `ConsciousBrain` 持有相同组件的重复引用
+    34|- `initBrain()` 方法约 170 行，职责混杂
+    35|- Scheduler 需要同时管理 `ManagedBrain` 包装器和内部 brain 的生命周期
+    36|
+    37|## 目标结构
+    38|
+    39|```mermaid
+    40|flowchart TD
+    41|  subgraph scheduler_new [Scheduler]
+    42|    brains_new["Map&lt;id, Brain&gt;"]
+    43|    shared[共享单例]
+    44|  end
+    45|  
+    46|  subgraph brain_unified [Brain 基类]
+    47|    config[BrainConfig]
+    48|    queue_own[queue: EventQueue]
+    49|    abort_own[abortController]
+    50|    sources_own[sources]
+    51|    hooks_own[hooks]
+    52|    run_method["run(signal)"]
+    53|    stop_method["stop() / shutdown()"]
+    54|  end
+    55|  
+    56|  subgraph children [子类]
+    57|    conscious_new[ConsciousBrain]
+    58|    script_new[ScriptBrain]
+    59|  end
+    60|  
+    61|  shared -->|传入| brain_unified
+    62|  brains_new --> brain_unified
+    63|  brain_unified --> children
+    64|```
+    65|
+    66|
+    67|
+    68|## 新接口设计
+    69|
+    70|[src/core/types.ts](src/core/types.ts) 新增：
+    71|
+    72|```typescript
+    73|interface BrainConfig {
+    74|  id: string;
+    75|  brainDir: string;
+    76|  brainJson: BrainJson;
+    77|  // 共享单例（传入引用）
+    78|  brainBoard: BrainBoardAPI;
+    79|  pathManager: PathManagerAPI;
+    80|  terminalManager: TerminalManagerAPI;
+    81|  logger: Logger;
+    82|  eventBus: EventBus;
+    83|}
+    84|```
+    85|
+    86|## 实现步骤
+    87|
+    88|### 1. 新建 [src/core/base-brain.ts](src/core/base-brain.ts)
+    89|
+    90|抽象基类，持有所有 Brain 共享的组件：
+    91|
+    92|```typescript
+    93|export abstract class BaseBrain implements BrainInterface {
+    94|  readonly id: string;
+    95|  protected readonly config: BrainConfig;
+    96|  
+    97|  // 自有组件（每个实例独立）
+    98|  protected readonly queue: EventQueue;
+    99|  protected readonly abortController = new AbortController();
+   100|  protected readonly hooks: BrainHooks;
+   101|  protected sources: EventSource[] = [];
+   102|  
+   103|  // 共享单例（从 config 解构）
+   104|  protected readonly brainBoard: BrainBoardAPI;
+   105|  protected readonly pathManager: PathManagerAPI;
+   106|  protected readonly terminalManager: TerminalManagerAPI;
+   107|  protected readonly logger: Logger;
+   108|  protected readonly eventBus: EventBus;
+   109|  
+   110|  constructor(config: BrainConfig) { /* ... */ }
+   111|  
+   112|  abstract run(signal: AbortSignal): Promise<void>;
+   113|  
+   114|  stop(): void { this.abortController.abort(); }
+   115|  
+   116|  async shutdown(): Promise<void> {
+   117|    this.stop();
+   118|    for (const src of this.sources) await src.close?.();
+   119|  }
+   120|}
+   121|```
+   122|
+   123|### 2. 重构 [src/core/script-brain.ts](src/core/script-brain.ts)
+   124|
+   125|继承 `BaseBrain`，保留 `run()` 中的脚本加载逻辑。
+   126|
+   127|### 3. 重构 [src/core/brain.ts](src/core/brain.ts)
+   128|
+   129|- `ConsciousBrain extends BaseBrain`
+   130|- 移除与基类重复的字段
+   131|- `ConsciousBrainOpts` 简化为只包含 ConsciousBrain 特有的参数（provider, tools, sessionManager, 等）
+   132|
+   133|### 4. 简化 [src/core/scheduler.ts](src/core/scheduler.ts)
+   134|
+   135|- 删除 `ManagedBrain` 接口
+   136|- `brains` 类型改为 `Map<string, BaseBrain>`
+   137|- `initBrain()` 拆分：
+   138|  - `loadBrainConfig()` — 加载 brain.json
+   139|  - `createBrainContext()` — 构建 BrainConfig 对象
+   140|  - `initConsciousBrain()` / `initScriptBrain()` — 各自的初始化逻辑
+   141|- `getManagedBrain()` 改为直接返回 brain 实例（brain 已自包含 queue/hooks）
+   142|
+   143|### 5. 更新 EventBus 注册
+   144|
+   145|当前 `eventBus.register(brainId, queue)` 在 scheduler 中调用。重构后移入 `BaseBrain` 构造函数，传入 `eventBus` 引用。
+   146|
+   147|### 6. 热更新职责分配
+   148|
+   149|**决策：Scheduler 继续负责热更新注册，Brain 只暴露 update 接口**
+   150|
+   151|理由：
+   152|
+   153|- `brains/` 目录增删需要 Scheduler 级别的 `initBrain()` / 清理 Map
+   154|- `brain.json` 热更新需要合并 `mineclaw.json` 全局配置，Scheduler 已持有 `loadGlobalConfig()`
+   155|- ToolLoader/SlotLoader 本身就是"外部注册，回调通知"模式
+   156|
+   157|BaseBrain 需暴露的接口：
+   158|
+   159|```typescript
+   160|abstract class BaseBrain {
+   161|  // 热更新接口
+   162|  updateConfig?(opts: { provider?: LLMProvider; modelSpec?: ModelSpec; brainConfig?: BrainJson }): void;
+   163|  updateTools?(tools: ToolDefinition[]): void;
+   164|  setSources(sources: EventSource[]): void;
+   165|}
+   166|```
+   167|
+   168|Scheduler 注册逻辑保持不变，调用方式更新为：
+   169|
+   170|```typescript
+   171|// brain.json 变更
+   172|fsWatcher.register(/brain\.json$/, async (evt) => {
+   173|  const brain = this.brains.get(brainId);
+   174|  if (brain instanceof ConsciousBrain) {
+   175|    brain.updateConfig({ provider, modelSpec, brainConfig });
+   176|  }
+   177|});
+   178|
+   179|// tools 变更
+   180|toolLoader.setCallback((tools) => brain.updateTools?.(tools));
+   181|```
+   182|
+   183|### 7. Brain 生命周期管理（文件夹 ↔ 内存映射）
+   184|
+   185|**当前问题**：
+   186|
+   187|- 删除 `brains/{id}/` 文件夹后，内存中的 brain 实例可能未正确释放
+   188|- `doFree()` 调用 `brain.free?.()`，但大多数 brain 没实现
+   189|- 未清理 `eventBus.unregister(brainId)`
+   190|
+   191|**重构方案**：
+   192|
+   193|1. `BaseBrain.shutdown()` 统一清理逻辑：
+   194|
+   195|```typescript
+   196|async shutdown(): Promise<void> {
+   197|  this.abortController.abort();
+   198|  for (const src of this.sources) {
+   199|    try { src.stop(); await src.close?.(); } catch { /* ignore */ }
+   200|  }
+   201|  this.eventBus.unregister(this.id);
+   202|}
+   203|```
+   204|
+   205|1. Scheduler 新增私有方法 `removeBrain(id)`：
+   206|
+   207|```typescript
+   208|private async removeBrain(id: string): Promise<void> {
+   209|  const brain = this.brains.get(id);
+   210|  if (!brain) return;
+   211|  await brain.shutdown();
+   212|  this.brains.delete(id);
+   213|  this.logger.info("scheduler", 0, `brain '${id}' removed from memory`);
+   214|}
+   215|```
+   216|
+   217|1. 统一调用点：
+   218|  - `doStop(id)` → `brain.stop()` （仅暂停循环，保留内存）
+   219|  - `doShutdown(id)` → `brain.shutdown()` （清理资源，保留内存）
+   220|  - `doFree(id)` → `removeBrain(id)` + 删除文件夹
+   221|  - `doRestart(id)` → `removeBrain(id)` + `initBrain(id)`
+   222|  - fsWatcher 检测删除 → `removeBrain(id)`
+   223|
+   224|### 8. brainControl 操作重构映射
+   225|
+   226|当前 `controlBrain()` 支持的操作及重构后的实现：
+   227|
+   228|
+   229|| 操作         | 当前实现                                                          | 重构后实现                                                  |
+   230|| ---------- | ------------------------------------------------------------- | ------------------------------------------------------ |
+   231|| `list`     | 遍历 `brains` Map                                               | 不变，直接遍历 `Map<id, BaseBrain>`                           |
+   232|| `create`   | 创建目录 + 写 brain.json/soul.md                                   | 不变                                                     |
+   233|| `start`    | `initBrain()` + `slot.brain.run(slot.abortController.signal)` | `initBrain()` + `brain.run()` （brain 自带 signal）        |
+   234|| `stop`     | `slot.brain.stop?.()`                                         | `brain.stop()`                                         |
+   235|| `shutdown` | `slot.brain.shutdown?.()` + `slot.abortController.abort()`    | `brain.shutdown()` （内部已含 abort）                        |
+   236|| `restart`  | shutdown + delete + initBrain + run                           | `removeBrain()` + `initBrain()` + `brain.run()`        |
+   237|| `free`     | `brain.free?.()` + abort + delete Map + rm 目录                 | `removeBrain()` + rm 目录                                |
+   238|| `resume`   | `slot.queue.push(resumeEvent)`                                | `brain.queue.push(resumeEvent)` （queue 现在是 brain 内部属性） |
+   239|
+   240|
+   241|**关键变化**：
+   242|
+   243|- 不再需要 `slot.abortController`，brain 自带
+   244|- 不再需要 `slot.queue`，通过 `brain.pushEvent()` 或直接访问 `brain.queue`
+   245|- `getManagedBrain()` 改为 `getBrain(id): BaseBrain | null`
+   246|
+   247|## 文件变更清单
+   248|
+   249|
+   250|| 文件                         | 操作                               |
+   251|| -------------------------- | -------------------------------- |
+   252|| `src/core/types.ts`        | 新增 `BrainConfig` 接口              |
+   253|| `src/core/base-brain.ts`   | 新建抽象基类                           |
+   254|| `src/core/script-brain.ts` | 继承 `BaseBrain`                   |
+   255|| `src/core/brain.ts`        | 继承 `BaseBrain`，精简 opts           |
+   256|| `src/core/scheduler.ts`    | 删除 `ManagedBrain`，拆分 `initBrain` |
+   257|| `src/core/index.ts`        | 导出 `BaseBrain`                   |
+   258|
+   259|
+   260|
+</code_selection>
+
+</attached_files>
+<user_query>
+Implement the plan as specified, it is attached for your reference. Do NOT edit the plan file itself.
+
+To-do's from the plan have already been created. Do not create them again. Mark them as in_progress as you work, starting with the first one. Don't stop until you have completed all the to-dos.
+</user_query>
+
+user:
+<user_query>
+不错，这样整个逻辑感觉就舒服很多了。
+为什么之前看着这么难受
+</user_query>
+
+user:
+<user_query>
+当前的框架有进一步统一么：
+Scheduler对brain的createControl操作是怎么样的，我想问问
+</user_query>
+
+user:
+<user_query>
+可以。free肯定是基础能力。
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home/aw/Desktop/gamer" lines="1-4">
+     1|override async free(): Promise<void> {
+     2|  await super.free();
+     3|  this.emitFn({ source: `brain:${this.id}`, type: "brain_freed", ... });
+     4|}
+</code_selection>
+
+</attached_files>
+<user_query>
+@code block (1-4) 在个发送事件有什么意义么，先问问你先看看
+</user_query>
+
+user:
+<user_query>
+这个事件系统理论上应该也放到baseBrain里把，这样更通用。
+</user_query>
+
+user:
+<user_query>
+emit会触发handlers但不依赖brainQueues是什么意思
+</user_query>
+
+user:
+<user_query>
+handlers是干嘛的
+</user_query>
+
+user:
+<user_query>
+那外部系统/外部日志不能也用eventBus来做吗
+</user_query>
+
+user:
+<user_query>
+handlers的用法和eventBus会有什么区别？以及eventBus和brainQueue有什么区别
+</user_query>
+
+user:
+<user_query>
+这个我有几个问题啊。感觉概念还是太多了。
+首先现在消息是怎么根据silent，决定只传消息或传消息+激活，这和你上面说的东西是以各层次的吗？
+</user_query>
+
+user:
+<user_query>
+那BrainQueue到底是干啥的
+</user_query>
+
+user:
+<user_query>
+那这是不是改个更好啊，这个太有误导性了
+</user_query>
+
+user:
+<user_query>
+感觉不应该叫queue，但应该叫brain和registry的结合，同时强调不是实例的registry
+</user_query>
+
+user:
+<user_query>
+rotingTable
+</user_query>
+
+user:
+<user_query>
+或者就叫brainIdMaps嘛，这个才对位
+</user_query>
+
+user:
+<user_query>
+在准确定，QueueMaps之类的？
+</user_query>
+
+user:
+<user_query>
+brainQueueMap吧
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home-aw-Desktop-gamer/1" lines="565-575">
+   565|[stdin] 订阅已启动，等待输入...
+   566|[15:33:48.055] [INFO ] [scheduler#0] 就绪，所有 brain loop 已启动
+   567|[15:33:48.055] [ERROR] [scheduler#0] brain 'coder' loop crashed
+   568|  TypeError: Cannot read properties of null (reading 'on')
+   569|    at Object.start (/home/aw/Desktop/gamer/mineclaw/subscriptions/stdout.ts:57:29)
+   570|    at ConsciousBrain.startSources (/home/aw/Desktop/gamer/mineclaw/src/core/base-brain.ts:82:11)
+   571|    at ConsciousBrain.run (/home/aw/Desktop/gamer/mineclaw/src/core/brain.ts:254:10)
+   572|    at Scheduler.runBrain (/home/aw/Desktop/gamer/mineclaw/src/core/scheduler.ts:515:11)
+   573|    at Scheduler.start (/home/aw/Desktop/gamer/mineclaw/src/core/scheduler.ts:126:12)
+   574|    at async main (/home/aw/Desktop/gamer/mineclaw/src/main.ts:20:3)
+   575|
+</code_selection>
+
+</attached_files>
+<user_query>
+@/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt:571-581 这是什么问题
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home-aw-Desktop-gamer/1" lines="598-603">
+   598|[auto_compact] 订阅已启动 (阈值 60%)
+   599|[15:36:01.039] [INFO ] [scheduler#0] 就绪，所有 brain loop 已启动
+   600|你好呀,你是谁
+   601|[15:36:18.944] [INFO ] [coder#1] ▶ process [2 events]
+   602|[15:36:18.956] [DEBUG] [coder#1] LLM call: 33 msgs, 22 tools, session=32
+   603|[15:36:36.764] [ERROR] [coder#1] LLM call failed: terminated
+</code_selection>
+
+</attached_files>
+<user_query>
+@/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt:604-609 这里调用出了什么问题么
+</user_query>
+
+user:
+<user_query>
+那为什么我还一直在卡着。没有看到重试之类的内容？
+</user_query>
+
+user:
+<user_query>
+这样子穷举感觉不太好啊，太多特定条件了，gemini-cli和claude-code，openclaw怎么做的？你再去拉一下langchain的代码，看下她怎么做的
+</user_query>
+
+user:
+<user_query>
+那这样能解决未来遇到一个没遇到的错误，也能自动重试吗
+</user_query>
+
+user:
+<user_query>
+429也可以重试，我们可以把我们的maxRetries开高点就行。任何第三方错误与网络错误都可以试着重试直到耗尽次数。指数避退是2^n次。重试此次数也是我们可以自己规定的嘛，所以用户不想重试直接关了重试即可。在全自动化场景下长时等待重试很重要
+</user_query>
+
+user:
+<user_query>
+你可以看下，mineclaw里的write和claude-code的实现是否有差异，主要write完文件通常是否应该把文件写的内容部分预览返回给模型？还是说通常不会
+</user_query>
+
+user:
+<user_query>
+这个diff好做么
+</user_query>
+
+user:
+<user_query>
+你看下edit_file，本来write_file就是覆盖写，应该用edit_file
+</user_query>
+
+user:
+<user_query>
+你看下，claude-code有edit-file工具么，有对应的返回值么
+</user_query>
+
+user:
+<user_query>
+claude-code你没法调研下代码吗
+</user_query>
+
+user:
+<user_query>
+ 那可以去websearch看一下
+</user_query>
+
+user:
+<user_query>
+mineclaw的返回值为什么是replaced N occurrence，这是什么意思
+</user_query>
+
+user:
+<user_query>
+能把brain.ts中对默认单轮限制做个调研吗，看看各个references下的轮次限制是多少
+</user_query>
+
+user:
+<user_query>
+那当前方案是没问题的对吧。
+接下来是模型调用因为外部因素，比如429，overload，503，或者单纯用户只及电脑断网等各种原因而无发连接上模型从而引发上的错误，这里mineclaw的机制非常不完善，里调研下其他框架怎么做的。
+在此之前，你在reference里再拉一下langchian这个智能体编排框架，也参考下它的做法
+</user_query>
+
+user:
+<user_query>
+当前mineclaw的重试是在重试什么情况？
+</user_query>
+
+user:
+<user_query>
+这个好像当时anthropic报了overload错误他也没正常处理，你可以查一下为什么这不被纳入重试逻辑吗，以及是不是可以把retry能力做的更好一些，给一个调研方案
+</user_query>
+
+user:
+<user_query>
+可以这么增强试一下。
+流开始后的重试可以是从流断的地方继续么？我不知道这能不能比较好的做到。
+fallback模型链当前是不是还没有实装，当时配置文件的时候其实有对应的设置。
+错误分类的话里看看其他人有没有做。
+4可以考虑
+然后所有的修改要考虑框架重试机制的统一性，并且还有个要考虑的，就是当前有些错误返回太模糊了，比如因为用户自身没忘调用失败，他logger就返回个fetch failed，是个人都会懵逼一下
+</user_query>
+
+user:
+<user_query>
+差不多，这样优化后，核心逻辑能否反而更加紧凑
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home/aw/.cursor/plans/retry-error-enhancement_b6f8ac20.plan.md" lines="1-197">
+     1|# LLM 重试机制增强方案
+     2|
+     3|## 一、问题分析
+     4|
+     5|### 1.1 当前 mineclaw 的问题
+     6|
+     7|[mineclaw/src/llm/retry.ts](mineclaw/src/llm/retry.ts) 存在以下不足：
+     8|
+     9|- **529 未纳入**：Anthropic overload 错误使用非标准状态码 529，当前 `retryableStatuses = [429, 500, 502, 503]` 不包含
+    10|- **网络错误不重试**：只检查 `err.status`，网络层错误（ECONNRESET, fetch failed）没有 status 属性，直接失败
+    11|- **无 jitter**：固定延迟 `2^n * baseDelay`，可能造成重试风暴
+    12|- **无 maxDelay 上限**：第 5 次重试要等 16 秒
+    13|- **错误消息模糊**：如用户断网时只报 "fetch failed"，缺乏诊断信息
+    14|
+    15|### 1.2 fallback 模型链现状
+    16|
+    17|[mineclaw/src/llm/provider.ts](mineclaw/src/llm/provider.ts) 已实现 `createFallbackProvider()`：
+    18|
+    19|```typescript
+    20|// 第 177-209 行
+    21|export function createFallbackProvider(
+    22|  models: string[],
+    23|  brainConfig?: BrainJson,
+    24|  onFallback?: (from: string, to: string, error: Error) => void,
+    25|): LLMProvider
+    26|```
+    27|
+    28|- 已支持 `brain.json` 中 `model: string[]` 配置
+    29|- 在 [scheduler.ts](mineclaw/src/core/scheduler.ts) 中已调用（第 127-130 行、第 288-290 行）
+    30|- **问题**：fallback 只在流开始前触发，不与 retry 协同
+    31|
+    32|### 1.3 流中断续传
+    33|
+    34|调研结果：**不可行**。LLM API 不支持从中断位置恢复流：
+    35|
+    36|- Anthropic/OpenAI 的流是无状态的，中断后无法从特定 token 位置继续
+    37|- agentic_os 的做法是 `if (chunksYielded) throw err`（流开始后直接抛出，不重试）
+    38|- gemini-cli 的测试用例 `client.test.ts` 中有 `"Please continue."` 的递归调用，但那是**新请求**而非续传
+    39|
+    40|## 二、参考框架对比
+    41|
+    42|
+    43|| 特性            | mineclaw 现有 | agentic_os | gemini-cli             | LangChain          |
+    44|| ------------- | ----------- | ---------- | ---------------------- | ------------------ |
+    45|| 529 状态码       | -           | ✓（正则匹配）    | ✓                      | -                  |
+    46|| 网络错误码         | -           | ✓          | ✓（含 SSL）               | ✓                  |
+    47|| Jitter        | -           | -          | ✓ (±30%)               | ✓ (±25%)           |
+    48|| MaxDelay      | -           | -          | 30s                    | 60s                |
+    49|| 错误分类          | -           | -          | ✓ (Terminal/Retryable) | ✓ (LangChainError) |
+    50|| 友好错误消息        | -           | -          | ✓ (toFriendlyError)    | ✓                  |
+    51|| Retry-After 头 | -           | -          | ✓                      | -                  |
+    52|
+    53|
+    54|## 三、实现方案
+    55|
+    56|### 3.1 新建错误分类模块
+    57|
+    58|新建 [mineclaw/src/llm/errors.ts](mineclaw/src/llm/errors.ts)：
+    59|
+    60|```typescript
+    61|// 终端错误（不重试）
+    62|export class TerminalLLMError extends Error {
+    63|  constructor(message: string, public readonly code: string, public readonly cause?: Error) {
+    64|    super(message);
+    65|    this.name = 'TerminalLLMError';
+    66|  }
+    67|}
+    68|
+    69|// 可重试错误
+    70|export class RetryableLLMError extends Error {
+    71|  constructor(
+    72|    message: string,
+    73|    public readonly code: string,
+    74|    public readonly retryDelayMs?: number,
+    75|    public readonly cause?: Error,
+    76|  ) {
+    77|    super(message);
+    78|    this.name = 'RetryableLLMError';
+    79|  }
+    80|}
+    81|
+    82|// 网络错误
+    83|export class NetworkError extends RetryableLLMError {
+    84|  constructor(message: string, code: string, cause?: Error) {
+    85|    super(message, code, undefined, cause);
+    86|    this.name = 'NetworkError';
+    87|  }
+    88|}
+    89|
+    90|// 错误分类函数
+    91|export function classifyLLMError(err: unknown): 
+    92|  | { kind: 'terminal'; error: TerminalLLMError }
+    93|  | { kind: 'retryable'; error: RetryableLLMError }
+    94|  | { kind: 'unknown'; error: Error }
+    95|
+    96|// 友好化错误消息
+    97|export function formatLLMError(err: unknown): string
+    98|```
+    99|
+   100|### 3.2 增强 retry.ts
+   101|
+   102|修改 [mineclaw/src/llm/retry.ts](mineclaw/src/llm/retry.ts)：
+   103|
+   104|```typescript
+   105|export interface RetryOptions {
+   106|  maxRetries?: number;        // 默认 3
+   107|  baseDelayMs?: number;       // 默认 1000
+   108|  maxDelayMs?: number;        // 新增：默认 30000
+   109|  jitter?: boolean;           // 新增：默认 true
+   110|  retryableStatuses?: number[]; // 默认包含 529
+   111|  signal?: AbortSignal;       // 新增
+   112|  onRetry?: (info: RetryInfo) => void; // 新增
+   113|}
+   114|
+   115|// 可重试状态码（包含 529）
+   116|const DEFAULT_RETRYABLE_STATUSES = [429, 500, 502, 503, 529];
+   117|
+   118|// 可重试网络错误码
+   119|const RETRYABLE_NETWORK_CODES = [
+   120|  'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE',
+   121|  'ENOTFOUND', 'EAI_AGAIN', 'EPROTO'
+   122|];
+   123|
+   124|// 可重试消息模式（补充状态码检测）
+   125|const RETRYABLE_MESSAGE_PATTERN = 
+   126|  /fetch failed|network|socket hang up|overloaded|ECONNRESET|ETIMEDOUT/i;
+   127|```
+   128|
+   129|### 3.3 统一重试与 fallback
+   130|
+   131|修改 [mineclaw/src/llm/provider.ts](mineclaw/src/llm/provider.ts)：
+   132|
+   133|```typescript
+   134|export function createFallbackProvider(
+   135|  models: string[],
+   136|  brainConfig?: BrainJson,
+   137|  retryOpts?: RetryOptions,  // 新增：允许传入重试配置
+   138|  onFallback?: (from: string, to: string, error: Error) => void,
+   139|): LLMProvider {
+   140|  // 每个模型先走 withRetry，重试耗尽后再 fallback 到下一个模型
+   141|}
+   142|```
+   143|
+   144|### 3.4 友好化错误消息
+   145|
+   146|新建/扩展错误格式化逻辑：
+   147|
+   148|
+   149|| 原始错误                 | 友好消息                                                  |
+   150|| -------------------- | ----------------------------------------------------- |
+   151|| `fetch failed` + 无网络 | `网络连接失败。请检查网络连接后重试。`                                  |
+   152|| `ECONNREFUSED`       | `无法连接到 API 服务器 (${host})。请检查网络或 API 地址配置。`            |
+   153|| `status: 529`        | `Anthropic 服务暂时过载，正在重试... (${attempt}/${maxRetries})` |
+   154|| `status: 429`        | `API 请求频率超限，${delay/1000}秒后重试...`                     |
+   155|| `status: 401`        | `API 认证失败。请检查 key/llm_key.json 中的 api_key 配置。`        |
+   156|| `status: 403`        | `API 权限不足。请检查 API key 权限或配额。`                         |
+   157|
+   158|
+   159|### 3.5 解析 Retry-After 头（可选增强）
+   160|
+   161|对于支持 `Retry-After` 响应头的 API（如 OpenAI、Anthropic），解析并使用服务器建议的等待时间：
+   162|
+   163|```typescript
+   164|function parseRetryAfter(headers: Headers): number | undefined {
+   165|  const retryAfter = headers.get('retry-after');
+   166|  if (!retryAfter) return undefined;
+   167|  const seconds = parseInt(retryAfter, 10);
+   168|  return isNaN(seconds) ? undefined : seconds * 1000;
+   169|}
+   170|```
+   171|
+   172|## 四、文件变更清单
+   173|
+   174|
+   175|| 操作  | 文件                         | 说明                               |
+   176|| --- | -------------------------- | -------------------------------- |
+   177|| 新建  | `src/llm/errors.ts`        | 错误分类 + 友好消息格式化                   |
+   178|| 重写  | `src/llm/retry.ts`         | 增强重试逻辑（529/网络错误/jitter/maxDelay） |
+   179|| 修改  | `src/llm/provider.ts`      | 统一 retry 与 fallback              |
+   180|| 修改  | `src/llm/anthropic.ts`     | 传递 response headers              |
+   181|| 修改  | `src/llm/openai-compat.ts` | 传递 response headers              |
+   182|
+   183|
+   184|## 五、流开始后的处理
+   185|
+   186|遵循 agentic_os 的做法：
+   187|
+   188|- 流开始前（`chunksYielded = false`）：重试 + fallback
+   189|- 流开始后（`chunksYielded = true`）：直接抛出错误，由上层 brain 处理
+   190|
+   191|不实现流续传，原因：
+   192|
+   193|1. LLM API 无此能力
+   194|2. 中断后用户上下文可能已变
+   195|3. 复杂度高收益低
+   196|
+   197|
+</code_selection>
+
+</attached_files>
+<user_query>
+Implement the plan as specified, it is attached for your reference. Do NOT edit the plan file itself.
+
+To-do's from the plan have already been created. Do not create them again. Mark them as in_progress as you work, starting with the first one. Don't stop until you have completed all the to-dos.
+</user_query>
+
+user:
+<user_query>
+jitter到底是干啥的。signal取消是可以用户直接比如ctrl+d取消调用么？还是单次ctrl+c取消调用？
+fallback模型的配置如何配置，请告诉我，单次重试次数是否可以配置？
+</user_query>
+
+user:
+<user_query>
+超时取消的配置在哪里，可以设置为-1代表永不超时么。
+还有我希望brain里面关于模型的配置都统一到models顶级键之下
+然后mineclaw.json也是，只不过这个是全局的
+可以让models键下面支持maxRetries的参数。
+</user_query>
+
+user:
+<user_query>
+删除deprecated的键，不保留旧配置，我们还在developing阶段
+</user_query>
+
+user:
+<user_query>
+当用brain.ts createBrain的时候，默认的brain.json数据是什么？
+以及系统初始启动的时候，如果没有mineclaw.json，能否也自动生成一个默认值，然后llm_key_example.json与models.json也是，如果没有能否把当前的变成默认模板填入。默认的这些文件可以在合适的文件夹写ts专门填写模板
+</user_query>
+
+user:
+<user_query>
+src/core/scheduler.ts
+让他来引用模板和调用初始化合适么，我感觉他不是负责调度brains的吗，感觉做这个不太合适，职责耦合了
+</user_query>
+
+user:
+<user_query>
+我希望不是scheduler引用模板，而是main发现没有对应的文件直接创建文件
+</user_query>
+
+user:
+<user_query>
+先分两波提交下刚才的修改，为这次修改留干净的工作区
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home/aw/.cursor/plans/默认配置模板生成_983f1dfd.plan.md" lines="1-128">
+     1|# 默认配置模板生成方案
+     2|
+     3|## 一、架构设计
+     4|
+     5|职责分离：
+     6|
+     7|- `**main.ts**`：程序入口，启动前检查并生成缺失的配置文件
+     8|- `**src/defaults/templates.ts**`：所有默认配置模板的定义
+     9|- `**src/defaults/init.ts**`：文件检查与生成逻辑
+    10|- `**scheduler.ts**`：从 defaults 导入 DEFAULT_BRAIN_JSON，只负责 brain 调度
+    11|
+    12|```mermaid
+    13|flowchart LR
+    14|    main["main.ts"] --> init["ensureDefaultConfigs()"]
+    15|    init --> templates["templates.ts"]
+    16|    init -->|"生成文件"| files["mineclaw.json\nkey/llm_key.json\nkey/models.json"]
+    17|    main --> scheduler["Scheduler.start()"]
+    18|    scheduler -->|"导入"| templates
+    19|```
+    20|
+    21|
+    22|
+    23|## 二、文件变更
+    24|
+    25|### 2.1 新建 src/defaults/templates.ts
+    26|
+    27|```typescript
+    28|import type { BrainJson, MineclawConfig, ModelSpec } from "../core/types.js";
+    29|
+    30|export const DEFAULT_BRAIN_JSON: BrainJson = {
+    31|  models: { model: null },
+    32|  subscriptions: { global: "none", enable: ["stdin"] },
+    33|  tools: { global: "all", disable: ["manage_brain"] },
+    34|  slots: { global: "all" },
+    35|};
+    36|
+    37|export const DEFAULT_MINECLAW_JSON: MineclawConfig = {
+    38|  models: { model: "gemini-2.5-flash", maxRetries: 3, timeout: -1 },
+    39|};
+    40|
+    41|export const DEFAULT_LLM_KEY_JSON = {
+    42|  gemini: { api_key: "", api: "google-generative-ai", models: ["gemini-2.5-flash", "gemini-2.5-pro"] },
+    43|  // ... 其他 provider 模板
+    44|};
+    45|
+    46|export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
+    47|  "gemini-2.5-flash": { input: ["text", "image", "video", "audio"], reasoning: true, ... },
+    48|  // ... 其他模型
+    49|};
+    50|```
+    51|
+    52|### 2.2 新建 src/defaults/init.ts
+    53|
+    54|```typescript
+    55|import { existsSync } from "node:fs";
+    56|import { mkdir, writeFile } from "node:fs/promises";
+    57|import { join } from "node:path";
+    58|import { DEFAULT_MINECLAW_JSON, DEFAULT_LLM_KEY_JSON, DEFAULT_MODELS_JSON } from "./templates.js";
+    59|
+    60|async function ensureFile(path: string, content: unknown): Promise<boolean> {
+    61|  if (existsSync(path)) return false;
+    62|  await writeFile(path, JSON.stringify(content, null, 2) + "\n", "utf-8");
+    63|  return true;
+    64|}
+    65|
+    66|export async function ensureDefaultConfigs(root: string): Promise<void> {
+    67|  await mkdir(join(root, "key"), { recursive: true });
+    68|  await mkdir(join(root, "brains"), { recursive: true });
+    69|
+    70|  if (await ensureFile(join(root, "mineclaw.json"), DEFAULT_MINECLAW_JSON)) {
+    71|    console.log("Created default mineclaw.json");
+    72|  }
+    73|  if (await ensureFile(join(root, "key/llm_key.json"), DEFAULT_LLM_KEY_JSON)) {
+    74|    console.log("Created default key/llm_key.json");
+    75|  }
+    76|  if (await ensureFile(join(root, "key/models.json"), DEFAULT_MODELS_JSON)) {
+    77|    console.log("Created default key/models.json");
+    78|  }
+    79|}
+    80|```
+    81|
+    82|### 2.3 新建 src/defaults/index.ts
+    83|
+    84|```typescript
+    85|export { ensureDefaultConfigs } from "./init.js";
+    86|export { DEFAULT_BRAIN_JSON, DEFAULT_MINECLAW_JSON } from "./templates.js";
+    87|```
+    88|
+    89|### 2.4 修改 src/main.ts
+    90|
+    91|```typescript
+    92|import { ensureDefaultConfigs } from "./defaults/index.js";
+    93|
+    94|async function main() {
+    95|  console.log("╔════════════════════════════════╗");
+    96|  console.log("║        MineClaw v0.2.0         ║");
+    97|  console.log("╚════════════════════════════════╝\n");
+    98|
+    99|  await ensureDefaultConfigs(process.cwd());  // 新增：确保配置文件存在
+   100|
+   101|  const scheduler = new Scheduler();
+   102|  await scheduler.start();
+   103|}
+   104|```
+   105|
+   106|### 2.5 修改 src/core/scheduler.ts
+   107|
+   108|删除内联的 `DEFAULT_BRAIN_JSON`，改为从 defaults 导入：
+   109|
+   110|```typescript
+   111|import { DEFAULT_BRAIN_JSON } from "../defaults/templates.js";
+   112|
+   113|// 删除原来的:
+   114|// private static readonly DEFAULT_BRAIN_JSON = { ... };
+   115|
+   116|// doCreate 中继续使用 DEFAULT_BRAIN_JSON（现在是导入的）
+   117|```
+   118|
+   119|## 三、文件清单
+   120|
+   121|- 新建 `src/defaults/templates.ts`
+   122|- 新建 `src/defaults/init.ts`
+   123|- 新建 `src/defaults/index.ts`
+   124|- 修改 `src/main.ts`
+   125|- 修改 `src/core/scheduler.ts`
+   126|- 保留 `key/llm_key.example.json`（作为 git 可追踪的参考）
+   127|
+   128|
+</code_selection>
+
+</attached_files>
+<user_query>
+Implement the plan as specified, it is attached for your reference. Do NOT edit the plan file itself.
+
+To-do's from the plan have already been created. Do not create them again. Mark them as in_progress as you work, starting with the first one. Don't stop until you have completed all the to-dos.
+</user_query>
+
+user:
+<user_query>
+llm_key默认创建的是模板对吧，别把握key带进去了就行
+</user_query>
+
+user:
+<user_query>
+提交下代码
+</user_query>
+
+user:
+<user_query>
+提交，但忽略llm_key.json本身，因为这是我的key，同时留着example文件
+</user_query>
+
+user:
+<user_query>
+先做一波推送
+</user_query>
+
+user:
+<user_query>
+然后接下来我们关注一个点，brain.ts的瘦身，其实我一直在想能不能不要掉managedBrain的结构，只要一个brain结构，把queue，logger啥的结构都装到brain本身里面去，你看看这样子设计时候更加扁平化，给我一个评价
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home/aw/Desktop/gamer" lines="1-11">
+     1|interface BrainConfig {
+     2|  id: string;
+     3|  brainDir: string;
+     4|  brainJson: BrainJson;
+     5|  // 共享单例（传入引用）
+     6|  brainBoard: BrainBoardAPI;
+     7|  pathManager: PathManagerAPI;
+     8|  terminalManager: TerminalManagerAPI;
+     9|  logger: Logger;
+    10|  eventBus: EventBus;
+    11|}
+</code_selection>
+
+</attached_files>
+<user_query>
+单一实例源那就直接创建时由scheduler传递全局实例。当前这里面的设计确实有点混乱。
+@code block (1-11) 里的这个设计很不错
+</user_query>
+
+user:
+<user_query>
+这里有个小问题，那到时候brain.json以及内部一些脚本文件的热更新职责要交给谁？现在是交给谁的
+</user_query>
+
+user:
+<user_query>
+ok。你说得对，那还有，因为brain创建出来了就是文件夹，这一层本地文件与大脑内存实例的映射关系，谁来管理，比如我删了一个brains，对应内存里的一个对象应该立即释放，不然后续就会出现各种找不到的问题（这个当前mienclaw的代码似乎也没很好的管理）。
+其次是brain内部的soul.md的引用，这应该是brain内部的slotLoader用pathManager去热访问的对吧？
+</user_query>
+
+user:
+<user_query>
+可以更新下计划，并且把当前对brainControl的操作也纳入重构时必须考量的地方
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home/aw/.cursor/plans/brain_结构扁平化_a3bef54e.plan.md" lines="1-260">
+     1|# Brain 结构扁平化重构
+     2|
+     3|## 当前问题
+     4|
+     5|```mermaid
+     6|flowchart TD
+     7|  subgraph scheduler_layer [Scheduler]
+     8|    brains["Map&lt;id, ManagedBrain&gt;"]
+     9|  end
+    10|  
+    11|  subgraph managed [ManagedBrain]
+    12|    queue[EventQueue]
+    13|    abort[AbortController]
+    14|    sources[EventSource 数组]
+    15|    hooks[BrainHooks]
+    16|    brain_ref[brain: ConsciousBrain]
+    17|  end
+    18|  
+    19|  subgraph conscious [ConsciousBrain]
+    20|    dup_queue[eventQueue 重复引用]
+    21|    dup_hooks[hooks 重复引用]
+    22|    dup_sources[sources 重复引用]
+    23|  end
+    24|  
+    25|  brains --> managed
+    26|  managed --> conscious
+    27|```
+    28|
+    29|
+    30|
+    31|问题：
+    32|
+    33|- `ManagedBrain` 和 `ConsciousBrain` 持有相同组件的重复引用
+    34|- `initBrain()` 方法约 170 行，职责混杂
+    35|- Scheduler 需要同时管理 `ManagedBrain` 包装器和内部 brain 的生命周期
+    36|
+    37|## 目标结构
+    38|
+    39|```mermaid
+    40|flowchart TD
+    41|  subgraph scheduler_new [Scheduler]
+    42|    brains_new["Map&lt;id, Brain&gt;"]
+    43|    shared[共享单例]
+    44|  end
+    45|  
+    46|  subgraph brain_unified [Brain 基类]
+    47|    config[BrainConfig]
+    48|    queue_own[queue: EventQueue]
+    49|    abort_own[abortController]
+    50|    sources_own[sources]
+    51|    hooks_own[hooks]
+    52|    run_method["run(signal)"]
+    53|    stop_method["stop() / shutdown()"]
+    54|  end
+    55|  
+    56|  subgraph children [子类]
+    57|    conscious_new[ConsciousBrain]
+    58|    script_new[ScriptBrain]
+    59|  end
+    60|  
+    61|  shared -->|传入| brain_unified
+    62|  brains_new --> brain_unified
+    63|  brain_unified --> children
+    64|```
+    65|
+    66|
+    67|
+    68|## 新接口设计
+    69|
+    70|[src/core/types.ts](src/core/types.ts) 新增：
+    71|
+    72|```typescript
+    73|interface BrainConfig {
+    74|  id: string;
+    75|  brainDir: string;
+    76|  brainJson: BrainJson;
+    77|  // 共享单例（传入引用）
+    78|  brainBoard: BrainBoardAPI;
+    79|  pathManager: PathManagerAPI;
+    80|  terminalManager: TerminalManagerAPI;
+    81|  logger: Logger;
+    82|  eventBus: EventBus;
+    83|}
+    84|```
+    85|
+    86|## 实现步骤
+    87|
+    88|### 1. 新建 [src/core/base-brain.ts](src/core/base-brain.ts)
+    89|
+    90|抽象基类，持有所有 Brain 共享的组件：
+    91|
+    92|```typescript
+    93|export abstract class BaseBrain implements BrainInterface {
+    94|  readonly id: string;
+    95|  protected readonly config: BrainConfig;
+    96|  
+    97|  // 自有组件（每个实例独立）
+    98|  protected readonly queue: EventQueue;
+    99|  protected readonly abortController = new AbortController();
+   100|  protected readonly hooks: BrainHooks;
+   101|  protected sources: EventSource[] = [];
+   102|  
+   103|  // 共享单例（从 config 解构）
+   104|  protected readonly brainBoard: BrainBoardAPI;
+   105|  protected readonly pathManager: PathManagerAPI;
+   106|  protected readonly terminalManager: TerminalManagerAPI;
+   107|  protected readonly logger: Logger;
+   108|  protected readonly eventBus: EventBus;
+   109|  
+   110|  constructor(config: BrainConfig) { /* ... */ }
+   111|  
+   112|  abstract run(signal: AbortSignal): Promise<void>;
+   113|  
+   114|  stop(): void { this.abortController.abort(); }
+   115|  
+   116|  async shutdown(): Promise<void> {
+   117|    this.stop();
+   118|    for (const src of this.sources) await src.close?.();
+   119|  }
+   120|}
+   121|```
+   122|
+   123|### 2. 重构 [src/core/script-brain.ts](src/core/script-brain.ts)
+   124|
+   125|继承 `BaseBrain`，保留 `run()` 中的脚本加载逻辑。
+   126|
+   127|### 3. 重构 [src/core/brain.ts](src/core/brain.ts)
+   128|
+   129|- `ConsciousBrain extends BaseBrain`
+   130|- 移除与基类重复的字段
+   131|- `ConsciousBrainOpts` 简化为只包含 ConsciousBrain 特有的参数（provider, tools, sessionManager, 等）
+   132|
+   133|### 4. 简化 [src/core/scheduler.ts](src/core/scheduler.ts)
+   134|
+   135|- 删除 `ManagedBrain` 接口
+   136|- `brains` 类型改为 `Map<string, BaseBrain>`
+   137|- `initBrain()` 拆分：
+   138|  - `loadBrainConfig()` — 加载 brain.json
+   139|  - `createBrainContext()` — 构建 BrainConfig 对象
+   140|  - `initConsciousBrain()` / `initScriptBrain()` — 各自的初始化逻辑
+   141|- `getManagedBrain()` 改为直接返回 brain 实例（brain 已自包含 queue/hooks）
+   142|
+   143|### 5. 更新 EventBus 注册
+   144|
+   145|当前 `eventBus.register(brainId, queue)` 在 scheduler 中调用。重构后移入 `BaseBrain` 构造函数，传入 `eventBus` 引用。
+   146|
+   147|### 6. 热更新职责分配
+   148|
+   149|**决策：Scheduler 继续负责热更新注册，Brain 只暴露 update 接口**
+   150|
+   151|理由：
+   152|
+   153|- `brains/` 目录增删需要 Scheduler 级别的 `initBrain()` / 清理 Map
+   154|- `brain.json` 热更新需要合并 `mineclaw.json` 全局配置，Scheduler 已持有 `loadGlobalConfig()`
+   155|- ToolLoader/SlotLoader 本身就是"外部注册，回调通知"模式
+   156|
+   157|BaseBrain 需暴露的接口：
+   158|
+   159|```typescript
+   160|abstract class BaseBrain {
+   161|  // 热更新接口
+   162|  updateConfig?(opts: { provider?: LLMProvider; modelSpec?: ModelSpec; brainConfig?: BrainJson }): void;
+   163|  updateTools?(tools: ToolDefinition[]): void;
+   164|  setSources(sources: EventSource[]): void;
+   165|}
+   166|```
+   167|
+   168|Scheduler 注册逻辑保持不变，调用方式更新为：
+   169|
+   170|```typescript
+   171|// brain.json 变更
+   172|fsWatcher.register(/brain\.json$/, async (evt) => {
+   173|  const brain = this.brains.get(brainId);
+   174|  if (brain instanceof ConsciousBrain) {
+   175|    brain.updateConfig({ provider, modelSpec, brainConfig });
+   176|  }
+   177|});
+   178|
+   179|// tools 变更
+   180|toolLoader.setCallback((tools) => brain.updateTools?.(tools));
+   181|```
+   182|
+   183|### 7. Brain 生命周期管理（文件夹 ↔ 内存映射）
+   184|
+   185|**当前问题**：
+   186|
+   187|- 删除 `brains/{id}/` 文件夹后，内存中的 brain 实例可能未正确释放
+   188|- `doFree()` 调用 `brain.free?.()`，但大多数 brain 没实现
+   189|- 未清理 `eventBus.unregister(brainId)`
+   190|
+   191|**重构方案**：
+   192|
+   193|1. `BaseBrain.shutdown()` 统一清理逻辑：
+   194|
+   195|```typescript
+   196|async shutdown(): Promise<void> {
+   197|  this.abortController.abort();
+   198|  for (const src of this.sources) {
+   199|    try { src.stop(); await src.close?.(); } catch { /* ignore */ }
+   200|  }
+   201|  this.eventBus.unregister(this.id);
+   202|}
+   203|```
+   204|
+   205|1. Scheduler 新增私有方法 `removeBrain(id)`：
+   206|
+   207|```typescript
+   208|private async removeBrain(id: string): Promise<void> {
+   209|  const brain = this.brains.get(id);
+   210|  if (!brain) return;
+   211|  await brain.shutdown();
+   212|  this.brains.delete(id);
+   213|  this.logger.info("scheduler", 0, `brain '${id}' removed from memory`);
+   214|}
+   215|```
+   216|
+   217|1. 统一调用点：
+   218|  - `doStop(id)` → `brain.stop()` （仅暂停循环，保留内存）
+   219|  - `doShutdown(id)` → `brain.shutdown()` （清理资源，保留内存）
+   220|  - `doFree(id)` → `removeBrain(id)` + 删除文件夹
+   221|  - `doRestart(id)` → `removeBrain(id)` + `initBrain(id)`
+   222|  - fsWatcher 检测删除 → `removeBrain(id)`
+   223|
+   224|### 8. brainControl 操作重构映射
+   225|
+   226|当前 `controlBrain()` 支持的操作及重构后的实现：
+   227|
+   228|
+   229|| 操作         | 当前实现                                                          | 重构后实现                                                  |
+   230|| ---------- | ------------------------------------------------------------- | ------------------------------------------------------ |
+   231|| `list`     | 遍历 `brains` Map                                               | 不变，直接遍历 `Map<id, BaseBrain>`                           |
+   232|| `create`   | 创建目录 + 写 brain.json/soul.md                                   | 不变                                                     |
+   233|| `start`    | `initBrain()` + `slot.brain.run(slot.abortController.signal)` | `initBrain()` + `brain.run()` （brain 自带 signal）        |
+   234|| `stop`     | `slot.brain.stop?.()`                                         | `brain.stop()`                                         |
+   235|| `shutdown` | `slot.brain.shutdown?.()` + `slot.abortController.abort()`    | `brain.shutdown()` （内部已含 abort）                        |
+   236|| `restart`  | shutdown + delete + initBrain + run                           | `removeBrain()` + `initBrain()` + `brain.run()`        |
+   237|| `free`     | `brain.free?.()` + abort + delete Map + rm 目录                 | `removeBrain()` + rm 目录                                |
+   238|| `resume`   | `slot.queue.push(resumeEvent)`                                | `brain.queue.push(resumeEvent)` （queue 现在是 brain 内部属性） |
+   239|
+   240|
+   241|**关键变化**：
+   242|
+   243|- 不再需要 `slot.abortController`，brain 自带
+   244|- 不再需要 `slot.queue`，通过 `brain.pushEvent()` 或直接访问 `brain.queue`
+   245|- `getManagedBrain()` 改为 `getBrain(id): BaseBrain | null`
+   246|
+   247|## 文件变更清单
+   248|
+   249|
+   250|| 文件                         | 操作                               |
+   251|| -------------------------- | -------------------------------- |
+   252|| `src/core/types.ts`        | 新增 `BrainConfig` 接口              |
+   253|| `src/core/base-brain.ts`   | 新建抽象基类                           |
+   254|| `src/core/script-brain.ts` | 继承 `BaseBrain`                   |
+   255|| `src/core/brain.ts`        | 继承 `BaseBrain`，精简 opts           |
+   256|| `src/core/scheduler.ts`    | 删除 `ManagedBrain`，拆分 `initBrain` |
+   257|| `src/core/index.ts`        | 导出 `BaseBrain`                   |
+   258|
+   259|
+   260|
+</code_selection>
+
+</attached_files>
+<user_query>
+Implement the plan as specified, it is attached for your reference. Do NOT edit the plan file itself.
+
+To-do's from the plan have already been created. Do not create them again. Mark them as in_progress as you work, starting with the first one. Don't stop until you have completed all the to-dos.
+</user_query>
+
+user:
+<user_query>
+不错，这样整个逻辑感觉就舒服很多了。
+为什么之前看着这么难受
+</user_query>
+
+user:
+<user_query>
+当前的框架有进一步统一么：
+Scheduler对brain的createControl操作是怎么样的，我想问问
+</user_query>
+
+user:
+<user_query>
+可以。free肯定是基础能力。
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home/aw/Desktop/gamer" lines="1-4">
+     1|override async free(): Promise<void> {
+     2|  await super.free();
+     3|  this.emitFn({ source: `brain:${this.id}`, type: "brain_freed", ... });
+     4|}
+</code_selection>
+
+</attached_files>
+<user_query>
+@code block (1-4) 在个发送事件有什么意义么，先问问你先看看
+</user_query>
+
+user:
+<user_query>
+这个事件系统理论上应该也放到baseBrain里把，这样更通用。
+</user_query>
+
+user:
+<user_query>
+emit会触发handlers但不依赖brainQueues是什么意思
+</user_query>
+
+user:
+<user_query>
+handlers是干嘛的
+</user_query>
+
+user:
+<user_query>
+那外部系统/外部日志不能也用eventBus来做吗
+</user_query>
+
+user:
+<user_query>
+handlers的用法和eventBus会有什么区别？以及eventBus和brainQueue有什么区别
+</user_query>
+
+user:
+<user_query>
+这个我有几个问题啊。感觉概念还是太多了。
+首先现在消息是怎么根据silent，决定只传消息或传消息+激活，这和你上面说的东西是以各层次的吗？
+</user_query>
+
+user:
+<user_query>
+那BrainQueue到底是干啥的
+</user_query>
+
+user:
+<user_query>
+那这是不是改个更好啊，这个太有误导性了
+</user_query>
+
+user:
+<user_query>
+感觉不应该叫queue，但应该叫brain和registry的结合，同时强调不是实例的registry
+</user_query>
+
+user:
+<user_query>
+rotingTable
+</user_query>
+
+user:
+<user_query>
+或者就叫brainIdMaps嘛，这个才对位
+</user_query>
+
+user:
+<user_query>
+在准确定，QueueMaps之类的？
+</user_query>
+
+user:
+<user_query>
+brainQueueMap吧
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home-aw-Desktop-gamer/1" lines="565-575">
+   565|[stdin] 订阅已启动，等待输入...
+   566|[15:33:48.055] [INFO ] [scheduler#0] 就绪，所有 brain loop 已启动
+   567|[15:33:48.055] [ERROR] [scheduler#0] brain 'coder' loop crashed
+   568|  TypeError: Cannot read properties of null (reading 'on')
+   569|    at Object.start (/home/aw/Desktop/gamer/mineclaw/subscriptions/stdout.ts:57:29)
+   570|    at ConsciousBrain.startSources (/home/aw/Desktop/gamer/mineclaw/src/core/base-brain.ts:82:11)
+   571|    at ConsciousBrain.run (/home/aw/Desktop/gamer/mineclaw/src/core/brain.ts:254:10)
+   572|    at Scheduler.runBrain (/home/aw/Desktop/gamer/mineclaw/src/core/scheduler.ts:515:11)
+   573|    at Scheduler.start (/home/aw/Desktop/gamer/mineclaw/src/core/scheduler.ts:126:12)
+   574|    at async main (/home/aw/Desktop/gamer/mineclaw/src/main.ts:20:3)
+   575|
+</code_selection>
+
+</attached_files>
+<user_query>
+@/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt:571-581 这是什么问题
+</user_query>
+
+user:
+<attached_files>
+
+<code_selection path="/home-aw-Desktop-gamer/1" lines="598-603">
+   598|[auto_compact] 订阅已启动 (阈值 60%)
+   599|[15:36:01.039] [INFO ] [scheduler#0] 就绪，所有 brain loop 已启动
+   600|你好呀,你是谁
+   601|[15:36:18.944] [INFO ] [coder#1] ▶ process [2 events]
+   602|[15:36:18.956] [DEBUG] [coder#1] LLM call: 33 msgs, 22 tools, session=32
+   603|[15:36:36.764] [ERROR] [coder#1] LLM call failed: terminated
+</code_selection>
+
+</attached_files>
+<user_query>
+@/home/aw/.cursor/projects/home-aw-Desktop-gamer/terminals/1.txt:604-609 这里调用出了什么问题么
+</user_query>
+
+user:
+<user_query>
+那为什么我还一直在卡着。没有看到重试之类的内容？
+</user_query>
+
+user:
+<user_query>
+这样子穷举感觉不太好啊，太多特定条件了，gemini-cli和claude-code，openclaw怎么做的？你再去拉一下langchain的代码，看下她怎么做的
+</user_query>
+
+user:
+<user_query>
+那这样能解决未来遇到一个没遇到的错误，也能自动重试吗
+</user_query>
+
+user:
+<user_query>
+429也可以重试，我们可以把我们的maxRetries开高点就行。任何第三方错误与网络错误都可以试着重试直到耗尽次数。指数避退是2^n次。重试此次数也是我们可以自己规定的嘛，所以用户不想重试直接关了重试即可。在全自动化场景下长时等待重试很重要
+</user_query>
+
+user:
+<user_query>
+继续
+</user_query>
+
+user:
+<user_query>
+提交推送一下代码
+</user_query>
+
+user:
+<user_query>
+将我们当前的聊天记录保存到mineclaw的docs/chat_history里
+</user_query>
+
+assistant:
+我需要先查看当前的聊天记录文件，然后将其保存到 mineclaw 的 docs/chat_history 目录中。
+[Tool call] Shell
+  command: ls -la /home/aw/.cursor/projects/home-aw-Desktop-gamer/agent-transcripts/ | head -20
+  description: 查看聊天记录文件列表
+  working_directory: /home/aw/Desktop/gamer
+[Tool call] Shell
+  command: mkdir -p /home/aw/Desktop/gamer/mineclaw/docs/chat_history
+  description: 创建 chat_history 目录
+  working_directory: /home/aw/Desktop/gamer
+
+[Tool result] Shell
+
+[Tool result] Shell
+
+assistant:
+让我找到最新的聊天记录文件（当前会话）：
+[Tool call] Shell
+  command: ls -lt /home/aw/.cursor/projects/home-aw-Desktop-gamer/agent-transcripts/ | head -10
+  description: 按时间排序查看最新聊天记录
+  working_directory: /home/aw/Desktop/gamer
+
+[Tool result] Shell

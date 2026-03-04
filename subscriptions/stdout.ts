@@ -102,10 +102,9 @@ export default function create(ctx: SourceContext): EventSource {
           if (clean) {
             qa.recordAssistant(clean).catch(() => {});
           }
-          if (!streamedText.endsWith("\n") && !pendingToolCalls) {
-            process.stdout.write("\n");
-          }
         }
+        // Always ensure newline at turn end
+        process.stdout.write("\n");
         streaming = false;
         streamedText = "";
         pendingToolCalls = false;

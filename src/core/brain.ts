@@ -170,6 +170,9 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
 
     const textContent = typeof content === "string" ? content : "";
     const displayContent = textContent.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
+    if (displayContent) {
+      logger?.info(brainId, turn, displayContent);
+    }
 
     if (!response.toolCalls || response.toolCalls.length === 0) {
       if (!displayContent) {
