@@ -3,8 +3,10 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ModelSpec, BrainJson, ReasoningEffort } from "../core/types.js";
+import type { ModelSpec, ModelsConfig, ReasoningEffort } from "../core/types.js";
 import type { LLMProvider } from "./types.js";
+import { withRetry, type RetryOptions, type RetryInfo } from "./retry.js";
+import { classifyLLMError } from "./errors.js";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -103,17 +105,44 @@ export interface ResolvedModelParams {
   showThinking?: boolean;
 }
 
-export function resolveModelParams(model: string, brainConfig?: BrainJson): ResolvedModelParams {
+/**
+ * 解析模型参数
+ * @param model 模型名称
+ * @param modelsConfig 模型配置
+ */
+export function resolveModelParams(
+  model: string,
+  modelsConfig?: ModelsConfig,
+): ResolvedModelParams {
   const spec = getModelSpec(model);
 
-  const temperature = brainConfig?.temperature ?? spec.defaultTemperature;
-  const maxTokens = brainConfig?.maxTokens ?? spec.maxOutput;
+  const temperature = modelsConfig?.temperature ?? spec.defaultTemperature;
+  const maxTokens = modelsConfig?.maxTokens ?? spec.maxOutput;
   const reasoningEffort = spec.reasoning
-    ? (brainConfig?.reasoningEffort ?? undefined)
+    ? (modelsConfig?.reasoningEffort ?? undefined)
     : undefined;
-  const showThinking = brainConfig?.showThinking ?? false;
+  const showThinking = modelsConfig?.showThinking ?? false;
 
   return { temperature, maxTokens, reasoningEffort, showThinking };
+}
+
+/**
+ * 从 ModelsConfig 构建 RetryOptions
+ */
+export function buildRetryOptions(modelsConfig?: ModelsConfig): RetryOptions {
+  const opts: RetryOptions = {};
+
+  if (modelsConfig?.maxRetries !== undefined) {
+    opts.maxRetries = modelsConfig.maxRetries;
+  }
+  if (modelsConfig?.baseDelayMs !== undefined) {
+    opts.baseDelayMs = modelsConfig.baseDelayMs;
+  }
+  if (modelsConfig?.maxDelayMs !== undefined) {
+    opts.maxDelayMs = modelsConfig.maxDelayMs;
+  }
+
+  return opts;
 }
 
 // ── Model → Section resolution (scan models arrays) ─────────────
@@ -134,7 +163,15 @@ function resolveSection(model: string): { sectionName: string; entry: KeyEntry }
 
 // ── Public API ───────────────────────────────────────────────────
 
-export function createProvider(modelSpec: string, brainConfig?: BrainJson): LLMProvider {
+/**
+ * 创建单个模型的 Provider
+ * @param modelSpec 模型名称（可带 @keySection 后缀）
+ * @param modelsConfig 模型配置
+ */
+export function createProvider(
+  modelSpec: string,
+  modelsConfig?: ModelsConfig,
+): LLMProvider {
   const { model, keySection } = parseModelSpec(modelSpec);
 
   let entry: KeyEntry;
@@ -161,7 +198,7 @@ export function createProvider(modelSpec: string, brainConfig?: BrainJson): LLMP
     throw new Error(`Empty api_key in key section for model '${model}'`);
   }
 
-  const params = resolveModelParams(model, brainConfig);
+  const params = resolveModelParams(model, modelsConfig);
 
   return factory({
     model,
@@ -174,35 +211,150 @@ export function createProvider(modelSpec: string, brainConfig?: BrainJson): LLMP
   });
 }
 
-/** Try models in order; on pre-stream failure, fall back to the next model. */
+export interface FallbackProviderOptions {
+  /** 重试配置（会被 modelsConfig 中的配置覆盖） */
+  retry?: RetryOptions;
+  /** 重试回调（用于日志） */
+  onRetry?: (model: string, info: RetryInfo) => void;
+  /** 模型切换回调 */
+  onFallback?: (from: string, to: string, error: Error) => void;
+  /** LLM 调用超时（毫秒），-1 = 永不超时 */
+  timeout?: number;
+}
+
+/**
+ * 创建带重试和 fallback 的 provider
+ *
+ * 流程：
+ * 1. 对每个模型，先通过 withRetry 重试
+ * 2. 重试耗尽后，fallback 到下一个模型
+ * 3. 流开始后（chunksYielded=true）不重试，直接抛出
+ *
+ * @param models 模型名称列表
+ * @param modelsConfig 模型配置
+ * @param options fallback 选项
+ */
 export function createFallbackProvider(
   models: string[],
-  brainConfig?: BrainJson,
-  onFallback?: (from: string, to: string, error: Error) => void,
+  modelsConfig?: ModelsConfig,
+  options?: FallbackProviderOptions,
 ): LLMProvider {
   if (models.length === 0) throw new Error("No models specified for fallback chain");
-  if (models.length === 1) return createProvider(models[0], brainConfig);
 
+  // 从 modelsConfig 构建重试选项，与传入的 options.retry 合并
+  const configRetryOpts = buildRetryOptions(modelsConfig);
+  const retryOpts: RetryOptions = { ...options?.retry, ...configRetryOpts };
+  const { onRetry, onFallback } = options ?? {};
+
+  // 单模型：只需重试，无 fallback
+  if (models.length === 1) {
+    const provider = createProvider(models[0], modelsConfig);
+    return {
+      async *chatStream(messages, tools, signal) {
+        const modelName = models[0];
+
+        // 由于 chatStream 返回 AsyncGenerator，需要在外层包装重试
+        // 这里采用"首次调用时重试"策略：获取第一个 chunk 前重试
+        let chunksYielded = false;
+
+        const createStream = () => provider.chatStream(messages, tools, signal);
+
+        // 使用 withRetry 包装首次 chunk 获取
+        const stream = await withRetry(
+          async () => {
+            const iterable = createStream();
+            const iterator = iterable[Symbol.asyncIterator]();
+            const first = await iterator.next();
+            return { iterator, first };
+          },
+          {
+            ...retryOpts,
+            signal,
+            onRetry: (info) => onRetry?.(modelName, info),
+          },
+        );
+
+        // 处理首个 chunk
+        if (!stream.first.done) {
+          chunksYielded = true;
+          yield stream.first.value;
+        }
+
+        // 流式处理剩余内容（不重试）
+        try {
+          let result = await stream.iterator.next();
+          while (!result.done) {
+            yield result.value;
+            result = await stream.iterator.next();
+          }
+        } catch (err) {
+          // 流中断：直接抛出，由上层处理
+          const classified = classifyLLMError(err);
+          throw classified.error;
+        }
+      },
+    };
+  }
+
+  // 多模型：重试 + fallback
   return {
     async *chatStream(messages, tools, signal) {
       let lastError: Error | undefined;
+
       for (let i = 0; i < models.length; i++) {
+        const modelName = models[i];
         let chunksYielded = false;
+
         try {
-          const provider = createProvider(models[i], brainConfig);
-          for await (const chunk of provider.chatStream(messages, tools, signal)) {
+          const provider = createProvider(modelName, modelsConfig);
+          const createStream = () => provider.chatStream(messages, tools, signal);
+
+          // 使用 withRetry 包装首次 chunk 获取
+          const stream = await withRetry(
+            async () => {
+              const iterable = createStream();
+              const iterator = iterable[Symbol.asyncIterator]();
+              const first = await iterator.next();
+              return { iterator, first };
+            },
+            {
+              ...retryOpts,
+              signal,
+              onRetry: (info) => onRetry?.(modelName, info),
+            },
+          );
+
+          // 处理首个 chunk
+          if (!stream.first.done) {
             chunksYielded = true;
-            yield chunk;
+            yield stream.first.value;
           }
-          return;
-        } catch (err: any) {
-          if (chunksYielded) throw err; // mid-stream failure: propagate
-          lastError = err;
+
+          // 流式处理剩余内容
+          let result = await stream.iterator.next();
+          while (!result.done) {
+            yield result.value;
+            result = await stream.iterator.next();
+          }
+
+          return; // 成功完成
+        } catch (err: unknown) {
+          const classified = classifyLLMError(err);
+
+          // 流已开始：不 fallback，直接抛出
+          if (chunksYielded) {
+            throw classified.error;
+          }
+
+          lastError = classified.error;
+
+          // 通知 fallback（如果还有下一个模型）
           if (i < models.length - 1) {
-            onFallback?.(models[i], models[i + 1], err);
+            onFallback?.(modelName, models[i + 1], classified.error);
           }
         }
       }
+
       throw lastError ?? new Error("All models in fallback chain failed");
     },
   };

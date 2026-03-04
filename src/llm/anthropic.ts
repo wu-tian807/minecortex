@@ -3,7 +3,6 @@
 import { registerProvider, type ProviderFactoryOpts } from "./provider.js";
 import type { ToolDefinition, ContentPart } from "../core/types.js";
 import type { LLMMessage, LLMProvider, StreamChunk } from "./types.js";
-import { withRetry } from "./retry.js";
 import { parseSSE } from "./stream.js";
 
 function toolDefsToAnthropic(tools?: ToolDefinition[]) {
@@ -136,23 +135,29 @@ function createAnthropicProvider(opts: ProviderFactoryOpts): LLMProvider {
         body.temperature = temperature;
       }
 
-      const response = await withRetry(async () => {
-        const res = await fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal,
-        });
-        if (!res.ok) {
-          const text = await res.text();
-          const err = new Error(
-            `Anthropic API error ${res.status} [POST ${url}]: ${text.slice(0, 500)}`,
-          );
-          (err as any).status = res.status;
-          throw err;
-        }
-        return res;
+      const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal,
       });
+      if (!res.ok) {
+        const text = await res.text();
+        const err = new Error(
+          `Anthropic API error ${res.status} [POST ${url}]: ${text.slice(0, 500)}`,
+        );
+        (err as any).status = res.status;
+        // 解析 Retry-After 头
+        const retryAfter = res.headers.get("retry-after");
+        if (retryAfter) {
+          const seconds = parseInt(retryAfter, 10);
+          if (!isNaN(seconds)) {
+            (err as any).retryAfterMs = seconds * 1000;
+          }
+        }
+        throw err;
+      }
+      const response = res;
 
       let currentBlock: {
         type: string;

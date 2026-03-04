@@ -3,7 +3,6 @@
 import { registerProvider, type ProviderFactoryOpts } from "./provider.js";
 import type { ToolDefinition, ContentPart, ReasoningEffort } from "../core/types.js";
 import type { LLMMessage, LLMProvider, StreamChunk } from "./types.js";
-import { withRetry } from "./retry.js";
 import { parseSSE, ThinkTagParser } from "./stream.js";
 
 export function toolDefsToOpenAI(tools?: ToolDefinition[]) {
@@ -109,26 +108,32 @@ export async function* openAICompatStream(
   if (streamOpts.reasoningEffort)
     body.reasoning_effort = streamOpts.reasoningEffort;
 
-  const response = await withRetry(async () => {
-    const res = await fetch(`${streamOpts.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${streamOpts.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal,
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      const err = new Error(
-        `OpenAI-compat API error ${res.status}: ${text.slice(0, 500)}`,
-      );
-      (err as any).status = res.status;
-      throw err;
-    }
-    return res;
+  const res = await fetch(`${streamOpts.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${streamOpts.apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal,
   });
+  if (!res.ok) {
+    const text = await res.text();
+    const err = new Error(
+      `OpenAI-compat API error ${res.status}: ${text.slice(0, 500)}`,
+    );
+    (err as any).status = res.status;
+    // 解析 Retry-After 头
+    const retryAfter = res.headers.get("retry-after");
+    if (retryAfter) {
+      const seconds = parseInt(retryAfter, 10);
+      if (!isNaN(seconds)) {
+        (err as any).retryAfterMs = seconds * 1000;
+      }
+    }
+    throw err;
+  }
+  const response = res;
 
   const thinkParser = streamOpts.useThinkTags ? new ThinkTagParser() : null;
   const pendingToolCalls = new Map<

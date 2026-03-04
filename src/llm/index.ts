@@ -13,6 +13,19 @@ export {
   parseModelSpec,
   getModelSpec,
   resolveModelParams,
+  buildRetryOptions,
+  type FallbackProviderOptions,
 } from "./provider.js";
 export { assembleResponse, ThinkTagParser } from "./stream.js";
-export { withRetry } from "./retry.js";
+export { withRetry, type RetryOptions, type RetryInfo } from "./retry.js";
+export {
+  classifyLLMError,
+  formatLLMError,
+  isRetryable,
+  getRecommendedDelay,
+  TerminalLLMError,
+  RetryableLLMError,
+  NetworkError,
+  RETRYABLE_STATUSES,
+  RETRYABLE_NETWORK_CODES,
+} from "./errors.js";

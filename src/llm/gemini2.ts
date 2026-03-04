@@ -3,7 +3,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { registerProvider, type ProviderFactoryOpts } from "./provider.js";
 import type { LLMMessage, LLMProvider } from "./types.js";
-import { withRetry } from "./retry.js";
 import {
   toolDefsToGemini,
   contentPartsToGemini,
@@ -87,9 +86,7 @@ function createGemini2Provider(opts: ProviderFactoryOpts): LLMProvider {
         config.thinkingConfig = { includeThoughts: showThinking, thinkingBudget: budget };
       }
 
-      const response = await withRetry(() =>
-        client.models.generateContentStream({ model, contents, config }),
-      );
+      const response = await client.models.generateContentStream({ model, contents, config });
 
       yield* streamGeminiResponse(response, signal);
     },
