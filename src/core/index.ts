@@ -1,8 +1,10 @@
 export * from './types.js';
 export { EventQueue } from './event-queue.js';
 export { EventBus } from './event-bus.js';
+export { BaseBrain } from './base-brain.js';
 export { ConsciousBrain, runAgentLoop } from './brain.js';
-export { Scheduler } from './scheduler.js';
+export { ScriptBrain } from './script-brain.js';
+export { Scheduler, getScheduler } from './scheduler.js';
 export { PathManager } from '../fs/path-manager.js';
 export { BrainBoard } from './brain-board.js';
 export { estimateTokens } from './token-stats.js';

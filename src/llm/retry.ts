@@ -1,10 +1,6 @@
 /** LLM 调用重试包装器 — 指数退避 + jitter + 错误分类 */
 
-import {
-  classifyLLMError,
-  getRecommendedDelay,
-  RETRYABLE_STATUSES,
-} from "./errors.js";
+import { classifyLLMError, getRecommendedDelay } from "./errors.js";
 
 export interface RetryInfo {
   attempt: number;
@@ -23,8 +19,6 @@ export interface RetryOptions {
   maxDelayMs?: number;
   /** 是否启用 jitter（±25%），默认 true */
   jitter?: boolean;
-  /** 可重试的 HTTP 状态码 */
-  retryableStatuses?: number[];
   /** 取消信号 */
   signal?: AbortSignal;
   /** 重试回调 */
@@ -87,9 +81,8 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * 重试包装器
  *
  * 使用 classifyLLMError 判断错误类型：
- * - terminal: 直接抛出
- * - retryable: 重试
- * - unknown: 默认重试（保守策略）
+ * - terminal: 直接抛出（用户取消、4xx 客户端错误）
+ * - retryable: 重试（其他所有错误，包括网络、5xx、未知）
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -150,5 +143,3 @@ export async function withRetry<T>(
   }
 }
 
-// 重新导出以保持向后兼容
-export { RETRYABLE_STATUSES };

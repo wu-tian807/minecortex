@@ -1,49 +1,38 @@
+/** @desc ScriptBrain — runs user-defined TypeScript scripts */
+
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
-import type { BrainInterface, ScriptContext, Event, BrainBoardAPI } from "./types.js";
-import type { EventQueue } from "./event-queue.js";
+import type { ScriptContext, Event, BrainInitConfig } from "./types.js";
+import { BaseBrain } from "./base-brain.js";
 
 interface ScriptModule {
   start?: (ctx: ScriptContext) => void | Promise<void>;
   update: (events: Event[], ctx: ScriptContext) => void | Promise<void>;
 }
 
-export interface ScriptBrainOpts {
-  id: string;
-  eventQueue: EventQueue;
-  coalesceMs: number;
-  emit: (event: Event) => void;
-  brainBoard: BrainBoardAPI;
-  brainDir: string;
-}
-
-export class ScriptBrain implements BrainInterface {
-  readonly id: string;
-  private queue: EventQueue;
-  private coalesceMs: number;
+export class ScriptBrain extends BaseBrain {
   private ctx: ScriptContext;
-  private brainDir: string;
 
-  constructor(opts: ScriptBrainOpts) {
-    this.id = opts.id;
-    this.queue = opts.eventQueue;
-    this.coalesceMs = opts.coalesceMs;
-    this.brainDir = opts.brainDir;
+  constructor(config: BrainInitConfig) {
+    super(config);
     this.ctx = {
-      brainId: opts.id,
-      emit: opts.emit,
-      brainBoard: opts.brainBoard,
+      brainId: this.id,
+      emit: this.emitFn,
+      brainBoard: this.brainBoard,
     };
   }
 
-  async run(signal: AbortSignal): Promise<void> {
+  async run(_signal: AbortSignal): Promise<void> {
     const modulePath = pathToFileURL(join(this.brainDir, "src", "index.ts")).href;
     const mod = (await import(modulePath)) as ScriptModule;
 
+    // Start sources
+    this.startSources();
+
     if (mod.start) await mod.start(this.ctx);
 
-    while (!signal.aborted) {
-      await this.queue.waitForEvent(signal);
+    while (!this.signal.aborted) {
+      await this.queue.waitForEvent(this.signal);
 
       if (this.coalesceMs > 0) {
         await new Promise((r) => setTimeout(r, this.coalesceMs));

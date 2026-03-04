@@ -1,4 +1,10 @@
-/** LLM 错误分类与友好化消息 */
+/** LLM 错误分类与友好化消息
+ *
+ * 设计原则：默认重试 + 黑名单
+ * - 只有明确的客户端错误（4xx 除 429）和用户取消才不重试
+ * - 其他所有错误（网络、服务端、未知）都重试，直到耗尽次数
+ * - 用户可通过 maxRetries: 0 关闭重试
+ */
 
 // ── 错误类型定义 ─────────────────────────────────────────
 
@@ -37,35 +43,16 @@ export class NetworkError extends RetryableLLMError {
 
 // ── 常量定义 ─────────────────────────────────────────────
 
-/** 可重试的 HTTP 状态码 */
-export const RETRYABLE_STATUSES = [429, 500, 502, 503, 529];
-
-/** 终端 HTTP 状态码（客户端错误，不重试） */
-export const TERMINAL_STATUSES = [400, 401, 403, 404, 405, 422];
-
-/** 可重试的网络错误码 */
-export const RETRYABLE_NETWORK_CODES = [
-  "ECONNRESET",
-  "ETIMEDOUT",
-  "ECONNREFUSED",
-  "EPIPE",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "EPROTO",
-  "ERR_SSL_WRONG_VERSION_NUMBER",
-  "ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC",
-];
-
-/** 可重试的错误消息模式 */
-const RETRYABLE_MESSAGE_PATTERN =
-  /fetch failed|network|socket hang up|overloaded|ECONNRESET|ETIMEDOUT|ECONNREFUSED/i;
+/** 终端 HTTP 状态码（客户端错误，不重试）
+ *  注意：429 不在此列，429 是可重试的限流错误
+ */
+const TERMINAL_STATUSES = new Set([400, 401, 403, 404, 405, 422]);
 
 // ── 错误分类 ─────────────────────────────────────────────
 
 export type ClassifiedError =
   | { kind: "terminal"; error: TerminalLLMError }
-  | { kind: "retryable"; error: RetryableLLMError }
-  | { kind: "unknown"; error: Error };
+  | { kind: "retryable"; error: RetryableLLMError };
 
 /** 从错误对象提取 HTTP 状态码 */
 function getStatus(err: unknown): number | undefined {
@@ -107,10 +94,19 @@ function getRetryDelay(err: unknown): number | undefined {
 }
 
 /**
+ * 判断是否为用户主动取消
+ */
+function isAbortError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return err.name === "AbortError" || err.name === "TimeoutError";
+}
+
+/**
  * 分类 LLM 调用错误
- * - terminal: 不应重试（认证失败、参数错误等）
- * - retryable: 应该重试（速率限制、服务过载、网络错误等）
- * - unknown: 无法分类，默认不重试
+ *
+ * 设计：默认重试 + 黑名单
+ * - terminal: 明确不应重试（用户取消、4xx 客户端错误）
+ * - retryable: 其他所有错误（网络、服务端、未知）
  */
 export function classifyLLMError(err: unknown): ClassifiedError {
   const message = getMessage(err);
@@ -119,16 +115,32 @@ export function classifyLLMError(err: unknown): ClassifiedError {
   const retryDelay = getRetryDelay(err);
   const originalError = err instanceof Error ? err : new Error(message);
 
-  // 1. AbortError 永不重试
-  if (err instanceof Error && err.name === "AbortError") {
+  // ─── 黑名单：明确不重试 ───────────────────────────────
+
+  // 1. 用户主动取消
+  if (isAbortError(err)) {
     return {
       kind: "terminal",
       error: new TerminalLLMError("请求已取消", "ABORT", originalError),
     };
   }
 
-  // 2. 检查网络错误码
-  if (code && RETRYABLE_NETWORK_CODES.includes(code)) {
+  // 2. 4xx 客户端错误（除 429 限流）
+  if (status !== undefined && TERMINAL_STATUSES.has(status)) {
+    return {
+      kind: "terminal",
+      error: new TerminalLLMError(
+        formatStatusError(status, message),
+        `HTTP_${status}`,
+        originalError,
+      ),
+    };
+  }
+
+  // ─── 其他所有错误：默认重试 ─────────────────────────────
+
+  // 有网络错误码
+  if (code) {
     return {
       kind: "retryable",
       error: new NetworkError(
@@ -139,47 +151,28 @@ export function classifyLLMError(err: unknown): ClassifiedError {
     };
   }
 
-  // 3. 检查 HTTP 状态码
+  // 有 HTTP 状态码（429、5xx 等）
   if (status !== undefined) {
-    if (TERMINAL_STATUSES.includes(status)) {
-      return {
-        kind: "terminal",
-        error: new TerminalLLMError(
-          formatStatusError(status, message),
-          `HTTP_${status}`,
-          originalError,
-        ),
-      };
-    }
-    if (RETRYABLE_STATUSES.includes(status)) {
-      return {
-        kind: "retryable",
-        error: new RetryableLLMError(
-          formatStatusError(status, message),
-          `HTTP_${status}`,
-          retryDelay,
-          originalError,
-        ),
-      };
-    }
-  }
-
-  // 4. 检查错误消息模式
-  if (RETRYABLE_MESSAGE_PATTERN.test(message)) {
     return {
       kind: "retryable",
-      error: new NetworkError(
-        formatNetworkError(code ?? "NETWORK", message),
-        code ?? "NETWORK",
+      error: new RetryableLLMError(
+        formatStatusError(status, message),
+        `HTTP_${status}`,
+        retryDelay,
         originalError,
       ),
     };
   }
 
-  // 5. 无法分类
+  // 未知错误也默认重试
   return {
-    kind: "unknown",
-    error: originalError,
+    kind: "retryable",
+    error: new RetryableLLMError(
+      formatUnknownError(message),
+      "UNKNOWN",
+      retryDelay,
+      originalError,
+    ),
   };
 }
 
@@ -189,26 +182,26 @@ export function classifyLLMError(err: unknown): ClassifiedError {
 function formatNetworkError(code: string, original: string): string {
   switch (code) {
     case "ECONNREFUSED":
-      return `无法连接到 API 服务器。请检查网络或 API 地址配置。`;
+      return `无法连接到 API 服务器，正在重试...`;
     case "ECONNRESET":
-      return `与 API 服务器的连接被重置。正在重试...`;
+      return `与 API 服务器的连接被重置，正在重试...`;
     case "ETIMEDOUT":
-      return `连接 API 服务器超时。正在重试...`;
+      return `连接 API 服务器超时，正在重试...`;
     case "ENOTFOUND":
-      return `无法解析 API 服务器地址。请检查网络连接。`;
+      return `无法解析 API 服务器地址，正在重试...`;
     case "EAI_AGAIN":
-      return `DNS 解析临时失败。正在重试...`;
+      return `DNS 解析临时失败，正在重试...`;
     case "EPIPE":
-      return `与 API 服务器的连接意外断开。正在重试...`;
+      return `与 API 服务器的连接意外断开，正在重试...`;
     case "EPROTO":
     case "ERR_SSL_WRONG_VERSION_NUMBER":
     case "ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC":
-      return `SSL/TLS 连接错误。正在重试...`;
+      return `SSL/TLS 连接错误，正在重试...`;
     default:
       if (/fetch failed/i.test(original)) {
-        return `网络连接失败。请检查网络连接后重试。`;
+        return `网络连接失败，正在重试...`;
       }
-      return original;
+      return `网络错误 (${code})，正在重试...`;
   }
 }
 
@@ -224,7 +217,7 @@ function formatStatusError(status: number, original: string): string {
     case 404:
       return `API 端点不存在。请检查模型名称或 API 地址配置。`;
     case 429:
-      return `API 请求频率超限，稍后重试...`;
+      return `API 请求频率超限，正在重试...`;
     case 500:
       return `API 服务器内部错误，正在重试...`;
     case 502:
@@ -234,13 +227,30 @@ function formatStatusError(status: number, original: string): string {
     case 529:
       return `API 服务暂时过载 (Anthropic overloaded)，正在重试...`;
     default:
+      if (status >= 500) {
+        return `API 服务器错误 (HTTP ${status})，正在重试...`;
+      }
       return `API 错误 (HTTP ${status}): ${original}`;
   }
 }
 
+/** 格式化未知错误消息 */
+function formatUnknownError(original: string): string {
+  // 简化常见的模糊错误消息
+  if (/fetch failed/i.test(original)) {
+    return `网络连接失败，正在重试...`;
+  }
+  if (/terminated|stream.*closed|connection.*closed/i.test(original)) {
+    return `连接意外中断，正在重试...`;
+  }
+  if (/overloaded/i.test(original)) {
+    return `API 服务过载，正在重试...`;
+  }
+  return `请求失败 (${original})，正在重试...`;
+}
+
 /**
  * 格式化 LLM 错误为友好消息
- * 直接使用 classifyLLMError 的结果
  */
 export function formatLLMError(err: unknown): string {
   const classified = classifyLLMError(err);
@@ -249,6 +259,7 @@ export function formatLLMError(err: unknown): string {
 
 /**
  * 判断错误是否可重试
+ * 设计：除了明确的 terminal 错误，其他都可重试
  */
 export function isRetryable(err: unknown): boolean {
   const classified = classifyLLMError(err);

@@ -224,6 +224,22 @@ export interface ExecResult {
 export interface BrainInterface {
   id: string;
   run(signal: AbortSignal): Promise<void>;
+  stop?(): void;
+  shutdown?(): Promise<void>;
+  free?(): Promise<void>;
+}
+
+// ─── Brain Init Config (passed to BaseBrain constructor) ───
+
+export interface BrainInitConfig {
+  id: string;
+  brainDir: string;
+  brainJson: BrainJson;
+  brainBoard: BrainBoardAPI;
+  pathManager: PathManagerAPI;
+  terminalManager: TerminalManagerAPI;
+  logger: import("./logger.js").Logger;
+  eventBus: import("./event-bus.js").EventBus;
 }
 
 export interface ScriptContext {

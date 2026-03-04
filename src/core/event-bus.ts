@@ -7,7 +7,8 @@ type EventHandler = (event: Event) => void;
 export class EventBus {
   private handlers = new Map<string, Set<EventHandler>>();
   private globalHandlers = new Set<EventHandler>();
-  private brainQueues = new Map<string, EventQueueInterface>();
+  /** Maps brainId → EventQueue for cross-brain routing */
+  private brainQueueMap = new Map<string, EventQueueInterface>();
 
   on(source: string, handler: EventHandler): void {
     if (!this.handlers.has(source)) {
@@ -25,11 +26,11 @@ export class EventBus {
   }
 
   register(brainId: string, queue: EventQueueInterface): void {
-    this.brainQueues.set(brainId, queue);
+    this.brainQueueMap.set(brainId, queue);
   }
 
   unregister(brainId: string): void {
-    this.brainQueues.delete(brainId);
+    this.brainQueueMap.delete(brainId);
   }
 
   emit(event: Event, sourceBrainId?: string): void {
@@ -47,20 +48,19 @@ export class EventBus {
 
   /** Unblock a brain's event loop so it re-checks commandQueue. Filtered out before LLM turn. */
   nudge(brainId: string): void {
-    const queue = this.brainQueues.get(brainId);
+    const queue = this.brainQueueMap.get(brainId);
     if (queue) {
       queue.push({ source: "_system", type: "_nudge", payload: {}, ts: Date.now() });
     }
   }
 
-
   private route(event: Event, to: string, fromBrainId?: string): void {
     if (to === "*") {
-      for (const [id, queue] of this.brainQueues) {
+      for (const [id, queue] of this.brainQueueMap) {
         if (id !== fromBrainId) queue.push(event);
       }
     } else {
-      const queue = this.brainQueues.get(to);
+      const queue = this.brainQueueMap.get(to);
       if (queue) queue.push(event);
     }
   }

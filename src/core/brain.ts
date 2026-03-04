@@ -1,32 +1,24 @@
 /** @desc ConsciousBrain — streaming agent loop with steer interrupt & 3-level lifecycle */
 
 import type {
-  BrainInterface,
+  BrainInitConfig,
   BrainJson,
   Event,
   ToolDefinition,
   ToolContext,
-  BrainBoardAPI,
   DynamicSlotAPI,
-  PathManagerAPI,
-  TerminalManagerAPI,
   ModelSpec,
 } from "./types.js";
 import type { LLMProvider, LLMMessage, LLMToolCall, LLMResponse } from "../llm/types.js";
-import type { EventQueue } from "./event-queue.js";
 import type { ContextEngine } from "../context/context-engine.js";
 import type { SlotRegistry } from "../context/slot-registry.js";
 import type { SessionManager } from "../session/session-manager.js";
-import type { Logger } from "./logger.js";
-import type { EventBus } from "./event-bus.js";
-import type { EventSource } from "./types.js";
 import { assembleResponse } from "../llm/stream.js";
-import { getModelSpec } from "../llm/provider.js";
 import { microCompact } from "../session/compaction.js";
 import { renderEventDisplay } from "../context/event-router.js";
 import { HookEvent } from "../hooks/types.js";
-import type { BrainHooks } from "../hooks/brain-hooks.js";
 import { executeTool } from "./tool-executor.js";
+import { BaseBrain } from "./base-brain.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -44,18 +36,18 @@ export interface AgentLoopOpts {
   modelSpec: ModelSpec;
   maxIterations: number;
   signal: AbortSignal;
-  brainBoard: BrainBoardAPI;
+  brainBoard: import("./types.js").BrainBoardAPI;
   slotRegistry: DynamicSlotAPI;
-  pathManager: PathManagerAPI;
-  terminalManager: TerminalManagerAPI;
+  pathManager: import("./types.js").PathManagerAPI;
+  terminalManager: import("./types.js").TerminalManagerAPI;
   workspace: string;
   emit: (event: Event) => void;
-  logger?: Logger;
+  logger?: import("./logger.js").Logger;
   /** Persistent session — when provided, history is read from file each iteration (no in-memory cache). */
   sessionManager?: SessionManager;
   turn?: number;
   onAssistantMessage?: (msg: LLMMessage) => void;
-  hooks?: BrainHooks;
+  hooks?: import("../hooks/brain-hooks.js").BrainHooks;
   keepToolResults?: number;
   showThinking?: boolean;
   trackBackgroundTask?: (p: Promise<unknown>) => void;
@@ -213,76 +205,43 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
   return lastResponse;
 }
 
-// ─── ConsciousBrain ───
+// ─── ConsciousBrain-specific init config ───
 
-export interface ConsciousBrainOpts {
-  id: string;
+export interface ConsciousBrainInitConfig extends BrainInitConfig {
   model: string;
   provider: LLMProvider;
   tools: ToolDefinition[];
-  brainConfig: BrainJson;
-  eventQueue: EventQueue;
-  coalesceMs: number;
-  emit: (event: Event) => void;
-  brainBoard: BrainBoardAPI;
   slotRegistry: SlotRegistry;
   contextEngine: ContextEngine;
-  pathManager: PathManagerAPI;
-  terminalManager: TerminalManagerAPI;
-  logger: Logger;
   sessionManager: SessionManager;
   modelSpec: ModelSpec;
-  eventBus: EventBus;
-  sources: EventSource[];
   workspace: string;
-  hooks: BrainHooks;
 }
 
-export class ConsciousBrain implements BrainInterface {
-  readonly id: string;
+// ─── ConsciousBrain ───
+
+export class ConsciousBrain extends BaseBrain {
   private provider: LLMProvider;
   private tools: ToolDefinition[];
-  private brainConfig: BrainJson;
-  private eventQueue: EventQueue;
-  private coalesceMs: number;
-  private emitFn: (event: Event) => void;
-  private brainBoard: BrainBoardAPI;
   private slotRegistry: SlotRegistry;
   private contextEngine: ContextEngine;
-  private pathManager: PathManagerAPI;
-  private terminalManager: TerminalManagerAPI;
-  private logger: Logger;
   private sessionManager: SessionManager;
   private modelSpec: ModelSpec;
-  private eventBus: EventBus;
-  private sources: EventSource[];
   private workspace: string;
-  private hooks: BrainHooks;
   private currentTurn = 0;
   private turnAbort: AbortController | null = null;
   private pendingTasks = new Set<Promise<unknown>>();
   private commandQueue: Array<{ toolName: string; args: Record<string, string>; reason?: string }> = [];
 
-  constructor(opts: ConsciousBrainOpts) {
-    this.id = opts.id;
-    this.provider = opts.provider;
-    this.tools = opts.tools;
-    this.brainConfig = opts.brainConfig;
-    this.eventQueue = opts.eventQueue;
-    this.coalesceMs = opts.coalesceMs;
-    this.emitFn = opts.emit;
-    this.brainBoard = opts.brainBoard;
-    this.slotRegistry = opts.slotRegistry;
-    this.contextEngine = opts.contextEngine;
-    this.pathManager = opts.pathManager;
-    this.terminalManager = opts.terminalManager;
-    this.logger = opts.logger;
-    this.sessionManager = opts.sessionManager;
-    this.modelSpec = opts.modelSpec;
-    this.eventBus = opts.eventBus;
-    this.sources = opts.sources;
-    this.workspace = opts.workspace;
-    this.hooks = opts.hooks;
+  constructor(config: ConsciousBrainInitConfig) {
+    super(config);
+    this.provider = config.provider;
+    this.tools = config.tools;
+    this.slotRegistry = config.slotRegistry;
+    this.contextEngine = config.contextEngine;
+    this.sessionManager = config.sessionManager;
+    this.modelSpec = config.modelSpec;
+    this.workspace = config.workspace;
   }
 
   updateTools(tools: ToolDefinition[]): void {
@@ -290,14 +249,17 @@ export class ConsciousBrain implements BrainInterface {
     this.logger.info(this.id, 0, `tools reloaded: ${tools.length} total`);
   }
 
-  async run(signal: AbortSignal): Promise<void> {
-    while (!signal.aborted) {
+  async run(_signal: AbortSignal): Promise<void> {
+    // Start event sources
+    this.startSources();
+
+    while (!this.signal.aborted) {
       // Process any queued commands first (from stdin /xxx or auto_compact)
-      while (this.commandQueue.length > 0 && !signal.aborted) {
+      while (this.commandQueue.length > 0 && !this.signal.aborted) {
         const cmd = this.commandQueue.shift()!;
         this.currentTurn++;
         this.turnAbort = new AbortController();
-        const combinedSignal = combineSignals(signal, this.turnAbort.signal);
+        const combinedSignal = combineSignals(this.signal, this.turnAbort.signal);
         try {
           await this.executeCommand(cmd.toolName, cmd.args, cmd.reason, combinedSignal);
         } catch (err: any) {
@@ -311,25 +273,25 @@ export class ConsciousBrain implements BrainInterface {
 
       let trigger: Event;
       try {
-        trigger = await this.eventQueue.waitForEvent(signal);
+        trigger = await this.queue.waitForEvent(this.signal);
       } catch {
         break;
       }
 
-      if (this.eventQueue.hasSteerEvent()) {
+      if (this.queue.hasSteerEvent()) {
         // Skip coalesce for steer events — process immediately
       } else if ((trigger.priority ?? 1) > 0 && this.coalesceMs > 0) {
         await sleep(this.coalesceMs);
       }
 
-      const events = this.eventQueue.drain().filter(e => e.source !== "_system");
+      const events = this.queue.drain().filter(e => e.source !== "_system");
       if (events.length === 0) continue;
 
       this.currentTurn++;
       this.turnAbort = new AbortController();
-      const combinedSignal = combineSignals(signal, this.turnAbort.signal);
+      const combinedSignal = combineSignals(this.signal, this.turnAbort.signal);
 
-      const steerWatcher = this.eventQueue.onSteer(() => {
+      const steerWatcher = this.queue.onSteer(() => {
         this.turnAbort?.abort();
       });
 
@@ -372,7 +334,7 @@ export class ConsciousBrain implements BrainInterface {
         tools: this.tools,
         contextEngine: this.contextEngine,
         modelSpec: this.modelSpec,
-        maxIterations: this.brainConfig.maxIterations ?? 200,
+        maxIterations: this.brainJson.maxIterations ?? 200,
         signal,
         brainBoard: this.brainBoard,
         slotRegistry: this.slotRegistry,
@@ -384,8 +346,8 @@ export class ConsciousBrain implements BrainInterface {
         sessionManager: this.sessionManager,
         turn: this.currentTurn,
         hooks: this.hooks,
-        keepToolResults: this.brainConfig.session?.keepToolResults ?? 8,
-        showThinking: this.brainConfig.models?.showThinking ?? false,
+        keepToolResults: this.brainJson.session?.keepToolResults ?? 8,
+        showThinking: this.brainJson.models?.showThinking ?? false,
         trackBackgroundTask: (p) => {
           this.pendingTasks.add(p);
           p.finally(() => this.pendingTasks.delete(p));
@@ -471,17 +433,17 @@ export class ConsciousBrain implements BrainInterface {
   updateConfig(opts: { provider: LLMProvider; modelSpec: ModelSpec; brainConfig: BrainJson }) {
     this.provider = opts.provider;
     this.modelSpec = opts.modelSpec;
-    this.brainConfig = opts.brainConfig;
+    this.brainJson = opts.brainConfig;
   }
 
   // ─── Lifecycle: 3 levels ───
 
-  stop(): void {
+  override stop(): void {
     this.turnAbort?.abort();
     this.logger.info(this.id, this.currentTurn, "stop() called — aborting current LLM call");
   }
 
-  async shutdown(): Promise<void> {
+  override async shutdown(): Promise<void> {
     this.stop();
 
     if (this.pendingTasks.size > 0) {
@@ -499,24 +461,6 @@ export class ConsciousBrain implements BrainInterface {
     this.eventBus.unregister(this.id);
 
     this.logger.info(this.id, this.currentTurn, "shutdown() complete");
-  }
-
-  async free(): Promise<void> {
-    await this.shutdown();
-
-    this.brainBoard.removeByPrefix(`${this.id}:`);
-    this.brainBoard.removeAll(this.id);
-    this.hooks.clear();
-
-    this.emitFn({
-      source: `brain:${this.id}`,
-      type: "brain_freed",
-      payload: { brainId: this.id },
-      ts: Date.now(),
-      silent: true,
-    });
-
-    this.logger.info(this.id, this.currentTurn, "free() complete — brainBoard cleared");
   }
 }
 

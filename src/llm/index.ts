@@ -26,6 +26,4 @@ export {
   TerminalLLMError,
   RetryableLLMError,
   NetworkError,
-  RETRYABLE_STATUSES,
-  RETRYABLE_NETWORK_CODES,
 } from "./errors.js";

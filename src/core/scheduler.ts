@@ -4,18 +4,16 @@ import { readFile, readdir, stat, mkdir, writeFile, access, rm } from "node:fs/p
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type {
-  BrainInterface,
   BrainJson,
   MineclawConfig,
   ModelsConfig,
-  Event,
-  EventSource,
+  BrainInitConfig,
 } from "./types.js";
 import { EventBus } from "./event-bus.js";
-import { EventQueue } from "./event-queue.js";
 import { BrainBoard } from "./brain-board.js";
-import { ConsciousBrain } from "./brain.js";
+import { ConsciousBrain, type ConsciousBrainInitConfig } from "./brain.js";
 import { ScriptBrain } from "./script-brain.js";
+import { BaseBrain } from "./base-brain.js";
 import { ToolLoader } from "../loaders/tool-loader.js";
 import { SubscriptionLoader } from "../loaders/subscription-loader.js";
 import { SlotLoader } from "../loaders/slot-loader.js";
@@ -26,8 +24,7 @@ import { createFSWatcher, getFSWatcher, type FSWatcher } from "../fs/watcher.js"
 import { TerminalManager } from "../terminal/manager.js";
 import { SessionManager } from "../session/session-manager.js";
 import { Logger } from "./logger.js";
-import { createProvider, createFallbackProvider, getModelSpec } from "../llm/provider.js";
-import { BrainHooks } from "../hooks/brain-hooks.js";
+import { createFallbackProvider, getModelSpec } from "../llm/provider.js";
 import { DEFAULT_BRAIN_JSON } from "../defaults/templates.js";
 
 const ROOT = process.cwd();
@@ -63,14 +60,6 @@ function resolveModelsConfig(
   };
 }
 
-interface ManagedBrain {
-  brain: BrainInterface & { stop?(): void; shutdown?(): Promise<void>; free?(): Promise<void> };
-  queue: EventQueue;
-  abortController: AbortController;
-  sources: EventSource[];
-  hooks: BrainHooks;
-}
-
 export class Scheduler {
   private eventBus = new EventBus();
   private brainBoard = new BrainBoard(join(ROOT, "brains"));
@@ -78,7 +67,7 @@ export class Scheduler {
   private terminalManager = new TerminalManager(this.pathManager);
   private logger = new Logger(ROOT, this.pathManager);
   private get fsWatcher(): FSWatcher | null { return getFSWatcher(); }
-  private brains = new Map<string, ManagedBrain>();
+  private brains = new Map<string, BaseBrain>();
   private shuttingDown = false;
   private lastCtrlC = 0;
 
@@ -102,11 +91,9 @@ export class Scheduler {
     return this.brainBoard;
   }
 
-  /** Access a managed brain's queue and hooks by id. */
-  getManagedBrain(id: string): { queue: EventQueue; hooks: BrainHooks } | null {
-    const entry = this.brains.get(id);
-    if (!entry) return null;
-    return { queue: entry.queue, hooks: entry.hooks };
+  /** Access a brain by id. */
+  getBrain(id: string): BaseBrain | null {
+    return this.brains.get(id) ?? null;
   }
 
   async start(): Promise<void> {
@@ -133,65 +120,71 @@ export class Scheduler {
       await this.initBrain(brainId, globalConfig);
     }
 
-    if (this.fsWatcher) {
-      this.fsWatcher.register(/brains\/([^/]+)\/brain\.json$/, async (evt) => {
-        const match = evt.path.match(/brains\/([^/]+)\/brain\.json$/);
-        if (!match) return;
-        const brainId = match[1];
-        this.logger.info("scheduler", 0, `brain.json changed for '${brainId}', reloading config...`);
-        const slot = this.brains.get(brainId);
-        if (!slot) return;
+    this.registerHotReloadHandlers();
 
-        await this.terminalManager.loadBrainEnv(brainId);
-
-        if (slot.brain instanceof ConsciousBrain) {
-          const brainConfig = await this.loadBrainConfig(brainId);
-          const globalCfg = await this.loadGlobalConfig();
-          const modelsConfig = resolveModelsConfig(brainConfig, globalCfg);
-          const modelRaw = modelsConfig.model;
-          if (modelRaw) {
-            const modelName = Array.isArray(modelRaw) ? modelRaw[0] : modelRaw;
-            const models = Array.isArray(modelRaw) ? modelRaw : [modelRaw];
-            const provider = createFallbackProvider(models, modelsConfig, {
-              onRetry: (model, info) => {
-                this.logger.warn(brainId, 0, `[${model}] 重试 ${info.attempt}/${info.maxRetries}: ${info.error.message}`);
-              },
-              onFallback: (from, to, err) => {
-                this.logger.warn(brainId, 0, `Fallback ${from} → ${to}: ${err.message}`);
-              },
-            });
-            const modelSpec = getModelSpec(modelName);
-            slot.brain.updateConfig({ provider, modelSpec, brainConfig });
-            this.logger.info("scheduler", 0, `脑区 '${brainId}' 热重载完成 (model: ${modelName})`);
-          }
-        }
-      });
-
-      this.fsWatcher.register(/directives\/[^/]+\.md$/, () => {
-        this.logger.info("scheduler", 0, "Directive file changed (hot-reload via slot re-read on next prompt)");
-      });
-
-      this.fsWatcher.register(/^brains\/([^/]+)\/?$/, async (evt) => {
-        const match = evt.path.match(/^brains\/([^/]+)\/?$/);
-        if (!match) return;
-        const brainId = match[1];
-        if (!this.brains.has(brainId)) return;
-        const brainDir = join(ROOT, "brains", brainId);
-        if (!existsSync(brainDir)) {
-          this.logger.info("scheduler", 0, `brain dir deleted, auto-freeing '${brainId}'`);
-          await this.controlBrain("free", brainId);
-        }
-      });
-    }
-
-    for (const [id, slot] of this.brains) {
-      slot.brain.run(slot.abortController.signal)
-        .catch(err => this.logger.error("scheduler", 0, `brain '${id}' loop crashed`, err));
+    for (const id of this.brains.keys()) {
+      this.runBrain(id);
     }
 
     this.setupSignalHandlers();
 
     this.logger.info("scheduler", 0, "就绪，所有 brain loop 已启动");
+  }
+
+  private registerHotReloadHandlers(): void {
+    if (!this.fsWatcher) return;
+
+    // brain.json changes
+    this.fsWatcher.register(/brains\/([^/]+)\/brain\.json$/, async (evt) => {
+      const match = evt.path.match(/brains\/([^/]+)\/brain\.json$/);
+      if (!match) return;
+      const brainId = match[1];
+      this.logger.info("scheduler", 0, `brain.json changed for '${brainId}', reloading config...`);
+      const brain = this.brains.get(brainId);
+      if (!brain) return;
+
+      await this.terminalManager.loadBrainEnv(brainId);
+
+      if (brain instanceof ConsciousBrain) {
+        const brainConfig = await this.loadBrainConfig(brainId);
+        const globalCfg = await this.loadGlobalConfig();
+        const modelsConfig = resolveModelsConfig(brainConfig, globalCfg);
+        const modelRaw = modelsConfig.model;
+        if (modelRaw) {
+          const modelName = Array.isArray(modelRaw) ? modelRaw[0] : modelRaw;
+          const models = Array.isArray(modelRaw) ? modelRaw : [modelRaw];
+          const provider = createFallbackProvider(models, modelsConfig, {
+            onRetry: (model, info) => {
+              this.logger.warn(brainId, 0, `[${model}] 重试 ${info.attempt}/${info.maxRetries}: ${info.error.message}`);
+            },
+            onFallback: (from, to, err) => {
+              this.logger.warn(brainId, 0, `Fallback ${from} → ${to}: ${err.message}`);
+            },
+          });
+          const modelSpec = getModelSpec(modelName);
+          brain.updateConfig({ provider, modelSpec, brainConfig });
+          this.logger.info("scheduler", 0, `脑区 '${brainId}' 热重载完成 (model: ${modelName})`);
+        }
+      }
+    });
+
+    // Directive file changes
+    this.fsWatcher.register(/directives\/[^/]+\.md$/, () => {
+      this.logger.info("scheduler", 0, "Directive file changed (hot-reload via slot re-read on next prompt)");
+    });
+
+    // Brain directory deletion
+    this.fsWatcher.register(/^brains\/([^/]+)\/?$/, async (evt) => {
+      const match = evt.path.match(/^brains\/([^/]+)\/?$/);
+      if (!match) return;
+      const brainId = match[1];
+      if (!this.brains.has(brainId)) return;
+      const brainDir = join(ROOT, "brains", brainId);
+      if (!existsSync(brainDir)) {
+        this.logger.info("scheduler", 0, `brain dir deleted, auto-removing '${brainId}'`);
+        await this.removeBrain(brainId);
+      }
+    });
   }
 
   private async discoverBrains(): Promise<string[]> {
@@ -213,74 +206,44 @@ export class Scheduler {
     return existsSync(join(ROOT, "brains", brainId, "src", "index.ts"));
   }
 
+  private createBrainInitConfig(brainId: string, brainConfig: BrainJson): BrainInitConfig {
+    return {
+      id: brainId,
+      brainDir: this.pathManager.brainDir(brainId),
+      brainJson: brainConfig,
+      brainBoard: this.brainBoard,
+      pathManager: this.pathManager,
+      terminalManager: this.terminalManager,
+      logger: this.logger,
+      eventBus: this.eventBus,
+    };
+  }
+
   private async initBrain(brainId: string, globalConfig: MineclawConfig): Promise<void> {
     const brainConfig = await this.loadBrainConfig(brainId);
-    const queue = new EventQueue();
-    const abortController = new AbortController();
     const brainDir = this.pathManager.brainDir(brainId);
+    const baseConfig = this.createBrainInitConfig(brainId, brainConfig);
 
     await this.terminalManager.loadBrainEnv(brainId);
 
-    this.eventBus.register(brainId, queue);
-
-    const emitFn = (event: Event): void => {
-      const to = (event.payload as any)?.to as string | undefined;
-      if (to && to !== brainId) {
-        this.eventBus.emit(event, brainId);
-      } else {
-        queue.push(event);
-      }
-    };
-
-    const hooks = new BrainHooks();
-
-    let brainRef: ConsciousBrain | null = null;
-
-    const subLoader = new SubscriptionLoader();
-    subLoader.setEmitter(emitFn);
-    subLoader.setBrainBoard(this.brainBoard);
-    subLoader.setHooks(hooks);
-    subLoader.setCommandHandler((toolName, args, target, reason) => {
-      const effectiveTarget = (!target || target === "/") ? brainId : target;
-      const slot = this.brains.get(effectiveTarget);
-      if (slot && "queueCommand" in slot.brain) {
-        (slot.brain as ConsciousBrain).queueCommand(toolName, args, reason);
-      } else if (effectiveTarget === brainId) {
-        brainRef?.queueCommand(toolName, args, reason);
-      } else {
-        this.logger.warn("scheduler", 0, `command target '${effectiveTarget}' not found or not a ConsciousBrain`);
-      }
-    });
-
-    const selectorSub = brainConfig.subscriptions ?? { global: "all" as const };
-    const sources = await subLoader.load({
-      brainId,
-      brainDir,
-      globalDir: ROOT,
-      selector: selectorSub,
-    });
-
+    // ScriptBrain path
     if (this.isScriptBrain(brainId)) {
-      const brain = new ScriptBrain({
-        id: brainId,
-        eventQueue: queue,
-        coalesceMs: brainConfig.coalesceMs ?? 300,
-        emit: emitFn,
-        brainBoard: this.brainBoard,
-        brainDir,
-      });
-
-      this.brains.set(brainId, { brain, queue, abortController, sources, hooks });
+      const brain = new ScriptBrain(baseConfig);
+      const sources = await this.loadSubscriptions(brainId, brainDir, brainConfig, brain);
+      brain.setSources(sources);
+      this.brains.set(brainId, brain);
       this.logger.info("scheduler", 0, `ScriptBrain '${brainId}' 就绪`);
       return;
     }
 
+    // ConsciousBrain path
     const modelsConfig = resolveModelsConfig(brainConfig, globalConfig);
     if (!modelsConfig.model) {
       this.logger.warn("scheduler", 0, `脑区 '${brainId}' 无 model，跳过`);
       return;
     }
 
+    // Load tools
     const selectorTools = brainConfig.tools ?? { global: "all" as const };
     const toolLoader = new ToolLoader();
     if (this.fsWatcher) toolLoader.registerWatchPatterns(this.fsWatcher);
@@ -291,6 +254,7 @@ export class Scheduler {
       selector: selectorTools,
     });
 
+    // Setup slot registry and context engine
     const slotRegistry = new SlotRegistry();
     const contextEngine = new ContextEngine(slotRegistry);
 
@@ -313,6 +277,7 @@ export class Scheduler {
       selector: selectorSlots,
     });
 
+    // Create provider
     const modelRaw = modelsConfig.model!;
     const models = Array.isArray(modelRaw) ? modelRaw : [modelRaw];
     const modelName = models[0];
@@ -325,6 +290,7 @@ export class Scheduler {
       },
     });
 
+    // Session manager
     const sessionManager = new SessionManager(brainId, this.pathManager);
     const existingSid = await sessionManager.currentSessionId();
     if (!existingSid) {
@@ -345,38 +311,77 @@ export class Scheduler {
       }
     }
 
-    const brain = new ConsciousBrain({
-      id: brainId,
+    // Create ConsciousBrain
+    const consciousConfig: ConsciousBrainInitConfig = {
+      ...baseConfig,
       model: modelName,
       provider,
       tools,
-      brainConfig,
-      eventQueue: queue,
-      coalesceMs: brainConfig.coalesceMs ?? 300,
-      emit: emitFn,
-      brainBoard: this.brainBoard,
       slotRegistry,
       contextEngine,
-      pathManager: this.pathManager,
-      terminalManager: this.terminalManager,
-      logger: this.logger,
       sessionManager,
       modelSpec,
-      eventBus: this.eventBus,
-      sources,
       workspace: ROOT,
-      hooks,
-    });
+    };
 
-    brainRef = brain;
-    this.brains.set(brainId, { brain, queue, abortController, sources, hooks });
+    const brain = new ConsciousBrain(consciousConfig);
 
-    toolLoader.setCallback((tools) => brain.updateTools(tools));
+    // Load subscriptions AFTER brain creation (so hooks is available)
+    const sources = await this.loadSubscriptions(brainId, brainDir, brainConfig, brain);
+    brain.setSources(sources);
+
+    this.brains.set(brainId, brain);
+
+    // Tool hot-reload callback
+    toolLoader.setCallback((updatedTools) => brain.updateTools(updatedTools));
 
     this.logger.info(
       "scheduler", 0,
       `脑区 '${brainId}' 就绪 (model: ${modelName}, tools: [${tools.map(t => t.name).join(",")}])`,
     );
+  }
+
+  // ─── Private helper: load subscriptions with brain's hooks ───
+
+  private async loadSubscriptions(
+    brainId: string,
+    brainDir: string,
+    brainConfig: BrainJson,
+    brain: BaseBrain,
+  ): Promise<import("./types.js").EventSource[]> {
+    const subLoader = new SubscriptionLoader();
+    subLoader.setEmitter((event) => brain.pushEvent(event));
+    subLoader.setBrainBoard(this.brainBoard);
+    subLoader.setHooks(brain.hooks);
+    subLoader.setCommandHandler((toolName, args, target, reason) => {
+      const effectiveTarget = (!target || target === "/") ? brainId : target;
+      const targetBrain = this.brains.get(effectiveTarget);
+      if (targetBrain instanceof ConsciousBrain) {
+        targetBrain.queueCommand(toolName, args, reason);
+      } else if (effectiveTarget === brainId && brain instanceof ConsciousBrain) {
+        brain.queueCommand(toolName, args, reason);
+      } else {
+        this.logger.warn("scheduler", 0, `command target '${effectiveTarget}' not found or not a ConsciousBrain`);
+      }
+    });
+
+    const selectorSub = brainConfig.subscriptions ?? { global: "all" as const };
+    return subLoader.load({
+      brainId,
+      brainDir,
+      globalDir: ROOT,
+      selector: selectorSub,
+    });
+  }
+
+  // ─── Private helper: remove brain from memory ───
+
+  private async removeBrain(id: string): Promise<void> {
+    const brain = this.brains.get(id);
+    if (!brain) return;
+    await brain.shutdown();
+    this.brains.delete(id);
+    this.logger.info("scheduler", 0, `brain '${id}' removed from memory`);
   }
 
   // ─── Public API ───
@@ -449,49 +454,38 @@ export class Scheduler {
 
     const globalConfig = await this.loadGlobalConfig();
     await this.initBrain(id, globalConfig);
-    const slot = this.brains.get(id);
-    if (slot) {
-      slot.brain.run(slot.abortController.signal)
-        .catch(err => this.logger.error("scheduler", 0, `brain '${id}' loop crashed`, err));
-    }
+    this.runBrain(id);
     return `Brain '${id}' started`;
   }
 
   private doStop(id: string): string {
-    const slot = this.brains.get(id);
-    if (!slot) return `Unknown brain: '${id}'`;
-    slot.brain.stop?.();
+    const brain = this.brains.get(id);
+    if (!brain) return `Unknown brain: '${id}'`;
+    brain.stop();
     return `Brain '${id}' stopped`;
   }
 
   private async doShutdown(id: string): Promise<string> {
-    const slot = this.brains.get(id);
-    if (!slot) return `Unknown brain: '${id}'`;
-    await slot.brain.shutdown?.();
-    slot.abortController.abort();
+    const brain = this.brains.get(id);
+    if (!brain) return `Unknown brain: '${id}'`;
+    await brain.shutdown();
     return `Brain '${id}' shut down`;
   }
 
   private async doRestart(id: string): Promise<string> {
-    const slot = this.brains.get(id);
-    if (!slot) return `Unknown brain: '${id}'`;
-    await slot.brain.shutdown?.();
-    slot.abortController.abort();
-    this.brains.delete(id);
+    const brain = this.brains.get(id);
+    if (!brain) return `Unknown brain: '${id}'`;
+    await this.removeBrain(id);
     const globalConfig = await this.loadGlobalConfig();
     await this.initBrain(id, globalConfig);
-    const newSlot = this.brains.get(id);
-    if (newSlot) {
-      newSlot.brain.run(newSlot.abortController.signal)
-        .catch(err => this.logger.error("scheduler", 0, `brain '${id}' loop crashed after restart`, err));
-    }
+    this.runBrain(id);
     return `Brain '${id}' restarted`;
   }
 
   private doResume(id: string): string {
-    const slot = this.brains.get(id);
-    if (!slot) return `Unknown brain: '${id}'`;
-    slot.queue.push({
+    const brain = this.brains.get(id);
+    if (!brain) return `Unknown brain: '${id}'`;
+    brain.pushEvent({
       source: "scheduler",
       type: "resume",
       payload: { prompt: "<CONTINUE>" },
@@ -502,10 +496,9 @@ export class Scheduler {
   }
 
   private async doFree(id: string): Promise<string> {
-    const slot = this.brains.get(id);
-    if (slot) {
-      await slot.brain.free?.();
-      slot.abortController.abort();
+    const brain = this.brains.get(id);
+    if (brain) {
+      await brain.free();
       this.brains.delete(id);
     }
     const brainDir = join(ROOT, "brains", id);
@@ -514,6 +507,14 @@ export class Scheduler {
       this.logger.info("scheduler", 0, `brain dir deleted: brains/${id}/`);
     }
     return `Brain '${id}' freed`;
+  }
+
+  /** Start a brain's run loop (fire-and-forget with error logging) */
+  private runBrain(id: string): void {
+    const brain = this.brains.get(id);
+    if (!brain) return;
+    brain.run(brain.signal)
+      .catch(err => this.logger.error("scheduler", 0, `brain '${id}' loop crashed`, err));
   }
 
   private setupSignalHandlers(): void {
@@ -530,10 +531,8 @@ export class Scheduler {
       if (sig === "SIGINT") {
         this.lastCtrlC = now;
         this.logger.info("scheduler", 0, "Ctrl+C — 停止当前活跃 brain (3秒内再按一次 = 全局关闭)");
-        for (const [, slot] of this.brains) {
-          if ((slot.brain as any).stop) {
-            (slot.brain as any).stop();
-          }
+        for (const brain of this.brains.values()) {
+          brain.stop();
         }
         return;
       }
@@ -554,16 +553,9 @@ export class Scheduler {
 
     this.logger.info("scheduler", 0, "并行关闭所有 brains (10s 超时)...");
 
-    const shutdownPromises = [...this.brains.entries()].map(async ([id, slot]) => {
+    const shutdownPromises = [...this.brains.entries()].map(async ([id, brain]) => {
       try {
-        if ((slot.brain as any).shutdown) {
-          await (slot.brain as any).shutdown();
-        } else {
-          slot.abortController.abort();
-          for (const source of slot.sources) {
-            try { source.stop(); } catch { /* already stopped */ }
-          }
-        }
+        await brain.shutdown();
       } catch (err: any) {
         this.logger.error("scheduler", 0, `shutdown brain '${id}' failed`, err);
       }
@@ -571,10 +563,6 @@ export class Scheduler {
 
     const timeout = new Promise<void>(resolve => setTimeout(resolve, 10_000));
     await Promise.race([Promise.all(shutdownPromises), timeout]);
-
-    for (const [, slot] of this.brains) {
-      slot.abortController.abort();
-    }
 
     getFSWatcher()?.close();
     this.terminalManager.cleanup(0);
