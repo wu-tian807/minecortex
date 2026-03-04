@@ -19,6 +19,7 @@ import { renderEventDisplay } from "../context/event-router.js";
 import { HookEvent } from "../hooks/types.js";
 import { executeTool } from "./tool-executor.js";
 import { BaseBrain } from "./base-brain.js";
+import { BRAIN_DEFAULTS } from "../defaults/brain-defaults.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -336,7 +337,7 @@ export class ConsciousBrain extends BaseBrain {
         tools: this.tools,
         contextEngine: this.contextEngine,
         modelSpec: this.modelSpec,
-        maxIterations: this.brainJson.maxIterations ?? 200,
+        maxIterations: this.brainJson.maxIterations ?? BRAIN_DEFAULTS.maxIterations,
         signal,
         brainBoard: this.brainBoard,
         slotRegistry: this.slotRegistry,
@@ -348,7 +349,7 @@ export class ConsciousBrain extends BaseBrain {
         sessionManager: this.sessionManager,
         turn: this.currentTurn,
         hooks: this.hooks,
-        keepToolResults: this.brainJson.session?.keepToolResults ?? 8,
+        keepToolResults: this.brainJson.session?.keepToolResults ?? BRAIN_DEFAULTS.session.keepToolResults,
         showThinking: this.brainJson.models?.showThinking ?? false,
         trackBackgroundTask: (p) => {
           this.pendingTasks.add(p);

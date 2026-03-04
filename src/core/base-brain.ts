@@ -14,6 +14,7 @@ import type { Logger } from "./logger.js";
 import type { EventBus } from "./event-bus.js";
 import { EventQueue } from "./event-queue.js";
 import { BrainHooks } from "../hooks/brain-hooks.js";
+import { BRAIN_DEFAULTS } from "../defaults/brain-defaults.js";
 
 export abstract class BaseBrain implements BrainInterface {
   readonly id: string;
@@ -129,6 +130,6 @@ export abstract class BaseBrain implements BrainInterface {
 
   /** Get coalesce delay from config */
   protected get coalesceMs(): number {
-    return this.brainJson.coalesceMs ?? 300;
+    return this.brainJson.coalesceMs ?? BRAIN_DEFAULTS.coalesceMs;
   }
 }

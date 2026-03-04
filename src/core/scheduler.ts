@@ -26,6 +26,7 @@ import { SessionManager } from "../session/session-manager.js";
 import { Logger } from "./logger.js";
 import { createFallbackProvider, getModelSpec } from "../llm/provider.js";
 import { DEFAULT_BRAIN_JSON } from "../defaults/templates.js";
+import { BRAIN_DEFAULTS } from "../defaults/brain-defaults.js";
 
 const ROOT = process.cwd();
 
@@ -244,7 +245,7 @@ export class Scheduler {
     }
 
     // Load tools
-    const selectorTools = brainConfig.tools ?? { global: "all" as const };
+    const selectorTools = brainConfig.tools ?? BRAIN_DEFAULTS.tools;
     const toolLoader = new ToolLoader();
     if (this.fsWatcher) toolLoader.registerWatchPatterns(this.fsWatcher);
     const tools = await toolLoader.load({
@@ -258,7 +259,7 @@ export class Scheduler {
     const slotRegistry = new SlotRegistry();
     const contextEngine = new ContextEngine(slotRegistry);
 
-    const selectorSlots = brainConfig.slots ?? { global: "all" as const };
+    const selectorSlots = brainConfig.slots ?? BRAIN_DEFAULTS.slots;
     const slotLoader = new SlotLoader();
     slotLoader.setSlotContext({
       brainId,
@@ -367,7 +368,7 @@ export class Scheduler {
 
     if (this.fsWatcher) subLoader.registerWatchPatterns(this.fsWatcher);
 
-    const selectorSub = brainConfig.subscriptions ?? { global: "all" as const };
+    const selectorSub = brainConfig.subscriptions ?? BRAIN_DEFAULTS.subscriptions;
     return subLoader.load({
       brainId,
       brainDir,

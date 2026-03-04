@@ -79,16 +79,32 @@ export interface ModelsConfig {
 }
 
 export interface BrainJson {
-  /** 模型相关配置 */
+  /** LLM 模型配置 */
   models?: ModelsConfig;
+
+  /** 事件合并窗口（毫秒），默认 300 */
   coalesceMs?: number;
+
+  /** 单轮最大 LLM 调用次数，默认 200 */
+  maxIterations?: number;
+
+  /** 能力选择器 */
   subscriptions?: CapabilitySelector;
   tools?: CapabilitySelector;
   slots?: CapabilitySelector;
-  maxIterations?: number;
-  session?: { keepToolResults?: number; keepMedias?: number };
+
+  /** Session 压缩配置 */
+  session?: {
+    /** 微压缩保留最近 N 个 tool_result，默认 8 */
+    keepToolResults?: number;
+    /** 微压缩保留最近 N 个多媒体消息，默认 2 */
+    keepMedias?: number;
+  };
+
+  /** 环境变量（注入到 shell 执行环境） */
   env?: Record<string, string>;
-  vars?: Record<string, string>;
+
+  /** 时区，默认 Asia/Shanghai */
   timezone?: string;
 }
 

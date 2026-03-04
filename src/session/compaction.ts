@@ -1,6 +1,7 @@
 import type { LLMMessage, LLMToolCall } from "../llm/types.js";
 import type { ContentPart } from "../core/types.js";
 import { estimateTokens } from "../core/token-stats.js";
+import { BRAIN_DEFAULTS } from "../defaults/brain-defaults.js";
 
 interface MicroCompactConfig {
   keepToolResults?: number;  // keep last N tool results intact
@@ -12,8 +13,8 @@ interface MicroCompactConfig {
  * Keeps the most recent `keepToolResults` / `keepMedias` intact.
  */
 export function microCompact(messages: LLMMessage[], config: MicroCompactConfig = {}): LLMMessage[] {
-  const keepTool = config.keepToolResults ?? 3;
-  const keepMedia = config.keepMedias ?? 2;
+  const keepTool = config.keepToolResults ?? BRAIN_DEFAULTS.session.keepToolResults;
+  const keepMedia = config.keepMedias ?? BRAIN_DEFAULTS.session.keepMedias;
 
   const toolIndices: number[] = [];
   const mediaIndices: number[] = [];
