@@ -5,24 +5,14 @@ import type { Event, EventQueueInterface } from "./types.js";
 type EventHandler = (event: Event) => void;
 
 export class EventBus {
-  private handlers = new Map<string, Set<EventHandler>>();
-  private globalHandlers = new Set<EventHandler>();
+  private observers = new Set<EventHandler>();
   /** Maps brainId → EventQueue for cross-brain routing */
   private brainQueueMap = new Map<string, EventQueueInterface>();
 
-  on(source: string, handler: EventHandler): void {
-    if (!this.handlers.has(source)) {
-      this.handlers.set(source, new Set());
-    }
-    this.handlers.get(source)!.add(handler);
-  }
-
-  onAny(handler: EventHandler): void {
-    this.globalHandlers.add(handler);
-  }
-
-  off(source: string, handler: EventHandler): void {
-    this.handlers.get(source)?.delete(handler);
+  /** Register an observer that receives every emit()-ed event. Returns an unsubscribe fn. */
+  observe(handler: EventHandler): () => void {
+    this.observers.add(handler);
+    return () => this.observers.delete(handler);
   }
 
   register(brainId: string, queue: EventQueueInterface): void {
@@ -34,15 +24,10 @@ export class EventBus {
   }
 
   emit(event: Event, sourceBrainId?: string): void {
-    const sourceHandlers = this.handlers.get(event.source);
-    if (sourceHandlers) {
-      for (const h of sourceHandlers) h(event);
-    }
-    for (const h of this.globalHandlers) h(event);
+    for (const h of this.observers) h(event);
 
-    const to = (event.payload as any)?.to as string | undefined;
-    if (to && to !== sourceBrainId) {
-      this.route(event, to, sourceBrainId);
+    if (event.to && event.to !== sourceBrainId) {
+      this.route(event, event.to, sourceBrainId);
     }
   }
 

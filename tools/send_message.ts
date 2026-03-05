@@ -46,7 +46,8 @@ export default {
     ctx.eventBus.emit({
       source: `brain:${ctx.brainId}`,
       type: "message",
-      payload: { to, content, summary },
+      to,
+      payload: { content, summary },
       ts: Date.now(),
       priority,
       silent,

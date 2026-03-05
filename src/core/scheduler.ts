@@ -97,7 +97,7 @@ export class Scheduler {
     return this.brains.get(id) ?? null;
   }
 
-  /** Route an event through the shared EventBus (e.g. renderer → agent via payload.to). */
+  /** Route an event through the shared EventBus (e.g. renderer → agent via event.to). */
   emit(event: import("./types.js").Event): void {
     this.eventBus.emit(event);
   }

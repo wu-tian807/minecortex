@@ -211,7 +211,7 @@ export default function create(ctx: SourceContext): EventSource {
         ctx.brain.hooks.on(HookEvent.EventReceived, ({ events }) => {
           for (const e of events) {
             if (e.source === "user" && e.type === "user_input") {
-              const text = (e.payload as { text?: string; to?: string })?.text ?? "";
+              const text = (e.payload as { text?: string })?.text ?? "";
               recorder.recordUserInput(text);
             } else if (e.source !== "user" && e.type === "message") {
               const payload = e.payload as { text?: string; from?: string } | undefined;

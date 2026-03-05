@@ -34,7 +34,8 @@ async function main() {
       scheduler.emit({
         source: "user",
         type: "user_input",
-        payload: { to: brainId, text },
+        to: brainId,
+        payload: { text },
         ts: Date.now(),
       });
     },

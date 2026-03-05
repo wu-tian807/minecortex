@@ -7,6 +7,7 @@ export interface Event {
   type: string;         // e.g. "message", "tick", "block_break"
   payload: unknown;
   ts: number;
+  to?: string;          // routing target: brainId, "*" for broadcast, or omitted for observers only
   priority?: number;    // 0=immediate, 1=normal(default), 2=low
   silent?: boolean;     // true = queue only, don't trigger processing
   steer?: boolean;      // true = interrupt current LLM call immediately
