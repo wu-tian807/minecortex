@@ -5,7 +5,6 @@
     "timeout": -1
   },
   "renderer": {
-    "activeBrain": "coder",
-    "activeSession": "s_1772421049258"
+    "activeBrain": "talker"
   }
 }
