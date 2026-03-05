@@ -2,186 +2,70 @@
 
 import * as readline from "node:readline";
 import { watch, readFileSync, existsSync } from "node:fs";
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+
+import { C, cursorToCol0, cursorToCol, cursorUp, cursorDown, clearLine, clearToEnd } from "./ansi.js";
+import { type RendererEvent, formatEvent } from "./events.js";
+import { listBrainIds, listSessionIds } from "./fs-helpers.js";
+import { SelectOverlay } from "./select-overlay.js";
 import { parseCommand } from "../core/command-parser.js";
 
-// ─── Helpers ───
-
-function stripThinking(text: string): string {
-  return text.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
-}
-
-// ─── ANSI colors ───
-
-const C = {
-  reset: "\x1b[0m",
-  dim: "\x1b[90m",
-  cyan: "\x1b[36m",
-  green: "\x1b[32m",
-  red: "\x1b[31m",
-  magenta: "\x1b[35m",
-  bold: "\x1b[1m",
-};
-
-// ─── Callbacks wired by main.ts ───
+// ─── Public types ───
 
 export interface RendererCallbacks {
-  /** Send plain user text to the active brain */
   onUserInput(brainId: string, text: string): void;
-  /** Route a slash command (non-renderer) to the active brain */
   onBrainCommand(brainId: string, toolName: string, args: Record<string, string>): void;
 }
 
-// ─── mineclaw.json renderer state ───
+// ─── Internal types ───
 
 interface MineclawJson {
   renderer?: { activeBrain?: string; activeSession?: string };
   [key: string]: unknown;
 }
 
-// ─── Event shapes from events.jsonl ───
-
-type RendererEvent =
-  | { k: "user_input"; text: string; ts: number }
-  | { k: "brain_message"; source: string; text: string; ts: number }
-  | { k: "assistant"; text?: string; thinking?: string; ts: number }
-  | { k: "tool_call"; name: string; args: Record<string, unknown>; ts: number }
-  | { k: "tool_result"; name: string; preview: string; durationMs: number; ts: number }
-  | { k: "todo_update"; todos: Array<{ id: string; content: string; status: string }>; ts: number };
-
-const STATUS_ICON: Record<string, string> = {
-  pending: "○",
-  in_progress: "▶",
-  completed: "✓",
-  cancelled: "✗",
-};
-
-const TOOL_ICONS: Record<string, string> = {
-  shell: "$",
-  read_file: "📄",
-  write_file: "✏️",
-  edit_file: "✏️",
-  glob: "🔍",
-  grep: "🔍",
-  web_search: "🌐",
-  web_fetch: "🌐",
-  spawn_thought: "🤖",
-  todo_write: "📋",
-};
-
-// ─── Render a single event — returns the string to print (or null to skip) ───
-
-function formatEvent(ev: RendererEvent): string | null {
-  switch (ev.k) {
-    case "user_input":
-      return `${C.cyan}> ${ev.text}${C.reset}\n`;
-
-    case "brain_message":
-      return `${C.magenta}⟵ from \`${ev.source}\`:${C.reset} ${ev.text.slice(0, 200)}\n\n`;
-
-    case "assistant": {
-      const text = ev.text ? stripThinking(ev.text) : "";
-      return text ? `${text}\n\n` : null;
-    }
-
-    case "tool_call": {
-      if (ev.name === "spawn_thought") {
-        const task = String(ev.args?.task ?? "");
-        const type = String(ev.args?.type ?? "");
-        const mode = String(ev.args?.mode ?? "background");
-        return (
-          `\n${C.magenta}┌─ ${C.bold}thought${C.reset} ${C.dim}(${type}, ${mode})${C.reset}\n` +
-          `${C.magenta}│${C.reset}  ${C.dim}${task.slice(0, 80)}${C.reset}\n`
-        );
-      }
-      const icon = TOOL_ICONS[ev.name] ?? "▸";
-      const argsStr = JSON.stringify(ev.args);
-      const preview = argsStr.length > 80 ? argsStr.slice(0, 77) + "..." : argsStr;
-      return `  ${C.cyan}${icon} ${ev.name}${C.reset}${C.dim}(${preview})${C.reset}\n`;
-    }
-
-    case "tool_result": {
-      if (ev.name === "spawn_thought") {
-        let status = "completed";
-        try { status = String((JSON.parse(ev.preview) as Record<string, unknown>)?.status ?? "completed"); } catch { /* keep */ }
-        const isError = status === "error";
-        return `${C.magenta}└─${C.reset} ${isError ? C.red : C.green}${isError ? "✗" : "✓"} ${status}${C.reset} ${C.dim}(${ev.durationMs}ms)${C.reset}\n\n`;
-      }
-      const oneliner = ev.preview.replace(/\n/g, " ");
-      const display = oneliner.length > 200 ? oneliner.slice(0, 197) + "..." : oneliner;
-      return `  ${C.dim}← ${ev.name} (${ev.durationMs}ms): ${display}${C.reset}\n`;
-    }
-
-    case "todo_update": {
-      if (!ev.todos?.length) return null;
-      const total = ev.todos.length;
-      const done = ev.todos.filter((t) => t.status === "completed").length;
-      const lines = ev.todos.map((t) => `  ${STATUS_ICON[t.status] ?? "?"} [${t.id}] ${t.content}`);
-      return `\n${C.dim}[todos] ${done}/${total}\n${lines.join("\n")}${C.reset}\n\n`;
-    }
-
-    default:
-      return null;
-  }
-}
-
-// ─── Filesystem helpers (no scheduler dependency) ───
-
-async function listBrainIds(rootDir: string): Promise<string[]> {
-  try {
-    const brainsDir = join(rootDir, "brains");
-    const entries = await readdir(brainsDir, { withFileTypes: true });
-    const ids: string[] = [];
-    for (const e of entries) {
-      if (e.isDirectory() && existsSync(join(brainsDir, e.name, "brain.json"))) {
-        ids.push(e.name);
-      }
-    }
-    return ids;
-  } catch {
-    return [];
-  }
-}
-
-async function listSessionIds(rootDir: string, brainId: string): Promise<string[]> {
-  try {
-    const sessionsDir = join(rootDir, "brains", brainId, "sessions");
-    const entries = await readdir(sessionsDir, { withFileTypes: true });
-    return entries
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-      .sort()
-      .reverse();
-  } catch {
-    return [];
-  }
-}
+const PROMPT             = `${C.cyan}›${C.reset} `;
+const PROMPT_VISIBLE_LEN = 2; // "› "
+const SPINNER_FRAMES     = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 // ─── CLIRenderer ───
-
-const PROMPT = `${C.cyan}›${C.reset} `;
 
 export class CLIRenderer {
   private rootDir: string;
   private configPath: string;
   private callbacks: RendererCallbacks;
-  private activeBrain = "";
+
+  // Active context
+  private activeBrain  = "";
   private activeSession = "";
+
+  // Tail state
   private tailOffset = 0;
   private fsWatcher: ReturnType<typeof watch> | null = null;
   private stopped = false;
+
+  // TTY / raw mode
   private isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  // raw mode input state
   private inputBuffer = "";
   private inputHistory: string[] = [];
-  private historyIdx = -1;
-  private escapeSeq = "";
+  private historyIdx  = -1;
+
+  // Overlay state
+  private overlay: SelectOverlay | null = null;
+  private overlayOnConfirm: ((idx: number) => Promise<void>) | null = null;
+  /** Prints queued while overlay is open — flushed on close. */
+  private pendingPrints: string[] = [];
+
+  // Spinner / thinking state
+  private isThinking    = false;
+  private spinnerFrame  = 0;
+  private spinnerTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(rootDir: string, callbacks: RendererCallbacks) {
-    this.rootDir = rootDir;
+    this.rootDir    = rootDir;
     this.configPath = join(rootDir, "mineclaw.json");
-    this.callbacks = callbacks;
+    this.callbacks  = callbacks;
   }
 
   async start(): Promise<void> {
@@ -193,67 +77,162 @@ export class CLIRenderer {
   stop(): void {
     this.stopped = true;
     this.fsWatcher?.close();
+    if (this.spinnerTimer) { clearInterval(this.spinnerTimer); this.spinnerTimer = null; }
     if (this.isTTY) {
       try { process.stdin.setRawMode(false); } catch { /* ignore */ }
     }
   }
 
-  // ─── Output: clears input line, writes content, redraws prompt ───
-  // This is safe regardless of what else writes to stdout — as long as we
-  // redraw the prompt after, the input line is always current.
-  // If logger also writes to stdout (no redirect), their output appears above
-  // the prompt on the next redraw. The professional solution for zero conflict
-  // is an alternate screen buffer (\x1b[?1049h), but that loses scrollback.
-  // Current tradeoff: redirect stderr to debug.log (already done in main.ts).
+  // ─── Footer (status bar + input line) ───
+  //
+  // The renderer always occupies 2 fixed lines at the bottom:
+  //   line N-1: dim status bar  (brain / session info + optional spinner)
+  //   line N:   prompt + input buffer
+  //
+  // print() clears those 2 lines, writes content, then redraws them.
+  // redrawInputLine() only redraws line N (for typing / backspace).
+  // redrawStatusBar() only redraws line N-1 (for spinner updates).
 
-  private print(text: string): void {
-    if (!text) return;
-    if (this.isTTY) {
-      readline.clearLine(process.stdout, 0);
-      readline.cursorTo(process.stdout, 0);
-      process.stdout.write(text);
-      this.redrawPrompt();
+  private writeStatusBar(): void {
+    const spinner  = this.isThinking
+      ? ` ${C.yellow}${SPINNER_FRAMES[this.spinnerFrame]}${C.reset}`
+      : "";
+    const session  = this.activeSession ? `…${this.activeSession.slice(-14)}` : "—";
+    const cols     = process.stdout.columns ?? 80;
+    const base     = `brain: ${this.activeBrain || "—"}  session: ${session}`;
+    process.stdout.write(`${C.dim}${base.slice(0, cols - 4)}${C.reset}${spinner}`);
+  }
+
+  private drawFooter(): void {
+    if (!this.isTTY) return;
+    this.writeStatusBar();
+    process.stdout.write("\n");
+    clearLine();
+    cursorToCol0();
+    process.stdout.write(PROMPT + this.inputBuffer);
+  }
+
+  /** Redraw only the status bar line without disturbing the input line. */
+  private redrawStatusBar(): void {
+    if (!this.isTTY || this.overlay) return;
+    cursorToCol0();
+    cursorUp(1);
+    clearLine();
+    this.writeStatusBar();
+    cursorDown(1);
+    cursorToCol(PROMPT_VISIBLE_LEN + this.inputBuffer.length);
+  }
+
+  private redrawInputLine(): void {
+    if (!this.isTTY) return;
+    clearLine();
+    cursorToCol0();
+    process.stdout.write(PROMPT + this.inputBuffer);
+  }
+
+  /** Clear the 2-line footer area (cursor lands at start of status bar line). */
+  private clearFooter(): void {
+    cursorToCol0();           // col 0 of input line
+    cursorUp(1);              // up to status bar
+    clearToEnd();             // clear status bar + input line
+  }
+
+  // ─── Thinking indicator ───
+
+  private setThinking(v: boolean): void {
+    if (v === this.isThinking) return;
+    this.isThinking = v;
+    if (v) {
+      this.spinnerFrame = 0;
+      this.spinnerTimer = setInterval(() => {
+        this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
+        this.redrawStatusBar();
+      }, 100);
     } else {
-      process.stdout.write(text);
+      if (this.spinnerTimer) { clearInterval(this.spinnerTimer); this.spinnerTimer = null; }
+      this.redrawStatusBar();
     }
   }
 
-  private printEvent(ev: RendererEvent): void {
+  // ─── Output ───
+
+  private print(text: string): void {
+    if (!text) return;
+    if (this.overlay) {
+      // Buffer while overlay is open to avoid corrupting its rendering
+      this.pendingPrints.push(text);
+      return;
+    }
+    if (!this.isTTY) { process.stdout.write(text); return; }
+    this.clearFooter();
+    process.stdout.write(text);
+    this.drawFooter();
+  }
+
+  private printEvent(ev: RendererEvent, isLive = false): void {
+    // turn_start/turn_end only update the thinking spinner for live events
+    if (ev.k === "turn_start") { if (isLive) this.setThinking(true);  return; }
+    if (ev.k === "turn_end")   { if (isLive) this.setThinking(false); return; }
     const text = formatEvent(ev);
     if (text) this.print(text);
+  }
+
+  // ─── Overlay lifecycle ───
+
+  private openOverlay(ov: SelectOverlay, onConfirm: (idx: number) => Promise<void>): void {
+    this.overlay          = ov;
+    this.overlayOnConfirm = onConfirm;
+    this.inputBuffer = "";
+    // Cursor is on the input line row; draw the status bar on the row above, then
+    // redraw the blank input line so the box has a clean anchor.
+    cursorToCol0();
+    cursorUp(1);
+    clearLine();
+    this.writeStatusBar();
+    cursorDown(1);
+    cursorToCol0();
+    clearLine();
+    process.stdout.write(PROMPT);
+    ov.show();
+  }
+
+  private closeOverlay(): void {
+    if (!this.overlay) return;
+    this.overlay.clear();
+    this.overlay          = null;
+    this.overlayOnConfirm = null;
+    this.redrawInputLine();
+    // Flush buffered prints
+    const buffered = this.pendingPrints.splice(0);
+    for (const text of buffered) this.print(text);
   }
 
   // ─── Config ───
 
   private readConfig(): MineclawJson {
-    try {
-      return JSON.parse(readFileSync(this.configPath, "utf-8")) as MineclawJson;
-    } catch {
-      return {};
-    }
+    try { return JSON.parse(readFileSync(this.configPath, "utf-8")) as MineclawJson; }
+    catch { return {}; }
   }
 
-  private async writeConfig(renderer: { activeBrain?: string; activeSession?: string }): Promise<void> {
-    const current = this.readConfig();
-    const updated = { ...current, renderer: { ...current.renderer, ...renderer } };
-    await writeFile(this.configPath, JSON.stringify(updated, null, 2), "utf-8");
+  private async writeConfig(r: { activeBrain?: string; activeSession?: string }): Promise<void> {
+    const cfg = this.readConfig();
+    await writeFile(this.configPath, JSON.stringify({ ...cfg, renderer: { ...cfg.renderer, ...r } }, null, 2));
   }
 
   // ─── Resolve active brain + session ───
 
   private async resolveActive(): Promise<void> {
-    const config = this.readConfig();
-    let brain = config.renderer?.activeBrain ?? "";
-    let session = config.renderer?.activeSession ?? "";
-
+    const cfg     = this.readConfig();
+    let brain     = cfg.renderer?.activeBrain   ?? "";
+    let session   = cfg.renderer?.activeSession ?? "";
     const brainIds = await listBrainIds(this.rootDir);
+
     if (!brain || !brainIds.includes(brain)) brain = brainIds[0] ?? "";
     if (brain) {
       const sessions = await listSessionIds(this.rootDir, brain);
       if (!session || !sessions.includes(session)) session = sessions[0] ?? "";
     }
-
-    this.activeBrain = brain;
+    this.activeBrain   = brain;
     this.activeSession = session;
     if (brain && session) await this.writeConfig({ activeBrain: brain, activeSession: session });
   }
@@ -269,8 +248,6 @@ export class CLIRenderer {
       this.print(`${C.dim}没有可用的 brain/session，使用 /brains 查看${C.reset}\n`);
       return;
     }
-
-    this.print(`${C.dim}brain: ${this.activeBrain}  session: ${this.activeSession}${C.reset}\n\n`);
 
     const path = this.eventsPath();
     if (existsSync(path)) {
@@ -299,14 +276,14 @@ export class CLIRenderer {
 
   private async readNewLines(): Promise<void> {
     try {
-      const raw = await readFile(this.eventsPath(), "utf-8");
+      const raw   = await readFile(this.eventsPath(), "utf-8");
       const bytes = Buffer.byteLength(raw, "utf-8");
       if (bytes <= this.tailOffset) return;
-      const slice = Buffer.from(raw, "utf-8").slice(this.tailOffset).toString("utf-8");
+      const slice = Buffer.from(raw, "utf-8").subarray(this.tailOffset).toString("utf-8");
       this.tailOffset = bytes;
       for (const line of slice.split("\n")) {
         if (!line.trim()) continue;
-        try { this.printEvent(JSON.parse(line) as RendererEvent); } catch { /* skip */ }
+        try { this.printEvent(JSON.parse(line) as RendererEvent, true); } catch { /* skip */ }
       }
     } catch { /* file not ready */ }
   }
@@ -315,186 +292,205 @@ export class CLIRenderer {
 
   private async switchTo(brainId: string, sessionId: string): Promise<void> {
     this.fsWatcher?.close();
-    this.fsWatcher = null;
-    this.tailOffset = 0;
-    this.activeBrain = brainId;
+    this.fsWatcher    = null;
+    this.tailOffset   = 0;
+    this.activeBrain  = brainId;
     this.activeSession = sessionId;
+    // Stop any in-progress spinner — the previous session's turn is irrelevant now
+    this.setThinking(false);
     await this.writeConfig({ activeBrain: brainId, activeSession: sessionId });
+    // Clear screen, re-establish the 2-line footer anchor, then replay new session
+    process.stdout.write("\x1b[2J\x1b[H");
+    this.drawFooter();
     await this.replayAndTail();
   }
 
-  // ─── Raw mode prompt ───
-
-  private redrawPrompt(): void {
-    if (!this.isTTY) return;
-    readline.clearLine(process.stdout, 0);
-    readline.cursorTo(process.stdout, 0);
-    process.stdout.write(PROMPT + this.inputBuffer);
-  }
-
-  // ─── Interactive stdin — raw mode (TTY) or line mode (piped) ───
+  // ─── stdin ───
 
   private startStdin(): void {
-    if (this.isTTY) {
-      this.startRawMode();
-    } else {
-      this.startLineMode();
-    }
+    if (this.isTTY) this.startRawMode();
+    else            this.startLineMode();
   }
 
-  // Raw mode: character-by-character, no readline buffering.
-  // Gives full control: immediate keystrokes, arrows for history, Ctrl+U to clear.
   private startRawMode(): void {
     process.stdin.setRawMode(true);
     process.stdin.setEncoding("utf8");
     process.stdin.resume();
-
-    this.redrawPrompt();
-
-    let awaitingChoice: Array<{ brain: string; session: string }> | null = null;
+    this.drawFooter();   // draw status bar + prompt
 
     process.stdin.on("data", (chunk: string) => {
-      for (let i = 0; i < chunk.length; i++) {
-        const ch = chunk[i];
-        const code = ch.charCodeAt(0);
+      let i = 0;
+      while (i < chunk.length) {
+        const code = chunk.charCodeAt(i);
 
-        // Accumulate escape sequences (arrow keys etc.)
-        if (this.escapeSeq) {
-          this.escapeSeq += ch;
-          if (this.escapeSeq === "\x1b[A") {        // ↑ history prev
-            this.historyIdx = Math.min(this.historyIdx + 1, this.inputHistory.length - 1);
-            this.inputBuffer = this.inputHistory[this.inputHistory.length - 1 - this.historyIdx] ?? "";
-            this.redrawPrompt();
-            this.escapeSeq = "";
-          } else if (this.escapeSeq === "\x1b[B") { // ↓ history next
-            this.historyIdx = Math.max(this.historyIdx - 1, -1);
-            this.inputBuffer = this.historyIdx < 0 ? "" : (this.inputHistory[this.inputHistory.length - 1 - this.historyIdx] ?? "");
-            this.redrawPrompt();
-            this.escapeSeq = "";
-          } else if (this.escapeSeq.length > 6 || (this.escapeSeq.length > 2 && !/^\x1b\[[\d;]*$/.test(this.escapeSeq))) {
-            this.escapeSeq = ""; // unknown sequence, discard
+        if (code === 27) {
+          // Peek: ESC followed by '[' in the same chunk → CSI escape sequence
+          if (i + 1 < chunk.length && chunk[i + 1] === "[") {
+            let seq = "\x1b[";
+            i += 2;
+            // Accumulate parameter bytes, terminated by a letter or '~'
+            while (i < chunk.length && !/[A-Za-z~]/.test(chunk[i])) {
+              seq += chunk[i++];
+            }
+            if (i < chunk.length) seq += chunk[i++];
+            this.handleEscapeSeq(seq);
+          } else {
+            // Standalone ESC — cancel any open overlay
+            if (this.overlay) this.closeOverlay();
+            i++;
           }
           continue;
         }
 
-        if (code === 27) {             // ESC — start escape sequence
-          this.escapeSeq = "\x1b";
-        } else if (code === 3) {       // Ctrl+C
-          process.stdout.write("\n");
-          process.exit(0);
-        } else if (code === 4) {       // Ctrl+D
-          if (this.inputBuffer.length === 0) { process.stdout.write("\n"); process.exit(0); }
-        } else if (code === 21) {      // Ctrl+U — clear line
-          this.inputBuffer = "";
-          this.redrawPrompt();
-        } else if (code === 127 || code === 8) { // Backspace
-          if (this.inputBuffer.length > 0) {
-            this.inputBuffer = this.inputBuffer.slice(0, -1);
-            this.redrawPrompt();
-          }
-        } else if (code === 13 || code === 10) { // Enter
-          const text = this.inputBuffer.trim();
-          this.inputBuffer = "";
-          this.historyIdx = -1;
-          readline.clearLine(process.stdout, 0);
-          readline.cursorTo(process.stdout, 0);
-          process.stdout.write("\n");
-          if (text) {
-            if (this.inputHistory[this.inputHistory.length - 1] !== text) {
-              this.inputHistory.push(text);
-            }
-            this.handleLine(text, awaitingChoice).then((next) => {
-              awaitingChoice = next;
-              this.redrawPrompt();
-            });
-          } else {
-            this.redrawPrompt();
-          }
-        } else if (code >= 32) {       // Printable character
-          this.inputBuffer += ch;
-          process.stdout.write(ch);    // echo inline (cursor already at end)
-        }
+        this.handleRawChar(chunk[i]);
+        i++;
       }
     });
-
     process.stdin.on("end", () => { if (!this.stopped) process.exit(0); });
   }
 
-  // Line mode: for non-TTY (piped input / scripts).
+  /** Handle a fully-parsed CSI escape sequence (e.g. "\x1b[A" for up-arrow). */
+  private handleEscapeSeq(seq: string): void {
+    if (this.overlay) {
+      if (seq === "\x1b[A") { this.overlay.moveUp();   return; }
+      if (seq === "\x1b[B") { this.overlay.moveDown(); return; }
+      return; // ignore other sequences while overlay is open
+    }
+    // History navigation
+    if (seq === "\x1b[A") {
+      this.historyIdx  = Math.min(this.historyIdx + 1, this.inputHistory.length - 1);
+      this.inputBuffer = this.inputHistory[this.inputHistory.length - 1 - this.historyIdx] ?? "";
+      this.redrawInputLine();
+    } else if (seq === "\x1b[B") {
+      this.historyIdx  = Math.max(this.historyIdx - 1, -1);
+      this.inputBuffer = this.historyIdx < 0
+        ? ""
+        : (this.inputHistory[this.inputHistory.length - 1 - this.historyIdx] ?? "");
+      this.redrawInputLine();
+    }
+  }
+
+  private handleRawChar(ch: string): void {
+    const code = ch.charCodeAt(0);
+
+    // ── Overlay-active shortcuts (non-escape keys) ──
+    if (this.overlay) {
+      if (code === 13 || code === 10) { this.confirmOverlay(); return; }
+      if (code === 3) { process.kill(process.pid, "SIGINT"); return; }
+      return; // swallow all other keys while overlay is open
+    }
+
+    // ── Normal input ──
+    if (code === 3)   { process.kill(process.pid, "SIGINT"); return; }
+    if (code === 4)   { if (!this.inputBuffer) process.kill(process.pid, "SIGINT"); return; }
+    if (code === 21)  { this.inputBuffer = ""; this.redrawInputLine(); return; } // Ctrl+U
+
+    if (code === 127 || code === 8) { // Backspace
+      if (this.inputBuffer.length > 0) {
+        this.inputBuffer = this.inputBuffer.slice(0, -1);
+        this.redrawInputLine();
+      }
+      return;
+    }
+
+    if (code === 13 || code === 10) { // Enter
+      const text = this.inputBuffer.trim();
+      this.inputBuffer = "";
+      this.historyIdx  = -1;
+      this.clearFooter();
+      process.stdout.write("\n");
+      if (text) {
+        if (this.inputHistory[this.inputHistory.length - 1] !== text) {
+          this.inputHistory.push(text);
+        }
+        this.handleLine(text).then(() => { if (!this.overlay) this.drawFooter(); });
+      } else {
+        this.drawFooter();
+      }
+      return;
+    }
+
+    if (code >= 32) { // Printable
+      this.inputBuffer += ch;
+      process.stdout.write(ch);  // echo inline
+    }
+  }
+
+  // ─── Overlay confirm ───
+
+  private async confirmOverlay(): Promise<void> {
+    if (!this.overlay || !this.overlayOnConfirm) return;
+    const idx      = this.overlay.selectedIndex;
+    const handler  = this.overlayOnConfirm;
+    this.closeOverlay();
+    await handler(idx);
+  }
+
+  // ─── Overlay helpers ───
+
+  private async showBrainsOverlay(): Promise<void> {
+    const ids = await listBrainIds(this.rootDir);
+    if (!ids.length) { this.print(`${C.dim}没有可用的 brain${C.reset}\n`); return; }
+    const items = ids.map(id => ({
+      label: id,
+      hint:  id === this.activeBrain ? "(active)" : undefined,
+    }));
+    this.openOverlay(
+      new SelectOverlay("brains", items, Math.max(0, ids.indexOf(this.activeBrain))),
+      async (idx) => { await this.showSessionsOverlay(ids[idx]); },
+    );
+  }
+
+  private async showSessionsOverlay(brainId?: string): Promise<void> {
+    const targetBrain = brainId ?? this.activeBrain;
+    if (!targetBrain) { this.print(`${C.dim}未指定 brain${C.reset}\n`); return; }
+    const sessions = await listSessionIds(this.rootDir, targetBrain);
+    if (!sessions.length) { this.print(`${C.dim}${targetBrain} 没有 session${C.reset}\n`); return; }
+
+    const items = sessions.map(sid => ({
+      label: sid,
+      hint:  targetBrain === this.activeBrain && sid === this.activeSession ? "(active)" : undefined,
+    }));
+    this.openOverlay(
+      new SelectOverlay(`${targetBrain} sessions`, items, Math.max(0, sessions.indexOf(this.activeSession))),
+      async (idx) => {
+        const sid = sessions[idx];
+        if (sid) {
+          this.print(`${C.dim}切换到 ${targetBrain} / ${sid}${C.reset}\n`);
+          await this.switchTo(targetBrain, sid);
+        }
+      },
+    );
+  }
+
+  // ─── Line mode (piped / non-TTY) ───
+
   private startLineMode(): void {
     const rl = readline.createInterface({ input: process.stdin, terminal: false });
-    let awaitingChoice: Array<{ brain: string; session: string }> | null = null;
-    rl.on("line", async (line) => {
-      const next = await this.handleLine(line.trim(), awaitingChoice);
-      awaitingChoice = next;
-    });
+    rl.on("line", line => this.handleLine(line.trim()));
     rl.on("close", () => { if (!this.stopped) process.exit(0); });
   }
 
-  // Shared command handler — returns new awaitingChoice state.
-  private async handleLine(
-    trimmed: string,
-    awaitingChoice: Array<{ brain: string; session: string }> | null,
-  ): Promise<Array<{ brain: string; session: string }> | null> {
-    if (!trimmed) return awaitingChoice;
+  // ─── Command router ───
 
-    // Pending session-selection
-    if (awaitingChoice) {
-      const idx = parseInt(trimmed, 10) - 1;
-      const choice = awaitingChoice[idx];
-      if (choice) {
-        this.print(`${C.dim}切换到 ${choice.brain} / ${choice.session}${C.reset}\n`);
-        await this.switchTo(choice.brain, choice.session);
-      } else {
-        this.print(`${C.dim}无效选项${C.reset}\n`);
-      }
-      return null;
-    }
+  private async handleLine(trimmed: string): Promise<void> {
+    if (!trimmed) return;
 
-    // /brains
-    if (trimmed === "/brains") {
-      const ids = await listBrainIds(this.rootDir);
-      let out = `\n${C.bold}可用 brains:${C.reset}\n`;
-      for (const id of ids) out += `${id === this.activeBrain ? `${C.green}●${C.reset} ` : "  "}${id}\n`;
-      this.print(out + "\n");
-      return null;
-    }
+    if (trimmed === "/brains")               { await this.showBrainsOverlay();   return; }
+    if (trimmed.startsWith("/sessions"))     { await this.showSessionsOverlay(trimmed.split(/\s+/)[1]); return; }
+    if (trimmed === "/clear")                { this.clearScreen(); return; }
 
-    // /sessions [brainId]
-    if (trimmed.startsWith("/sessions")) {
-      const targetBrain = trimmed.split(/\s+/)[1] ?? this.activeBrain;
-      const brainIds = await listBrainIds(this.rootDir);
-      if (!brainIds.includes(targetBrain)) {
-        this.print(`${C.dim}未知 brain: ${targetBrain}${C.reset}\n`);
-        return null;
-      }
-      const sessions = await listSessionIds(this.rootDir, targetBrain);
-      if (!sessions.length) {
-        this.print(`${C.dim}${targetBrain} 没有 session${C.reset}\n`);
-        return null;
-      }
-      const choices: Array<{ brain: string; session: string }> = [];
-      let out = `\n${C.bold}${targetBrain} sessions:${C.reset}\n`;
-      for (let i = 0; i < sessions.length; i++) {
-        const sid = sessions[i];
-        const cur = targetBrain === this.activeBrain && sid === this.activeSession;
-        out += `  ${i + 1}.${cur ? `${C.green}●${C.reset}` : " "} ${sid}\n`;
-        choices.push({ brain: targetBrain, session: sid });
-      }
-      out += `\n输入序号切换（Enter 取消）: `;
-      this.print(out);
-      return choices;
-    }
-
-    // Other slash commands → brain
     if (trimmed.startsWith("/")) {
       const cmd = parseCommand(trimmed);
       if (cmd && this.activeBrain) this.callbacks.onBrainCommand(this.activeBrain, cmd.toolName, cmd.args);
-      return null;
+      return;
     }
 
-    // Plain text → user input to brain
     if (this.activeBrain) this.callbacks.onUserInput(this.activeBrain, trimmed);
-    return null;
+  }
+
+  private clearScreen(): void {
+    process.stdout.write("\x1b[2J\x1b[H");
+    this.drawFooter();
   }
 }

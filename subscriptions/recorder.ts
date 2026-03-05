@@ -177,6 +177,7 @@ class EventRecorder {
   }
 
   recordTurnEnd(): void {
+    this.appendEvent({ k: "turn_end", ts: Date.now() }).catch(() => {});
     this.writeQA("\n").catch(() => {});
   }
 
@@ -238,6 +239,10 @@ export default function create(ctx: SourceContext): EventSource {
           recorder.recordToolResult(name, result, durationMs)
         )
       );
+
+      unsubs.push(ctx.brain.hooks.on(HookEvent.TurnStart, () =>
+        recorder.appendEvent({ k: "turn_start", ts: Date.now() }).catch(() => {})
+      ));
 
       unsubs.push(ctx.brain.hooks.on(HookEvent.TurnEnd, () => recorder.recordTurnEnd()));
 
