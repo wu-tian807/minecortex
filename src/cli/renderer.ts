@@ -69,9 +69,13 @@ export class CLIRenderer {
   }
 
   async start(): Promise<void> {
-    await this.resolveActive();
-    this.startStdin();
-    await this.replayAndTail();
+    const needsSelection = await this.resolveActive();
+    this.startStdin(); // sets raw mode + draws footer
+    if (needsSelection) {
+      await this.showBrainsOverlay(); // non-blocking; key events drive the rest
+    } else {
+      await this.replayAndTail();
+    }
   }
 
   stop(): void {
@@ -221,20 +225,26 @@ export class CLIRenderer {
 
   // ─── Resolve active brain + session ───
 
-  private async resolveActive(): Promise<void> {
-    const cfg     = this.readConfig();
-    let brain     = cfg.renderer?.activeBrain   ?? "";
-    let session   = cfg.renderer?.activeSession ?? "";
+  private async resolveActive(): Promise<boolean> {
+    const cfg      = this.readConfig();
+    const brain    = cfg.renderer?.activeBrain   ?? "";
+    const session  = cfg.renderer?.activeSession ?? "";
     const brainIds = await listBrainIds(this.rootDir);
 
-    if (!brain || !brainIds.includes(brain)) brain = brainIds[0] ?? "";
-    if (brain) {
-      const sessions = await listSessionIds(this.rootDir, brain);
-      if (!session || !sessions.includes(session)) session = sessions[0] ?? "";
+    // No saved brain, or it no longer exists on disk — show the selection overlay
+    if (!brain || !brainIds.includes(brain)) {
+      this.activeBrain   = "";
+      this.activeSession = "";
+      return true;
     }
+
+    // Brain found; auto-select the most recent session
+    const sessions = await listSessionIds(this.rootDir, brain);
     this.activeBrain   = brain;
-    this.activeSession = session;
-    if (brain && session) await this.writeConfig({ activeBrain: brain, activeSession: session });
+    this.activeSession = (!session || !sessions.includes(session)) ? (sessions[0] ?? "") : session;
+    if (this.activeBrain && this.activeSession)
+      await this.writeConfig({ activeBrain: this.activeBrain, activeSession: this.activeSession });
+    return false;
   }
 
   private eventsPath(): string {
