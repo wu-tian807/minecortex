@@ -1,7 +1,7 @@
 /** @desc Recorder subscription — pure event writer to events.jsonl + qa.md (no stdout) */
 
 import { readFile, appendFile, mkdir } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, watch as watchFs } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Event, EventSource, SourceContext, BrainJson } from "../src/core/types.js";
 import type { LLMMessage } from "../src/llm/types.js";
@@ -56,6 +56,9 @@ function getShowThinking(ctx: SourceContext): boolean {
 class EventRecorder {
   private qaPath: string;
   private eventsPath: string | null = null;
+  private brainDir: string | null = null;
+  private currentSessionId: string | null = null;
+  private sessionWatcher: ReturnType<typeof watchFs> | null = null;
   private dirCreated = false;
   private closed = false;
 
@@ -64,6 +67,7 @@ class EventRecorder {
   }
 
   async init(brainDir: string): Promise<void> {
+    this.brainDir = brainDir;
     await this.ensureQaDir();
     let isResume = false;
     try {
@@ -72,9 +76,9 @@ class EventRecorder {
       ) as { currentSessionId?: string };
       const sid = sessionJson.currentSessionId;
       if (sid) {
+        this.currentSessionId = sid;
         this.eventsPath = join(brainDir, "sessions", sid, "events.jsonl");
         await mkdir(dirname(this.eventsPath), { recursive: true });
-        // Check if events.jsonl already has content (this is a restart)
         try {
           const existing = await readFile(this.eventsPath, "utf-8");
           isResume = existing.trim().length > 0;
@@ -82,11 +86,38 @@ class EventRecorder {
       }
     } catch { /* no session yet */ }
 
-    // Restart boundary: only in qa.md (human-readable log), not events.jsonl.
-    // session_resume is transient UI state, not conversation history.
     if (isResume) {
       await this.writeQA("\n---\n\n");
     }
+
+    this.watchSessionJson();
+  }
+
+  private watchSessionJson(): void {
+    if (!this.brainDir) return;
+    const sessionJsonPath = join(this.brainDir, "session.json");
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    try {
+      this.sessionWatcher = watchFs(sessionJsonPath, () => {
+        if (debounce) clearTimeout(debounce);
+        debounce = setTimeout(() => { this.onSessionJsonChange().catch(() => {}); }, 100);
+      });
+    } catch { /* file may not exist yet */ }
+  }
+
+  private async onSessionJsonChange(): Promise<void> {
+    if (!this.brainDir || this.closed) return;
+    try {
+      const sessionJson = JSON.parse(
+        await readFile(join(this.brainDir, "session.json"), "utf-8")
+      ) as { currentSessionId?: string };
+      const newSid = sessionJson.currentSessionId;
+      if (!newSid || newSid === this.currentSessionId) return;
+
+      this.currentSessionId = newSid;
+      this.eventsPath = join(this.brainDir, "sessions", newSid, "events.jsonl");
+      await mkdir(dirname(this.eventsPath), { recursive: true });
+    } catch { /* ignore transient read errors */ }
   }
 
   private async ensureQaDir(): Promise<void> {
@@ -190,6 +221,8 @@ class EventRecorder {
 
   close(): void {
     this.closed = true;
+    this.sessionWatcher?.close();
+    this.sessionWatcher = null;
   }
 }
 
