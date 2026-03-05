@@ -7,9 +7,10 @@ import { C } from "./ansi.js";
 export type RendererEvent =
   | { k: "user_input";   text: string; ts: number }
   | { k: "brain_message"; source: string; text: string; ts: number }
-  | { k: "assistant";    text?: string; thinking?: string; ts: number }
-  | { k: "tool_call";    name: string; args: Record<string, unknown>; ts: number }
-  | { k: "tool_result";  name: string; preview: string; durationMs: number; ts: number }
+  | { k: "cli_message";  source: string; text: string; ts: number }
+  | { k: "assistant";    brain?: string; text?: string; thinking?: string; ts: number }
+  | { k: "tool_call";    brain?: string; name: string; args: Record<string, unknown>; ts: number }
+  | { k: "tool_result";  brain?: string; name: string; preview: string; durationMs: number; ts: number }
   | { k: "todo_update";  todos: Array<{ id: string; content: string; status: string }>; ts: number }
   // Transient turn boundaries — used for the thinking indicator, not displayed as content
   | { k: "turn_start"; ts: number }
@@ -51,20 +52,25 @@ export function formatEvent(ev: RendererEvent): string | null {
       return `${C.cyan}> ${ev.text}${C.reset}\n`;
 
     case "brain_message":
-      return `${C.magenta}⟵ from \`${ev.source}\`:${C.reset} ${ev.text.slice(0, 200)}\n\n`;
+      return `${C.magenta}⟵ ${ev.source}:${C.reset} ${ev.text.slice(0, 200)}\n\n`;
+
+    case "cli_message":
+      return `${C.yellow}📨 ${ev.source}:${C.reset} ${ev.text.slice(0, 200)}\n\n`;
 
     case "assistant": {
       const text    = ev.text ? stripThinking(ev.text) : "";
       const thinking = ev.thinking?.trim();
+      const tag = ev.brain ? `${C.cyan}[${ev.brain}]${C.reset} ` : "";
       let out = "";
       if (thinking) {
-        out += `${C.dim}💭 ${thinking.slice(0, 300)}${thinking.length > 300 ? "…" : ""}${C.reset}\n`;
+        out += `${C.dim}💭 ${tag}${thinking.slice(0, 300)}${thinking.length > 300 ? "…" : ""}${C.reset}\n`;
       }
-      if (text) out += `${text}\n`;
+      if (text) out += `${tag}${text}\n`;
       return out ? out + "\n" : null;
     }
 
     case "tool_call": {
+      const tag = ev.brain ? `${C.dim}${ev.brain}${C.reset} ` : "";
       if (ev.name === "spawn_thought") {
         const task = String(ev.args?.task ?? "");
         const type = String(ev.args?.type ?? "");
@@ -77,10 +83,11 @@ export function formatEvent(ev: RendererEvent): string | null {
       const icon = TOOL_ICONS[ev.name] ?? "▸";
       const argsStr = JSON.stringify(ev.args);
       const preview = argsStr.length > 80 ? argsStr.slice(0, 77) + "..." : argsStr;
-      return `  ${C.cyan}${icon} ${ev.name}${C.reset}${C.dim}(${preview})${C.reset}\n`;
+      return `  ${tag}${C.cyan}${icon} ${ev.name}${C.reset}${C.dim}(${preview})${C.reset}\n`;
     }
 
     case "tool_result": {
+      const tag = ev.brain ? `${C.dim}${ev.brain} ${C.reset}` : "";
       if (ev.name === "spawn_thought") {
         let status = "completed";
         try {
@@ -94,7 +101,7 @@ export function formatEvent(ev: RendererEvent): string | null {
       }
       const oneliner = ev.preview.replace(/\n/g, " ");
       const display = oneliner.length > 200 ? oneliner.slice(0, 197) + "..." : oneliner;
-      return `  ${C.dim}← ${ev.name} (${ev.durationMs}ms): ${display}${C.reset}\n`;
+      return `  ${tag}${C.dim}← ${ev.name} (${ev.durationMs}ms): ${display}${C.reset}\n`;
     }
 
     case "todo_update": {

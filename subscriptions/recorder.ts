@@ -61,9 +61,11 @@ class EventRecorder {
   private sessionWatcher: ReturnType<typeof watchFs> | null = null;
   private dirCreated = false;
   private closed = false;
+  private brainId: string;
 
-  constructor(logDir: string) {
+  constructor(logDir: string, brainId: string) {
     this.qaPath = join(logDir, "qa.md");
+    this.brainId = brainId;
   }
 
   async init(brainDir: string): Promise<void> {
@@ -82,7 +84,9 @@ class EventRecorder {
         try {
           const existing = await readFile(this.eventsPath, "utf-8");
           isResume = existing.trim().length > 0;
-        } catch { /* new file */ }
+        } catch {
+          await appendFile(this.eventsPath, "", "utf-8");
+        }
       }
     } catch { /* no session yet */ }
 
@@ -149,6 +153,11 @@ class EventRecorder {
     this.writeQA(`> ⟵ from \`${source}\`: ${text}\n\n`).catch(() => {});
   }
 
+  recordCliMessage(source: string, text: string): void {
+    this.appendEvent({ k: "cli_message", source, text, ts: Date.now() }).catch(() => {});
+    this.writeQA(`> 📨 \`${source}\` → cli: ${text}\n\n`).catch(() => {});
+  }
+
   recordAssistantMessage(msg: LLMMessage): void {
     const raw = typeof msg.content === "string" ? msg.content : "";
     const text = raw.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
@@ -167,6 +176,7 @@ class EventRecorder {
 
     this.appendEvent({
       k: "assistant",
+      brain: this.brainId,
       ...(text ? { text } : {}),
       ...(thinking ? { thinking } : {}),
       ts: Date.now(),
@@ -185,7 +195,7 @@ class EventRecorder {
     } else {
       this.writeQA(`> ${icon} \`${name}\`(${preview})\n`).catch(() => {});
     }
-    this.appendEvent({ k: "tool_call", name, args, ts: Date.now() }).catch(() => {});
+    this.appendEvent({ k: "tool_call", brain: this.brainId, name, args, ts: Date.now() }).catch(() => {});
   }
 
   recordToolResult(name: string, result: unknown, durationMs: number): void {
@@ -204,7 +214,7 @@ class EventRecorder {
     }
 
     const evPreview = resultStr.slice(0, 300);
-    this.appendEvent({ k: "tool_result", name, preview: evPreview, durationMs, ts: Date.now() }).catch(() => {});
+    this.appendEvent({ k: "tool_result", brain: this.brainId, name, preview: evPreview, durationMs, ts: Date.now() }).catch(() => {});
   }
 
   recordTurnEnd(): void {
@@ -230,7 +240,7 @@ export default function create(ctx: SourceContext): EventSource {
   const unsubs: (() => void)[] = [];
   const logsDir = ctx.brain.pathManager.logsDir(ctx.brain.id);
   const brainDir = ctx.brain.pathManager.brainDir(ctx.brain.id);
-  const recorder = new EventRecorder(logsDir);
+  const recorder = new EventRecorder(logsDir, ctx.brain.id);
   const _showThinking = getShowThinking(ctx);
 
   return {
@@ -243,12 +253,12 @@ export default function create(ctx: SourceContext): EventSource {
       unsubs.push(
         ctx.brain.hooks.on(HookEvent.EventReceived, ({ events }) => {
           for (const e of events) {
-            if (e.source === "user" && e.type === "user_input") {
+            if (e.type === "user_input") {
               const text = (e.payload as { text?: string })?.text ?? "";
               recorder.recordUserInput(text);
-            } else if (e.source !== "user" && e.type === "message") {
-              const payload = e.payload as { text?: string; from?: string } | undefined;
-              const text = payload?.text ?? JSON.stringify(e.payload);
+            } else if (e.type === "message") {
+              const payload = e.payload as { content?: string; summary?: string } | undefined;
+              const text = payload?.content ?? JSON.stringify(e.payload);
               recorder.recordBrainMessage(e.source, text);
             }
           }
@@ -278,6 +288,17 @@ export default function create(ctx: SourceContext): EventSource {
       ));
 
       unsubs.push(ctx.brain.hooks.on(HookEvent.TurnEnd, () => recorder.recordTurnEnd()));
+
+      // Messages addressed to "cli" (user) — observed globally since they don't enter any brain queue
+      unsubs.push(
+        ctx.brain.eventBus.observe((e) => {
+          if (e.type === "message" && e.to === "cli") {
+            const payload = e.payload as { content?: string; summary?: string } | undefined;
+            const text = payload?.content ?? JSON.stringify(e.payload);
+            recorder.recordCliMessage(e.source, text);
+          }
+        })
+      );
 
       // BrainBoard reactive todo state
       unsubs.push(

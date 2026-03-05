@@ -3,16 +3,16 @@ import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
 export default {
   name: "send_message",
   description:
-    "Send a natural language message to another brain. " +
+    "Send a natural language message to another brain or to the user. " +
     "Messages are delivered to the recipient's next tick. " +
-    "Use '*' as target to broadcast to all brains. " +
+    "Use '*' to broadcast to all brains, or 'cli' to send directly to the user's terminal. " +
     "After sending, output a brief confirmation and end your turn — do not wait for a reply.",
   input_schema: {
     type: "object",
     properties: {
       to: {
         type: "string",
-        description: "Target brain ID (e.g. 'creative') or '*' for broadcast",
+        description: "Target brain ID (e.g. 'talker'), '*' for broadcast, or 'cli' for the user's terminal",
       },
       content: {
         type: "string",
