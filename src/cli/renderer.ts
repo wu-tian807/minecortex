@@ -2,7 +2,7 @@
 
 import * as readline from "node:readline";
 import { watch, readFileSync, existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import { C, cursorToCol0, cursorToCol, cursorUp, cursorDown, clearLine, clearToEnd } from "./ansi.js";
@@ -284,6 +284,9 @@ export class CLIRenderer {
         try { this.printEvent(JSON.parse(line) as RendererEvent); } catch { /* skip */ }
       }
       this.tailOffset = Buffer.byteLength(raw, "utf-8");
+    } else {
+      await mkdir(join(path, ".."), { recursive: true });
+      await writeFile(path, "", "utf-8");
     }
 
     this.startTail();
