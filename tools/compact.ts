@@ -95,7 +95,19 @@ export default {
       ? lastUsage.inputTokens + lastUsage.outputTokens
       : 0;
 
-    const compacted = microCompact(messages, { keepToolResults: 3, keepMedias: 2 });
+    // If the last message is an assistant with unresolved tool_calls, it means compact
+    // is running as part of a parallel tool batch — those results haven't been written yet.
+    // Park the message so repairToolPairing doesn't add synthetic results for in-flight calls;
+    // the real results will be appended to the new session after compact returns.
+    const lastMsg = messages[messages.length - 1];
+    const isInFlight =
+      lastMsg?.role === "assistant" &&
+      lastMsg.toolCalls &&
+      lastMsg.toolCalls.length > 0;
+    const baseMessages = isInFlight ? messages.slice(0, -1) : messages;
+    const parked: LLMMessage | null = isInFlight ? lastMsg : null;
+
+    const compacted = microCompact(baseMessages, { keepToolResults: 3, keepMedias: 2 });
     const repaired = repairToolPairing(compacted);
 
     let modelName: string | undefined;
@@ -139,7 +151,9 @@ export default {
     }
 
     const { summary, keptMessages } = await summarizeForCompaction(repaired, 0.7, summarizer);
-    const newMessages = [summary, ...keptMessages];
+    // Re-attach the in-flight assistant message so the real results appended after this
+    // tool returns have a matching tool_use block in the new session.
+    const newMessages = [summary, ...keptMessages, ...(parked ? [parked] : [])];
 
     const newSessionId = `s_${Date.now()}`;
     const newSessionDir = join(brainDir, "sessions", newSessionId);
