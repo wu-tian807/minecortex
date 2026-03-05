@@ -11,6 +11,8 @@ import { listBrainIds, listSessionIds } from "./fs-helpers.js";
 import { SelectOverlay } from "./select-overlay.js";
 import { StatusBar } from "./status-bar.js";
 import { parseCommand } from "../core/command-parser.js";
+import { PathManager } from "../fs/path-manager.js";
+import { SessionManager } from "../session/session-manager.js";
 
 // ─── Public types ───
 
@@ -500,19 +502,29 @@ export class CLIRenderer {
     const targetBrain = brainId ?? this.activeBrain;
     if (!targetBrain) { this.print(`${C.dim}未指定 brain${C.reset}\n`); return; }
     const sessions = await listSessionIds(this.rootDir, targetBrain);
-    if (!sessions.length) { this.print(`${C.dim}${targetBrain} 没有 session${C.reset}\n`); return; }
 
     const items = sessions.map(sid => ({
       label: sid,
       hint:  targetBrain === this.activeBrain && sid === this.activeSession ? "(active)" : undefined,
     }));
+    items.push({ label: "+ New Session", hint: undefined });
+
+    const activeIdx = sessions.indexOf(this.activeSession);
     this.openOverlay(
-      new SelectOverlay(`${targetBrain} sessions`, items, Math.max(0, sessions.indexOf(this.activeSession))),
+      new SelectOverlay(`${targetBrain} sessions`, items, Math.max(0, activeIdx)),
       async (idx) => {
-        const sid = sessions[idx];
-        if (sid) {
-          this.print(`${C.dim}切换到 ${targetBrain} / ${sid}${C.reset}\n`);
-          await this.switchTo(targetBrain, sid);
+        if (idx === sessions.length) {
+          const pm = new PathManager(this.rootDir);
+          const sm = new SessionManager(targetBrain, pm);
+          const newSid = await sm.createSession();
+          this.print(`${C.dim}新建 session: ${targetBrain} / ${newSid}${C.reset}\n`);
+          await this.switchTo(targetBrain, newSid);
+        } else {
+          const sid = sessions[idx];
+          if (sid) {
+            this.print(`${C.dim}切换到 ${targetBrain} / ${sid}${C.reset}\n`);
+            await this.switchTo(targetBrain, sid);
+          }
         }
       },
     );
