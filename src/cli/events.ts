@@ -54,8 +54,14 @@ export function formatEvent(ev: RendererEvent): string | null {
       return `${C.magenta}⟵ from \`${ev.source}\`:${C.reset} ${ev.text.slice(0, 200)}\n\n`;
 
     case "assistant": {
-      const text = ev.text ? stripThinking(ev.text) : "";
-      return text ? `${text}\n\n` : null;
+      const text    = ev.text ? stripThinking(ev.text) : "";
+      const thinking = ev.thinking?.trim();
+      let out = "";
+      if (thinking) {
+        out += `${C.dim}💭 ${thinking.slice(0, 300)}${thinking.length > 300 ? "…" : ""}${C.reset}\n`;
+      }
+      if (text) out += `${text}\n`;
+      return out ? out + "\n" : null;
     }
 
     case "tool_call": {
