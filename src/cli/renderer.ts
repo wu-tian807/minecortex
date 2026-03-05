@@ -24,7 +24,7 @@ export interface RendererCallbacks {
 // ─── Internal types ───
 
 interface MineclawJson {
-  renderer?: { activeBrain?: string; activeSession?: string };
+  renderer?: { activeBrain?: string };
   [key: string]: unknown;
 }
 
@@ -45,6 +45,7 @@ export class CLIRenderer {
   // Tail state
   private tailOffset = 0;
   private fsWatcher: ReturnType<typeof watch> | null = null;
+  private sessionWatcher: ReturnType<typeof watch> | null = null;
   private stopped = false;
 
   // TTY / raw mode
@@ -82,6 +83,7 @@ export class CLIRenderer {
   stop(): void {
     this.stopped = true;
     this.fsWatcher?.close();
+    this.sessionWatcher?.close();
     this.statusBar.stop();
     if (this.isTTY) {
       try { process.stdin.setRawMode(false); } catch { /* ignore */ }
@@ -211,17 +213,36 @@ export class CLIRenderer {
     catch { return {}; }
   }
 
-  private async writeConfig(r: { activeBrain?: string; activeSession?: string }): Promise<void> {
+  private async writeConfig(activeBrain: string): Promise<void> {
     const cfg = this.readConfig();
-    await writeFile(this.configPath, JSON.stringify({ ...cfg, renderer: { ...cfg.renderer, ...r } }, null, 2));
+    await writeFile(this.configPath, JSON.stringify({ ...cfg, renderer: { activeBrain } }, null, 2));
+  }
+
+  /** Write currentSessionId to a brain's session.json (single source of truth for active session). */
+  private async writeSessionJson(brainId: string, sessionId: string): Promise<void> {
+    const sessionJsonPath = join(this.rootDir, "brains", brainId, "session.json");
+    try {
+      let data: Record<string, unknown> = {};
+      try { data = JSON.parse(readFileSync(sessionJsonPath, "utf-8")); } catch { /* fresh */ }
+      data.currentSessionId = sessionId;
+      await writeFile(sessionJsonPath, JSON.stringify(data, null, 2));
+    } catch { /* ignore */ }
+  }
+
+  /** Read currentSessionId from a brain's session.json. */
+  private readSessionJson(brainId: string): string {
+    try {
+      const sessionJsonPath = join(this.rootDir, "brains", brainId, "session.json");
+      const data = JSON.parse(readFileSync(sessionJsonPath, "utf-8")) as { currentSessionId?: string };
+      return data.currentSessionId ?? "";
+    } catch { return ""; }
   }
 
   // ─── Resolve active brain + session ───
 
   private async resolveActive(): Promise<boolean> {
     const cfg      = this.readConfig();
-    const brain    = cfg.renderer?.activeBrain   ?? "";
-    const session  = cfg.renderer?.activeSession ?? "";
+    const brain    = cfg.renderer?.activeBrain ?? "";
     const brainIds = await listBrainIds(this.rootDir);
 
     // No saved brain, or it no longer exists on disk — show the selection overlay
@@ -232,13 +253,12 @@ export class CLIRenderer {
       return true;
     }
 
-    // Brain found; auto-select the most recent session
+    // session.json is the single source of truth for which session is current
+    const session = this.readSessionJson(brain);
     const sessions = await listSessionIds(this.rootDir, brain);
     this.activeBrain   = brain;
-    this.activeSession = (!session || !sessions.includes(session)) ? (sessions[0] ?? "") : session;
+    this.activeSession = (session && sessions.includes(session)) ? session : (sessions[0] ?? "");
     this.statusBar.setContext(this.activeBrain, this.activeSession);
-    if (this.activeBrain && this.activeSession)
-      await this.writeConfig({ activeBrain: this.activeBrain, activeSession: this.activeSession });
     return false;
   }
 
@@ -277,6 +297,32 @@ export class CLIRenderer {
       if (debounce) clearTimeout(debounce);
       debounce = setTimeout(() => this.readNewLines(), 50);
     });
+
+    this.watchSessionJson();
+  }
+
+  private watchSessionJson(): void {
+    this.sessionWatcher?.close();
+    if (!this.activeBrain) return;
+    const sessionJsonPath = join(this.rootDir, "brains", this.activeBrain, "session.json");
+    if (!existsSync(sessionJsonPath)) return;
+
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    this.sessionWatcher = watch(sessionJsonPath, () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => this.onSessionJsonChange(), 120);
+    });
+  }
+
+  private onSessionJsonChange(): void {
+    if (!this.activeBrain) return;
+    try {
+      const sessionJsonPath = join(this.rootDir, "brains", this.activeBrain, "session.json");
+      const data = JSON.parse(readFileSync(sessionJsonPath, "utf-8")) as { currentSessionId?: string };
+      const newSid = data.currentSessionId;
+      if (!newSid || newSid === this.activeSession) return;
+      this.switchTo(this.activeBrain, newSid).catch(() => {});
+    } catch { /* ignore */ }
   }
 
   private async readNewLines(): Promise<void> {
@@ -302,10 +348,12 @@ export class CLIRenderer {
     this.activeBrain  = brainId;
     this.activeSession = sessionId;
     this.statusBar.setContext(brainId, sessionId);
-    // Stop any in-progress spinner — the previous session's turn is irrelevant now
     this.setThinking(false);
     this.subscribeContext(brainId);
-    await this.writeConfig({ activeBrain: brainId, activeSession: sessionId });
+    // session.json is the truth — update it so the brain uses this session going forward
+    await this.writeSessionJson(brainId, sessionId);
+    // activeBrain is the only thing persisted in mineclaw.json
+    await this.writeConfig(brainId);
     // Clear screen, re-establish the 2-line footer anchor, then replay new session
     process.stdout.write("\x1b[2J\x1b[H");
     this.drawFooter();
