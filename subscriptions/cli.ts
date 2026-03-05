@@ -1,4 +1,8 @@
-/** @desc Stdin subscription — terminal input as EventSource */
+/** @desc CLI subscription — terminal input as EventSource
+ *
+ *  In TTY mode the CLIRenderer owns stdin (raw mode) and broadcasts user_input
+ *  to all brains via EventBus.  This subscription only creates its own readline
+ *  in non-TTY (piped) mode as a fallback. */
 
 import * as readline from "node:readline";
 import type { Event, EventSource, SourceContext } from "../src/core/types.js";
@@ -8,9 +12,11 @@ export default function create(ctx: SourceContext): EventSource {
   let rl: readline.Interface | null = null;
 
   return {
-    name: "stdin",
+    name: "cli",
 
     start(emit: (event: Event) => void) {
+      if (process.stdin.isTTY) return;
+
       rl = readline.createInterface({ input: process.stdin });
 
       rl.on("line", (line) => {
@@ -26,7 +32,7 @@ export default function create(ctx: SourceContext): EventSource {
         }
 
         emit({
-          source: "stdin",
+          source: "cli",
           type: "user_input",
           payload: { text: trimmed },
           ts: Date.now(),
