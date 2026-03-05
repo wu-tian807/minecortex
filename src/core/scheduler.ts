@@ -97,6 +97,11 @@ export class Scheduler {
     return this.brains.get(id) ?? null;
   }
 
+  /** Route an event through the shared EventBus (e.g. renderer → agent via payload.to). */
+  emit(event: import("./types.js").Event): void {
+    this.eventBus.emit(event);
+  }
+
   async start(): Promise<void> {
     this.logger.info("scheduler", 0, "启动中...");
 

@@ -119,7 +119,7 @@ export class Logger {
         process.stderr.write(line);
         break;
       case LogLevel.INFO:
-        process.stdout.write(line);
+        process.stderr.write(line);
         break;
       case LogLevel.WARN:
       case LogLevel.ERROR:
