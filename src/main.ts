@@ -1,6 +1,6 @@
 /** @desc MineClaw 入口 — 注册所有 LLM 适配器，启动 Scheduler + CLIRenderer */
 
-import { createWriteStream } from "node:fs";
+import { createWriteStream, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Redirect stderr (logger output) to debug.log — keeps terminal clean for the renderer
@@ -17,6 +17,7 @@ import { Scheduler } from "./core/scheduler.js";
 import { ConsciousBrain } from "./core/brain.js";
 import { CLIRenderer } from "./cli/renderer.js";
 import { ensureDefaultConfigs } from "./defaults/index.js";
+import { getModelSpec } from "./llm/provider.js";
 
 async function main() {
   process.stdout.write("╔════════════════════════════════╗\n");
@@ -45,6 +46,32 @@ async function main() {
       if (brain instanceof ConsciousBrain) {
         brain.queueCommand(toolName, args);
       }
+    },
+    // Watch context usage ratio for the status bar ring indicator
+    watchContextUsage: (brainId, cb) => {
+      let contextWindow: number | null = null;
+      try {
+        const brainJson = JSON.parse(readFileSync(join(process.cwd(), "brains", brainId, "brain.json"), "utf-8")) as {
+          model?: string | string[];
+          models?: { model?: string | string[] };
+        };
+        const rawModel  = brainJson.models?.model ?? brainJson.model;
+        const modelName = Array.isArray(rawModel) ? rawModel[0] : rawModel;
+        if (modelName) contextWindow = getModelSpec(modelName).contextWindow ?? null;
+      } catch { /* ignore */ }
+
+      const toRatio = (value: unknown) => {
+        const tokens = typeof value === "number" && value > 0 ? value : null;
+        return tokens !== null && contextWindow ? tokens / contextWindow : null;
+      };
+
+      // Fire immediately with the current persisted value (watch only fires on changes)
+      const current = scheduler.getBrainBoard().get(brainId, "currentContextUsage");
+      if (current !== undefined) cb(toRatio(current));
+
+      return scheduler.getBrainBoard().watch(brainId, "currentContextUsage", (value) => {
+        cb(toRatio(value));
+      });
     },
   });
   await renderer.start();

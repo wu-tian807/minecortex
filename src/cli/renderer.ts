@@ -9,6 +9,7 @@ import { C, cursorToCol0, cursorToCol, cursorUp, cursorDown, clearLine, clearToE
 import { type RendererEvent, formatEvent } from "./events.js";
 import { listBrainIds, listSessionIds } from "./fs-helpers.js";
 import { SelectOverlay } from "./select-overlay.js";
+import { StatusBar } from "./status-bar.js";
 import { parseCommand } from "../core/command-parser.js";
 
 // ─── Public types ───
@@ -16,6 +17,8 @@ import { parseCommand } from "../core/command-parser.js";
 export interface RendererCallbacks {
   onUserInput(brainId: string, text: string): void;
   onBrainCommand(brainId: string, toolName: string, args: Record<string, string>): void;
+  /** Watch context usage ratio (0–1) for the given brain. Returns an unsubscribe fn. */
+  watchContextUsage(brainId: string, cb: (ratio: number | null) => void): () => void;
 }
 
 // ─── Internal types ───
@@ -27,7 +30,6 @@ interface MineclawJson {
 
 const PROMPT             = `${C.cyan}›${C.reset} `;
 const PROMPT_VISIBLE_LEN = 2; // "› "
-const SPINNER_FRAMES     = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 // ─── CLIRenderer ───
 
@@ -57,10 +59,8 @@ export class CLIRenderer {
   /** Prints queued while overlay is open — flushed on close. */
   private pendingPrints: string[] = [];
 
-  // Spinner / thinking state
-  private isThinking    = false;
-  private spinnerFrame  = 0;
-  private spinnerTimer: ReturnType<typeof setInterval> | null = null;
+  // Status bar component (brain/session label + context ring + spinner)
+  private statusBar = new StatusBar();
 
   constructor(rootDir: string, callbacks: RendererCallbacks) {
     this.rootDir    = rootDir;
@@ -74,6 +74,7 @@ export class CLIRenderer {
     if (needsSelection) {
       await this.showBrainsOverlay(); // non-blocking; key events drive the rest
     } else {
+      this.subscribeContext(this.activeBrain);
       await this.replayAndTail();
     }
   }
@@ -81,7 +82,7 @@ export class CLIRenderer {
   stop(): void {
     this.stopped = true;
     this.fsWatcher?.close();
-    if (this.spinnerTimer) { clearInterval(this.spinnerTimer); this.spinnerTimer = null; }
+    this.statusBar.stop();
     if (this.isTTY) {
       try { process.stdin.setRawMode(false); } catch { /* ignore */ }
     }
@@ -98,13 +99,7 @@ export class CLIRenderer {
   // redrawStatusBar() only redraws line N-1 (for spinner updates).
 
   private writeStatusBar(): void {
-    const spinner  = this.isThinking
-      ? ` ${C.yellow}${SPINNER_FRAMES[this.spinnerFrame]}${C.reset}`
-      : "";
-    const session  = this.activeSession ? `…${this.activeSession.slice(-14)}` : "—";
-    const cols     = process.stdout.columns ?? 80;
-    const base     = `brain: ${this.activeBrain || "—"}  session: ${session}`;
-    process.stdout.write(`${C.dim}${base.slice(0, cols - 4)}${C.reset}${spinner}`);
+    process.stdout.write(this.statusBar.render());
   }
 
   private drawFooter(): void {
@@ -141,21 +136,19 @@ export class CLIRenderer {
     clearToEnd();             // clear status bar + input line
   }
 
+  // ─── Context usage subscription ───
+
+  private subscribeContext(brainId: string): void {
+    this.statusBar.contextRing.subscribe(brainId, this.callbacks.watchContextUsage, () => {
+      this.redrawStatusBar();
+    });
+  }
+
   // ─── Thinking indicator ───
 
   private setThinking(v: boolean): void {
-    if (v === this.isThinking) return;
-    this.isThinking = v;
-    if (v) {
-      this.spinnerFrame = 0;
-      this.spinnerTimer = setInterval(() => {
-        this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
-        this.redrawStatusBar();
-      }, 100);
-    } else {
-      if (this.spinnerTimer) { clearInterval(this.spinnerTimer); this.spinnerTimer = null; }
-      this.redrawStatusBar();
-    }
+    this.statusBar.setThinking(v, () => this.redrawStatusBar());
+    if (!v) this.redrawStatusBar();
   }
 
   // ─── Output ───
@@ -235,6 +228,7 @@ export class CLIRenderer {
     if (!brain || !brainIds.includes(brain)) {
       this.activeBrain   = "";
       this.activeSession = "";
+      this.statusBar.setContext("", "");
       return true;
     }
 
@@ -242,6 +236,7 @@ export class CLIRenderer {
     const sessions = await listSessionIds(this.rootDir, brain);
     this.activeBrain   = brain;
     this.activeSession = (!session || !sessions.includes(session)) ? (sessions[0] ?? "") : session;
+    this.statusBar.setContext(this.activeBrain, this.activeSession);
     if (this.activeBrain && this.activeSession)
       await this.writeConfig({ activeBrain: this.activeBrain, activeSession: this.activeSession });
     return false;
@@ -306,8 +301,10 @@ export class CLIRenderer {
     this.tailOffset   = 0;
     this.activeBrain  = brainId;
     this.activeSession = sessionId;
+    this.statusBar.setContext(brainId, sessionId);
     // Stop any in-progress spinner — the previous session's turn is irrelevant now
     this.setThinking(false);
+    this.subscribeContext(brainId);
     await this.writeConfig({ activeBrain: brainId, activeSession: sessionId });
     // Clear screen, re-establish the 2-line footer anchor, then replay new session
     process.stdout.write("\x1b[2J\x1b[H");

@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export default function create(ctx: SourceContext): EventSource {
-  const threshold = (ctx.eventConfig?.threshold as number) ?? 0.6;
+  const threshold = (ctx.eventConfig?.threshold as number) ?? 1.0;
   let unwatch: (() => void) | null = null;
   let compacting = false;
 
