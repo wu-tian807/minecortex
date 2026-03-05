@@ -365,6 +365,7 @@ export class Scheduler {
       hooks: brain.hooks,
       brainBoard: this.brainBoard,
       pathManager: this.pathManager,
+      eventBus: brain.boundEventBus,
       queueCommand: (toolName, args, reason) => {
         if (brain instanceof ConsciousBrain) {
           brain.queueCommand(toolName, args, reason);

@@ -191,7 +191,7 @@ export default {
           pathManager: ctx.pathManager,
           terminalManager: ctx.terminalManager,
           workspace: ctx.workspace,
-          emit: ctx.emit,
+          eventBus: ctx.eventBus,
           logger: ctx.logger,
         });
 
@@ -207,7 +207,7 @@ export default {
 
         ctx.brainBoard.set(thoughtBrainId, "result", result.slice(0, 500));
 
-        ctx.emit({
+        ctx.eventBus.emitToSelf({
           source: `tool:spawn_thought`,
           type: "thought_result",
           payload: { thoughtId, type, result, todoId },
@@ -222,7 +222,7 @@ export default {
 
         ctx.brainBoard.set(thoughtBrainId, "error", errorMsg);
 
-        ctx.emit({
+        ctx.eventBus.emitToSelf({
           source: `tool:spawn_thought`,
           type: "thought_error",
           payload: { thoughtId, type, error: errorMsg, todoId },

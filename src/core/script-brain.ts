@@ -17,7 +17,7 @@ export class ScriptBrain extends BaseBrain {
     super(config);
     this.ctx = {
       brainId: this.id,
-      emit: this.emitFn,
+      eventBus: this.boundEventBus,
       brainBoard: this.brainBoard,
     };
   }

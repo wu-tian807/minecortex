@@ -6,6 +6,7 @@ import type {
   BrainJson,
   Event,
   EventSource,
+  EventBusAPI,
   BrainBoardAPI,
   PathManagerAPI,
   TerminalManagerAPI,
@@ -36,8 +37,8 @@ export abstract class BaseBrain implements BrainInterface {
   protected readonly logger: Logger;
   protected readonly eventBus: EventBus;
 
-  // Emit function (routes events to local queue or cross-brain via eventBus)
-  protected readonly emitFn: (event: Event) => void;
+  /** Brain-bound EventBus facade exposed to tools, subscriptions and scheduler. */
+  readonly boundEventBus: EventBusAPI;
 
   constructor(config: BrainInitConfig) {
     this.id = config.id;
@@ -58,14 +59,13 @@ export abstract class BaseBrain implements BrainInterface {
     // Register this brain's queue with the event bus
     this.eventBus.register(this.id, this.queue);
 
-    // Build emit function that routes cross-brain events
-    this.emitFn = (event: Event): void => {
-      const to = (event.payload as Record<string, unknown>)?.to as string | undefined;
-      if (to && to !== this.id) {
-        this.eventBus.emit(event, this.id);
-      } else {
-        this.queue.push(event);
-      }
+    // Bound facade: emit() goes through globalHandlers+routing; emitToSelf() goes to own queue only.
+    const brainId = this.id;
+    const bus = this.eventBus;
+    const queue = this.queue;
+    this.boundEventBus = {
+      emit: (event: Event) => bus.emit(event, brainId),
+      emitToSelf: (event: Event) => queue.push(event),
     };
   }
 

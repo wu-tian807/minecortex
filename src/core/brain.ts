@@ -4,6 +4,7 @@ import type {
   BrainInitConfig,
   BrainJson,
   Event,
+  EventBusAPI,
   ToolDefinition,
   ToolContext,
   DynamicSlotAPI,
@@ -42,7 +43,7 @@ export interface AgentLoopOpts {
   pathManager: import("./types.js").PathManagerAPI;
   terminalManager: import("./types.js").TerminalManagerAPI;
   workspace: string;
-  emit: (event: Event) => void;
+  eventBus: EventBusAPI;
   logger?: import("./logger.js").Logger;
   /** Persistent session — when provided, history is read from file each iteration (no in-memory cache). */
   sessionManager?: SessionManager;
@@ -58,7 +59,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
   const {
     brainId, provider, tools, contextEngine,
     modelSpec, maxIterations, signal, brainBoard, slotRegistry,
-    pathManager, terminalManager, workspace, emit, logger,
+    pathManager, terminalManager, workspace, eventBus, logger,
     sessionManager, turn = 0, onAssistantMessage, hooks,
     keepToolResults = 8, showThinking = false,
   } = opts;
@@ -70,7 +71,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
   const toolCtx: ToolContext = {
     brainId,
     signal,
-    emit,
+    eventBus,
     brainBoard,
     slot: slotRegistry,
     pathManager,
@@ -347,7 +348,7 @@ export class ConsciousBrain extends BaseBrain {
         pathManager: this.pathManager,
         terminalManager: this.terminalManager,
         workspace: this.workspace,
-        emit: this.emitFn,
+        eventBus: this.boundEventBus,
         logger: this.logger,
         sessionManager: this.sessionManager,
         turn: this.currentTurn,
@@ -397,7 +398,7 @@ export class ConsciousBrain extends BaseBrain {
     const toolCtx: ToolContext = {
       brainId: this.id,
       signal,
-      emit: this.emitFn,
+      eventBus: this.boundEventBus,
       brainBoard: this.brainBoard,
       slot: this.slotRegistry,
       pathManager: this.pathManager,

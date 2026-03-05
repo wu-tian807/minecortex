@@ -43,7 +43,7 @@ export default {
 
     if (!to || !content) return '"to" and "content" are required';
 
-    ctx.emit({
+    ctx.eventBus.emit({
       source: `brain:${ctx.brainId}`,
       type: "message",
       payload: { to, content, summary },

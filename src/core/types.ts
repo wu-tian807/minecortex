@@ -20,6 +20,14 @@ export interface EventQueueInterface {
   onSteer(cb: () => void): { dispose(): void };
 }
 
+/** Brain-bound EventBus facade exposed to tools and subscriptions.
+ *  emit()       — goes through globalHandlers + routing (renderer/recorder can observe via onAny).
+ *  emitToSelf() — pushes directly to this brain's own queue; invisible to other brains and observers. */
+export interface EventBusAPI {
+  emit(event: Event): void;
+  emitToSelf(event: Event): void;
+}
+
 // ─── Multimodal Content ───
 
 export type ContentPart =
@@ -132,7 +140,7 @@ export interface ToolDefinition {
 export interface ToolContext {
   brainId: string;
   signal: AbortSignal;
-  emit: (event: Event) => void;
+  eventBus: EventBusAPI;
   brainBoard: BrainBoardAPI;
   slot: DynamicSlotAPI;
   pathManager: PathManagerAPI;
@@ -177,6 +185,7 @@ export interface BrainContextAPI {
   readonly hooks: import("../hooks/types.js").BrainHooksAPI;
   readonly brainBoard: BrainBoardAPI;
   readonly pathManager: PathManagerAPI;
+  readonly eventBus: EventBusAPI;
   queueCommand(toolName: string, args: Record<string, string>, reason?: string): void;
 }
 
@@ -267,7 +276,7 @@ export interface BrainInitConfig {
 
 export interface ScriptContext {
   brainId: string;
-  emit: (event: Event) => void;
+  eventBus: EventBusAPI;
   brainBoard: BrainBoardAPI;
 }
 

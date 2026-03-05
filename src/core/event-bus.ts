@@ -46,6 +46,13 @@ export class EventBus {
     }
   }
 
+  /** Push directly into a brain's own queue without going through global handlers or routing.
+   *  Use for events that should only be seen by that brain (e.g. thought_result). */
+  emitToSelf(event: Event, brainId: string): void {
+    const queue = this.brainQueueMap.get(brainId);
+    if (queue) queue.push(event);
+  }
+
   /** Unblock a brain's event loop so it re-checks commandQueue. Filtered out before LLM turn. */
   nudge(brainId: string): void {
     const queue = this.brainQueueMap.get(brainId);
