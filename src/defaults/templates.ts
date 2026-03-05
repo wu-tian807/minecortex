@@ -4,7 +4,7 @@ import type { BrainJson, MineclawConfig, ModelSpec } from "../core/types.js";
 
 export const DEFAULT_BRAIN_JSON: BrainJson = {
   models: {},
-  subscriptions: { global: "none", enable: ["stdin"] },
+  subscriptions: { global: "none", enable: ["cli", "recorder"] },
   tools: { global: "all", disable: ["manage_brain"] },
   slots: { global: "all" },
 };

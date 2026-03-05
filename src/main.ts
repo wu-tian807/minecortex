@@ -31,11 +31,11 @@ async function main() {
 
   const renderer = new CLIRenderer(process.cwd(), {
     // Route user text through EventBus — brain receives it via its registered queue
-    onUserInput: (brainId, text) => {
+    onUserInput: (_brainId, text) => {
       scheduler.emit({
         source: "user",
         type: "user_input",
-        to: brainId,
+        to: "*",
         payload: { text },
         ts: Date.now(),
       });

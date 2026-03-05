@@ -3,7 +3,7 @@
 // ─── Event System ───
 
 export interface Event {
-  source: string;       // e.g. "stdin", "heartbeat", "brain:architect", "tool:spawn_thought"
+  source: string;       // e.g. "cli", "heartbeat", "brain:advisor", "tool:spawn_thought"
   type: string;         // e.g. "message", "tick", "block_break"
   payload: unknown;
   ts: number;
@@ -27,6 +27,8 @@ export interface EventQueueInterface {
 export interface EventBusAPI {
   emit(event: Event): void;
   emitToSelf(event: Event): void;
+  /** Register a global observer that sees every event passing through the bus. Returns unsubscribe fn. */
+  observe(handler: (event: Event) => void): () => void;
 }
 
 // ─── Multimodal Content ───

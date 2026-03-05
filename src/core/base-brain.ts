@@ -66,6 +66,7 @@ export abstract class BaseBrain implements BrainInterface {
     this.boundEventBus = {
       emit: (event: Event) => bus.emit(event, brainId),
       emitToSelf: (event: Event) => queue.push(event),
+      observe: (handler: (event: Event) => void) => bus.observe(handler),
     };
   }
 
