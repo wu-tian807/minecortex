@@ -40,6 +40,7 @@ export function messagesToOpenAI(messages: LLMMessage[]): any[] {
     }
 
     if (msg.role === "tool") {
+      if (msg.toolStatus === "pending") continue;
       result.push({
         role: "tool",
         tool_call_id: msg.toolCallId ?? "_tool",

@@ -4,22 +4,25 @@ import { GoogleGenAI } from "@google/genai";
 import { registerProvider, type ProviderFactoryOpts } from "./provider.js";
 import type { LLMMessage, LLMProvider } from "./types.js";
 import {
+  collectToolResponsesToGemini,
   toolDefsToGemini,
   contentPartsToGemini,
   extractSystemText,
   extractTextContent,
-  toolResultToGemini,
   streamGeminiResponse,
 } from "./gemini-shared.js";
 
 function messagesToGemini3(messages: LLMMessage[]): any[] {
   const contents: any[] = [];
 
-  for (const msg of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     if (msg.role === "system") continue;
 
     if (msg.role === "tool") {
-      contents.push(toolResultToGemini(msg));
+      const grouped = collectToolResponsesToGemini(messages, i);
+      contents.push(grouped.content);
+      i = grouped.nextIndex - 1;
       continue;
     }
 

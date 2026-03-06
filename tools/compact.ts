@@ -1,10 +1,12 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
 import type { LLMMessage } from "../src/llm/types.js";
-import { summarizeForCompaction, repairToolPairing, microCompact } from "../src/session/compaction.js";
+import { summarizeForCompaction, microCompact } from "../src/session/compaction.js";
+import { repairToolPairing } from "../src/session/history-normalizer.js";
 import { createProvider } from "../src/llm/provider.js";
 import { assembleResponse } from "../src/llm/stream.js";
+import { SessionManager } from "../src/session/session-manager.js";
 
 const SUMMARIZE_PROMPT = `You are a session compaction assistant. Your task is to create a continuation summary that allows efficient resumption of work in a new context window where the conversation history will be replaced with this summary.
 
@@ -65,6 +67,7 @@ export default {
   async execute(args, ctx): Promise<ToolOutput> {
     const brainDir = ctx.pathManager.brainDir(ctx.brainId);
     const sessionJsonPath = join(brainDir, "session.json");
+    const sessionManager = new SessionManager(ctx.brainId, ctx.pathManager);
 
     let sessionData: { currentSessionId: string; [k: string]: unknown };
     try {
@@ -74,21 +77,15 @@ export default {
     }
 
     const oldSessionId = sessionData.currentSessionId;
-    const oldMessagesPath = join(brainDir, "sessions", oldSessionId, "messages.jsonl");
-
-    let rawContent: string;
-    try {
-      rawContent = await readFile(oldMessagesPath, "utf-8");
-    } catch {
+    const snapshot = await sessionManager.loadSessionSnapshot(oldSessionId);
+    if (!snapshot) {
       return "Session messages file not found.";
     }
 
-    const lines = rawContent.split("\n").filter(l => l.trim().length > 0);
-    if (lines.length < 4) {
+    const messages = snapshot.messages;
+    if (messages.length < 4) {
       return "Session too short to compact (fewer than 4 messages).";
     }
-
-    const messages: LLMMessage[] = lines.map(l => JSON.parse(l));
 
     const lastUsage = [...messages].reverse().find(m => m.usage)?.usage;
     const tokensBefore = lastUsage
@@ -154,14 +151,10 @@ export default {
     // Re-attach the in-flight assistant message so the real results appended after this
     // tool returns have a matching tool_use block in the new session.
     const newMessages = [summary, ...keptMessages, ...(parked ? [parked] : [])];
+    const newSessionId = await sessionManager.newSession(newMessages);
 
-    const newSessionId = `s_${Date.now()}`;
-    const newSessionDir = join(brainDir, "sessions", newSessionId);
-    await mkdir(newSessionDir, { recursive: true });
-
-    const newContent = newMessages.map(m => JSON.stringify(m)).join("\n") + "\n";
-    await writeFile(join(newSessionDir, "messages.jsonl"), newContent, "utf-8");
-
+    // Preserve session.json metadata that SessionManager doesn't own, while keeping
+    // message serialization inside the session facade so media refs are rebuilt.
     sessionData.currentSessionId = newSessionId;
     await writeFile(sessionJsonPath, JSON.stringify(sessionData, null, 2), "utf-8");
 

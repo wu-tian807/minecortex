@@ -50,25 +50,58 @@ export function extractTextContent(msg: LLMMessage): string {
     .join("");
 }
 
-/** Convert tool result message to Gemini functionResponse part */
-export function toolResultToGemini(msg: LLMMessage): any {
-  const resultText =
-    typeof msg.content === "string"
-      ? msg.content
-      : msg.content
-          .filter((p) => p.type === "text")
-          .map((p) => (p as Extract<ContentPart, { type: "text" }>).text)
-          .join("");
+function toolResultText(msg: LLMMessage): string {
+  return typeof msg.content === "string"
+    ? msg.content
+    : msg.content
+        .filter((p) => p.type === "text")
+        .map((p) => (p as Extract<ContentPart, { type: "text" }>).text)
+        .join("");
+}
+
+/** Convert a terminal tool result message into a Gemini functionResponse part. */
+export function toolResultPartToGemini(msg: LLMMessage): any {
+  const functionName = msg.toolName ?? "unknown_tool";
+  const resultText = toolResultText(msg);
+  const response: Record<string, unknown> = { result: resultText };
+  if (msg.toolCallId) response.toolCallId = msg.toolCallId;
+  if (msg.toolStatus) response.status = msg.toolStatus;
+
   return {
-    role: "user",
-    parts: [
-      {
-        functionResponse: {
-          name: msg.toolCallId ?? "_tool",
-          response: { result: resultText },
-        },
-      },
-    ],
+    functionResponse: {
+      name: functionName,
+      response,
+    },
+  };
+}
+
+/** Group contiguous terminal tool results into one Gemini user turn. */
+export function collectToolResponsesToGemini(messages: LLMMessage[], startIndex: number): {
+  content: any;
+  nextIndex: number;
+} {
+  const parts: any[] = [];
+  let index = startIndex;
+
+  while (index < messages.length && messages[index].role === "tool") {
+    const msg = messages[index];
+    if (msg.toolStatus !== "pending") {
+      parts.push(toolResultPartToGemini(msg));
+    }
+    index++;
+  }
+
+  const contentParts =
+    parts.length > 0
+      ? parts
+      : [{ text: "[tool results unavailable]" }];
+
+  return {
+    content: {
+      role: "user",
+      parts: contentParts,
+    },
+    nextIndex: index,
   };
 }
 

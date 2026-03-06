@@ -1,5 +1,5 @@
-import type { LLMMessage, LLMToolCall } from "../llm/types.js";
-import type { ContentPart } from "../core/types.js";
+import type { LLMMessage } from "../llm/types.js";
+import { isMediaContentPart, type ContentPart } from "../core/types.js";
 import { estimateTokens } from "../core/token-stats.js";
 import { BRAIN_DEFAULTS } from "../defaults/brain-defaults.js";
 
@@ -22,7 +22,7 @@ export function microCompact(messages: LLMMessage[], config: MicroCompactConfig 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (msg.role === "tool") toolIndices.push(i);
-    if (Array.isArray(msg.content) && msg.content.some(p => p.type === "image")) {
+    if (Array.isArray(msg.content) && msg.content.some((p) => isMediaContentPart(p))) {
       mediaIndices.push(i);
     }
   }
@@ -41,57 +41,15 @@ export function microCompact(messages: LLMMessage[], config: MicroCompactConfig 
     }
 
     if (oldMediaIndices.has(i) && Array.isArray(msg.content)) {
-      const filtered: ContentPart[] = msg.content.map(p =>
-        p.type === "image" ? { type: "text" as const, text: "[image removed for compaction]" } : p,
-      );
+      const filtered: ContentPart[] = msg.content.map((p) => {
+        if (!isMediaContentPart(p)) return p;
+        return { type: "text" as const, text: `[${p.type} removed for compaction]` };
+      });
       return { ...msg, content: filtered, truncated: true };
     }
 
     return msg;
   });
-}
-
-/**
- * Repair tool call / tool result pairing issues:
- * - Remove orphaned tool results (no matching tool_call)
- * - Add synthetic error result for orphaned tool_calls
- */
-export function repairToolPairing(messages: LLMMessage[]): LLMMessage[] {
-  const toolCallIds = new Set<string>();
-  const toolResultIds = new Set<string>();
-
-  for (const msg of messages) {
-    if (msg.toolCalls) {
-      for (const tc of msg.toolCalls) toolCallIds.add(tc.id);
-    }
-    if (msg.role === "tool" && msg.toolCallId) {
-      toolResultIds.add(msg.toolCallId);
-    }
-  }
-
-  const result: LLMMessage[] = [];
-
-  for (const msg of messages) {
-    if (msg.role === "tool" && msg.toolCallId && !toolCallIds.has(msg.toolCallId)) {
-      continue; // orphaned tool result
-    }
-    result.push(msg);
-
-    if (msg.toolCalls) {
-      for (const tc of msg.toolCalls) {
-        if (!toolResultIds.has(tc.id)) {
-          result.push({
-            role: "tool",
-            content: `[Error: tool call "${tc.name}" was interrupted — no result available]`,
-            toolCallId: tc.id,
-          });
-          toolResultIds.add(tc.id);
-        }
-      }
-    }
-  }
-
-  return result;
 }
 
 export type LLMSummarizer = (messages: LLMMessage[]) => Promise<string>;
@@ -221,6 +179,9 @@ function extractText(content: string | ContentPart[]): string {
 function findToolName(messages: LLMMessage[], toolCallId?: string): string {
   if (!toolCallId) return "unknown_tool";
   for (const msg of messages) {
+    if (msg.role === "tool" && msg.toolCallId === toolCallId && msg.toolName) {
+      return msg.toolName;
+    }
     if (msg.toolCalls) {
       const tc = msg.toolCalls.find(t => t.id === toolCallId);
       if (tc) return tc.name;

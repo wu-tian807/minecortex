@@ -15,10 +15,9 @@ import type { ContextEngine } from "../context/context-engine.js";
 import type { SlotRegistry } from "../context/slot-registry.js";
 import type { SessionManager } from "../session/session-manager.js";
 import { assembleResponseWithCallback } from "../llm/stream.js";
-import { microCompact } from "../session/compaction.js";
 import { renderEventDisplay } from "../context/event-router.js";
 import { HookEvent } from "../hooks/types.js";
-import { executeTool } from "./tool-executor.js";
+import { runToolBatch } from "./tool-batch-runner.js";
 import { BaseBrain } from "./base-brain.js";
 import { BRAIN_DEFAULTS } from "../defaults/brain-defaults.js";
 
@@ -26,15 +25,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ─── Reusable agent loop (shared by ConsciousBrain & spawn_thought) ───
+// ─── Reusable agent loop (persistent session backed) ───
 
 export interface AgentLoopOpts {
   brainId: string;
   provider: LLMProvider;
   tools: ToolDefinition[];
   contextEngine: ContextEngine;
-  /** Ephemeral in-memory history (for spawn_thought). Ignored when sessionManager is provided. */
-  sessionHistory?: LLMMessage[];
   modelSpec: ModelSpec;
   maxIterations: number;
   signal: AbortSignal;
@@ -44,8 +41,8 @@ export interface AgentLoopOpts {
   workspace: string;
   eventBus: EventBusAPI;
   logger?: import("./logger.js").Logger;
-  /** Persistent session — when provided, history is read from file each iteration (no in-memory cache). */
-  sessionManager?: SessionManager;
+  /** Persistent session — history is reloaded from disk each iteration. */
+  sessionManager: SessionManager;
   turn?: number;
   onAssistantMessage?: (msg: LLMMessage) => void;
   hooks?: import("../hooks/brain-hooks.js").BrainHooks;
@@ -63,7 +60,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     keepToolResults = 8, showThinking = false,
   } = opts;
 
-  const ephemeralHistory = opts.sessionHistory;
+  const lifecycle = sessionManager;
   let iterations = 0;
   let lastResponse: LLMResponse | null = null;
 
@@ -83,11 +80,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     if (signal.aborted || (maxIterations != -1 && iterations >= maxIterations) ) break;
     iterations++;
 
-    const rawHistory = sessionManager
-      ? await sessionManager.loadSession()
-      : (ephemeralHistory ?? []);
-
-    const sessionHistory = microCompact(rawHistory, { keepToolResults });
+    const sessionHistory = await sessionManager.loadPromptHistory({ keepToolResults });
 
     const boardEntries = brainBoard.getAll(brainId);
     const vars: Record<string, string> = {};
@@ -157,13 +150,11 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
 
     if (signal.aborted) {
       assistantMsg.truncated = true;
-      if (sessionManager) await sessionManager.appendMessage(assistantMsg);
-      else ephemeralHistory?.push(assistantMsg);
+      await lifecycle.appendAssistantTurn(assistantMsg);
       break;
     }
 
-    if (sessionManager) await sessionManager.appendMessage(assistantMsg);
-    else ephemeralHistory?.push(assistantMsg);
+    await lifecycle.appendAssistantTurn(assistantMsg);
 
     hooks?.emit(HookEvent.AssistantMessage, { msg: assistantMsg, turn });
     onAssistantMessage?.(assistantMsg);
@@ -181,27 +172,15 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       break;
     }
 
-    const results = await Promise.all(
-      response.toolCalls.map(async (tc) => {
-        hooks?.emit(HookEvent.ToolCall, { name: tc.name, args: tc.arguments, toolCall: tc });
-        const t0 = Date.now();
-        const result = await executeTool(tc.name, tc.arguments, tools, toolCtx, logger);
-        hooks?.emit(HookEvent.ToolResult, { name: tc.name, result, durationMs: Date.now() - t0 });
-        return { tc, result };
-      }),
-    );
-
-    for (const { tc, result } of results) {
-      const resultStr = typeof result === "string" ? result : JSON.stringify(result);
-      const toolMsg: LLMMessage = {
-        role: "tool",
-        content: resultStr,
-        toolCallId: tc.id,
-        ts: Date.now(),
-      };
-      if (sessionManager) await sessionManager.appendMessage(toolMsg);
-      else ephemeralHistory?.push(toolMsg);
-    }
+    await runToolBatch({
+      toolCalls: response.toolCalls,
+      tools,
+      toolCtx,
+      lifecycle,
+      logger,
+      hooks,
+      turn,
+    });
   }
 
   return lastResponse;
@@ -388,9 +367,7 @@ export class ConsciousBrain extends BaseBrain {
       toolCalls: [toolCall],
       ts: Date.now(),
     };
-    await this.sessionManager.appendMessage(assistantMsg);
-
-    this.hooks.emit(HookEvent.ToolCall, { name: toolName, args, toolCall });
+    await this.sessionManager.appendAssistantTurn(assistantMsg);
 
     const toolCtx: ToolContext = {
       brainId: this.id,
@@ -407,19 +384,18 @@ export class ConsciousBrain extends BaseBrain {
       logger: this.logger,
     };
 
-    const t0 = Date.now();
-    const result = await executeTool(toolName, args, this.tools, toolCtx, this.logger);
-    this.hooks.emit(HookEvent.ToolResult, { name: toolName, result, durationMs: Date.now() - t0 });
+    const results = await runToolBatch({
+      toolCalls: [toolCall],
+      tools: this.tools,
+      toolCtx,
+      lifecycle: this.sessionManager,
+      logger: this.logger,
+      hooks: this.hooks,
+      turn: this.currentTurn,
+    });
 
-    const resultStr = typeof result === "string" ? result : JSON.stringify(result);
-    const toolMsg: LLMMessage = {
-      role: "tool",
-      content: resultStr,
-      toolCallId: callId,
-      ts: Date.now(),
-    };
-    await this.sessionManager.appendMessage(toolMsg);
-
+    const result = results[0]?.result;
+    const resultStr = typeof result === "string" ? result : JSON.stringify(result ?? "");
     this.logger.info(this.id, this.currentTurn, `command /${toolName} → ${resultStr.slice(0, 200)}`);
   }
 
@@ -448,6 +424,7 @@ export class ConsciousBrain extends BaseBrain {
 
   override async shutdown(): Promise<void> {
     this.stop();
+    this.abortController.abort();
 
     if (this.pendingTasks.size > 0) {
       this.logger.info(this.id, this.currentTurn, `awaiting ${this.pendingTasks.size} background task(s)...`);
@@ -456,12 +433,8 @@ export class ConsciousBrain extends BaseBrain {
       this.pendingTasks.clear();
     }
 
-    for (const source of this.sources) {
-      try { source.stop(); } catch { /* already stopped */ }
-    }
-
+    await super.shutdown();
     this.slotRegistry.clear();
-    this.eventBus.unregister(this.id);
 
     this.logger.info(this.id, this.currentTurn, "shutdown() complete");
   }

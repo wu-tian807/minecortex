@@ -9,6 +9,8 @@ export interface LLMMessage {
   truncated?: boolean;
   ts?: number;
   toolCallId?: string;
+  toolName?: string;
+  toolStatus?: "pending" | "completed" | "failed" | "synthetic";
   toolCalls?: LLMToolCall[];
   usage?: { inputTokens: number; outputTokens: number };
   /** Gemini thought signature for the last text block (base64). */

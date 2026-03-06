@@ -3,7 +3,7 @@
 // ─── Event System ───
 
 export interface Event {
-  source: string;       // e.g. "cli", "heartbeat", "brain:advisor", "tool:spawn_thought"
+  source: string;       // e.g. "cli", "heartbeat", "brain:advisor", "tool:subagent"
   type: string;         // e.g. "message", "tick", "block_break"
   payload: unknown;
   ts: number;
@@ -45,6 +45,17 @@ export type SerializedPart =
   | { type: "video_ref"; path: string; mimeType: string }
   | { type: "audio_ref"; path: string; mimeType: string };
 
+export type MediaContentPart = Exclude<ContentPart, { type: "text"; text: string }>;
+export type MediaRefPart = Exclude<SerializedPart, ContentPart>;
+
+export function isMediaContentPart(part: ContentPart): part is MediaContentPart {
+  return part.type === "image" || part.type === "video" || part.type === "audio";
+}
+
+export function isMediaRefPart(part: SerializedPart): part is MediaRefPart {
+  return part.type === "image_ref" || part.type === "video_ref" || part.type === "audio_ref";
+}
+
 // ─── Model Spec ───
 
 export type InputModality = "text" | "image" | "video" | "audio";
@@ -66,6 +77,12 @@ export interface CapabilitySelector {
   enable?: string[];
   disable?: string[];
   config?: Record<string, Record<string, unknown>>;
+}
+
+export interface CapabilityPathRedirects {
+  tools?: string;
+  slots?: string;
+  subscriptions?: string;
 }
 
 export interface ModelsConfig {
@@ -103,6 +120,7 @@ export interface BrainJson {
   subscriptions?: CapabilitySelector;
   tools?: CapabilitySelector;
   slots?: CapabilitySelector;
+  paths?: CapabilityPathRedirects;
 
   /** Session 压缩配置 */
   session?: {

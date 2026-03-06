@@ -45,20 +45,31 @@ function extractSystemText(messages: LLMMessage[]): string | undefined {
 function messagesToAnthropic(messages: LLMMessage[]): any[] {
   const result: any[] = [];
 
-  for (const msg of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     if (msg.role === "system") continue;
 
     if (msg.role === "tool") {
-      result.push({
-        role: "user",
-        content: [
-          {
+      const toolBlocks: any[] = [];
+      let j = i;
+      while (j < messages.length && messages[j].role === "tool") {
+        const toolMsg = messages[j];
+        if (toolMsg.toolStatus !== "pending") {
+          toolBlocks.push({
             type: "tool_result",
-            tool_use_id: msg.toolCallId ?? "_tool",
-            content: contentToAnthropic(msg.content),
-          },
-        ],
-      });
+            tool_use_id: toolMsg.toolCallId ?? "_tool",
+            content: contentToAnthropic(toolMsg.content),
+          });
+        }
+        j++;
+      }
+      if (toolBlocks.length > 0) {
+        result.push({
+          role: "user",
+          content: toolBlocks,
+        });
+      }
+      i = j - 1;
       continue;
     }
 
