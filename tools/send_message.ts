@@ -27,9 +27,10 @@ export default {
         enum: ["0", "1", "2"],
         description: "0=immediate, 1=normal (default), 2=low",
       },
-      silent: {
-        type: "boolean",
-        description: "If true, queue only without triggering processing in recipient",
+      handoff: {
+        type: "string",
+        enum: ["silent", "turn", "innerLoop", "steer"],
+        description: "When the recipient should notice this event: silent=queue only, turn=next turn, innerLoop=after current inner loop, steer=interrupt current turn",
       },
     },
     required: ["to", "content"],
@@ -39,9 +40,12 @@ export default {
     const content = String(args.content).trim();
     const summary = String(args.summary ?? "").trim() || content.slice(0, 50);
     const priority = Number(args.priority ?? 1);
-    const silent = (args.silent as boolean) ?? false;
+    const handoff = args.handoff == null ? "turn" : String(args.handoff).trim();
 
     if (!to || !content) return '"to" and "content" are required';
+    if (!["silent", "turn", "innerLoop", "steer"].includes(handoff)) {
+      return `"handoff" must be one of: silent, turn, innerLoop, steer`;
+    }
 
     ctx.eventBus.emit({
       source: `brain:${ctx.brainId}`,
@@ -50,7 +54,7 @@ export default {
       payload: { content, summary },
       ts: Date.now(),
       priority,
-      silent,
+      handoff: handoff as "silent" | "turn" | "innerLoop" | "steer",
     });
 
     return `Message sent to '${to}': ${summary}`;
