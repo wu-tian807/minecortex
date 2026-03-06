@@ -7,3 +7,4 @@ task-board.md
 *.tsbuildinfo
 debug.log
 workspace/
+mineclaw.json
