@@ -106,7 +106,7 @@ export abstract class BaseBrain implements BrainInterface {
       type: "brain_freed",
       payload: { brainId: this.id },
       ts: Date.now(),
-      silent: true,
+      handoff: "silent",
     }, this.id);
 
     await this.shutdown();

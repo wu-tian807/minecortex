@@ -56,7 +56,7 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
         type: "subscription_error",
         payload: { error: String(err) },
         ts: Date.now(),
-        silent: true,
+        handoff: "silent",
       });
     }
   }

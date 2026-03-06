@@ -1,4 +1,4 @@
-/** @desc ConsciousBrain — streaming agent loop with steer interrupt & 3-level lifecycle */
+/** @desc ConsciousBrain — streaming agent loop with handoff-aware scheduling */
 
 import type {
   BrainInitConfig,
@@ -49,6 +49,7 @@ export interface AgentLoopOpts {
   keepToolResults?: number;
   showThinking?: boolean;
   trackBackgroundTask?: (p: Promise<unknown>) => void;
+  shouldYieldInnerLoop?: () => boolean;
 }
 
 export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | null> {
@@ -58,6 +59,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     pathManager, workspace, eventBus, logger,
     sessionManager, turn = 0, onAssistantMessage, hooks,
     keepToolResults = 8, showThinking = false,
+    shouldYieldInnerLoop,
   } = opts;
 
   const lifecycle = sessionManager;
@@ -181,6 +183,11 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       hooks,
       turn,
     });
+
+    if (shouldYieldInnerLoop?.()) {
+      logger?.debug(brainId, turn, "yielding current turn after inner loop boundary");
+      break;
+    }
   }
 
   return lastResponse;
@@ -259,7 +266,7 @@ export class ConsciousBrain extends BaseBrain {
         break;
       }
 
-      if (this.queue.hasSteerEvent()) {
+      if (this.queue.hasHandoff("steer")) {
         // Skip coalesce for steer events — process immediately
       } else if ((trigger.priority ?? 1) > 0 && this.coalesceMs > 0) {
         await sleep(this.coalesceMs);
@@ -335,6 +342,7 @@ export class ConsciousBrain extends BaseBrain {
           this.pendingTasks.add(p);
           p.finally(() => this.pendingTasks.delete(p));
         },
+        shouldYieldInnerLoop: () => this.queue.hasHandoff("innerLoop"),
       });
     } catch {
       aborted = signal.aborted;

@@ -2,6 +2,8 @@
 
 // ─── Event System ───
 
+export type EventHandoff = "silent" | "turn" | "innerLoop" | "steer";
+
 export interface Event {
   source: string;       // e.g. "cli", "heartbeat", "brain:advisor", "tool:subagent"
   type: string;         // e.g. "message", "tick", "block_break"
@@ -9,15 +11,14 @@ export interface Event {
   ts: number;
   to?: string;          // routing target: brainId, "*" for broadcast, or omitted for observers only
   priority?: number;    // 0=immediate, 1=normal(default), 2=low
-  silent?: boolean;     // true = queue only, don't trigger processing
-  steer?: boolean;      // true = interrupt current LLM call immediately
+  handoff?: EventHandoff; // default="turn": silent=queue only, turn=next turn, innerLoop=yield after current loop, steer=interrupt current turn
 }
 
 export interface EventQueueInterface {
   push(event: Event): void;
   drain(): Event[];
   pending(): number;
-  hasSteerEvent(): boolean;
+  hasHandoff(handoff: EventHandoff): boolean;
   onSteer(cb: () => void): { dispose(): void };
 }
 

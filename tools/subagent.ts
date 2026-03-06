@@ -1,203 +1,121 @@
 /** @desc subagent — launch scheduler-managed anonymous subagents */
 
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   BrainJson,
-  CapabilityPathRedirects,
-  CapabilitySelector,
   ToolContext,
   ToolDefinition,
   ToolOutput,
 } from "../src/core/types.js";
-import type { LLMMessage } from "../src/llm/types.js";
 import { getScheduler } from "../src/core/scheduler.js";
 import { SessionManager } from "../src/session/session-manager.js";
+import {
+  buildToolsSelector,
+  isSubagentEffort,
+  isSubagentType,
+  RECURSION_RULES,
+  resolveSubagentMode,
+  SUBAGENT_DEFAULTS,
+} from "./subagents/defaults.js";
+import { buildInitialPrompt } from "./subagents/context.js";
+import {
+  waitForSubagentCompletion,
+  type SubagentOutcome,
+} from "./subagents/monitor.js";
+import { buildSubagentSoul } from "./subagents/soul.js";
+import {
+  type ContextMode,
+  type SubagentAction,
+  type SubagentEffort,
+  type SubagentMode,
+  type SubagentType,
+} from "./subagents/types.js";
+import { renderWritePlanToolSource } from "./subagents/write-plan-template.js";
 
-type SubagentType = "observe" | "plan" | "act";
-type ContextMode = "none" | "summary" | "full";
-
-const RESERVED_TOOLS = new Set(["manage_brain", "subagent"]);
-const COMPLETION_TIMEOUT_MS = 5 * 60_000;
-const POLL_INTERVAL_MS = 300;
-
-const SUBAGENT_DEFAULTS: Record<SubagentType, {
-  readOnly: boolean;
-  tools: string[];
-  model?: string;
-}> = {
-  observe: {
-    readOnly: true,
-    tools: ["read_file", "glob", "grep", "shell", "list_dir"],
-    model: "gemini-2.5-flash",
-  },
-  plan: {
-    readOnly: true,
-    tools: ["read_file", "glob", "grep", "shell", "list_dir"],
-  },
-  act: {
-    readOnly: false,
-    tools: [],
-  },
-};
-
-const RECURSION_RULES: Record<SubagentType, SubagentType[]> = {
-  observe: [],
-  plan: ["observe"],
-  act: ["observe"],
+type ActiveSubagentEntry = {
+  id: string;
+  type: SubagentType;
+  request: string;
+  startedAt: string;
 };
 
 export default {
   name: "subagent",
   description:
     "Launch a scheduler-managed subagent for a focused task. " +
-    "Types: observe (read-only exploration), plan (read-only planning), act (can modify). " +
-    "Background mode returns immediately; foreground mode awaits the final result.",
+    "Types: observe (read-only exploration, default foreground), " +
+    "plan (read-only planning, default foreground), act (can modify, default foreground). " +
+    "For observe/explore tasks, always prefer absolute file or directory paths in the task text so weaker models do not get lost. " +
+    "Supports stateful question/reply for any subagent type. " +
+    "Only use action=reply after a previous subagent call returned status=question for that same subagent.",
   input_schema: {
     type: "object",
     properties: {
+      action: {
+        type: "string",
+        enum: ["launch", "reply"],
+        description: "launch: create a new subagent. reply: send a follow-up answer to the same live subagent, but only after it previously returned status=question.",
+      },
       task: {
         type: "string",
-        description: "The task for the subagent to perform",
+        description: "The task for a new subagent to perform. For observe/explore tasks, include absolute file or directory paths whenever possible.",
       },
       type: {
         type: "string",
         enum: ["observe", "plan", "act"],
-        description: "Subagent type: observe (read-only, fast), plan (read-only), act (full tools)",
+        description: "Subagent type for launch: observe (read-only, fast; prefer absolute paths in task text), plan (read-only), act (full tools)",
       },
-      model: {
+      quality: {
         type: "string",
-        description: "Override model for this subagent (default: inherit from parent brain)",
+        enum: ["low", "medium", "high"],
+        description: "Subagent quality tier: low=gemini-2.5-flash, medium=parent model, high=claude-opus-4-6",
+      },
+      effort: {
+        type: "string",
+        enum: ["low", "medium", "high"],
+        description: "Alias of quality. low=gemini-2.5-flash, medium=parent model, high=claude-opus-4-6",
       },
       mode: {
         type: "string",
         enum: ["background", "foreground"],
-        description: "background: return immediately; foreground: await result (default: background)",
+        description: "background: return immediately; foreground: await result. Defaults depend on subagent type.",
       },
       context: {
         type: "string",
         enum: ["none", "summary", "full"],
-        description: "How much parent context to pass (default: none)",
+        description: "How much parent context to pass during launch (default: none)",
       },
-      todoId: {
+      subagentId: {
         type: "string",
-        description: "Optional: associate this subagent with a todo item for tracking",
+        description: "Existing live subagent id to target when action=reply. This must be the same subagent that previously returned status=question.",
+      },
+      reply: {
+        type: "string",
+        description: "Parent or user reply content when action=reply. Only provide this after that subagent returned a question.",
       },
     },
-    required: ["task", "type"],
+    required: [],
   },
 
   async execute(args, ctx): Promise<ToolOutput> {
-    const task = String(args.task ?? "").trim();
-    const type = String(args.type ?? "") as SubagentType;
-    const model = args.model ? String(args.model) : undefined;
-    const mode = (args.mode as string) ?? "background";
-    const contextMode = (args.context as string) ?? "none";
-    const todoId = args.todoId ? String(args.todoId) : undefined;
-
-    if (!task) return JSON.stringify({ error: "task is required" });
-    if (!SUBAGENT_DEFAULTS[type]) {
-      return JSON.stringify({ error: `Invalid subagent type: ${type}` });
-    }
-    if (mode !== "background" && mode !== "foreground") {
-      return JSON.stringify({ error: `Invalid mode: ${mode}` });
-    }
-    if (contextMode !== "none" && contextMode !== "summary" && contextMode !== "full") {
-      return JSON.stringify({ error: `Invalid context mode: ${contextMode}` });
-    }
-
+    const action = String(args.action ?? "launch").trim() as SubagentAction;
     const scheduler = getScheduler();
     if (!scheduler) return JSON.stringify({ error: "Scheduler not running." });
 
-    const parentType = detectParentType(ctx);
-    if (parentType !== null) {
-      const allowed = RECURSION_RULES[parentType];
-      if (!allowed.includes(type)) {
-        return JSON.stringify({
-          error: `Recursion limit: ${parentType} can only spawn [${allowed.join(",")}], not ${type}`,
-        });
-      }
+    if (action === "reply") {
+      return await replyToSubagent(args, ctx, scheduler);
     }
-
-    const subagentId = generateSubagentId(ctx.brainId);
-    const slotId = `subagent:${subagentId}`;
-    const defaults = SUBAGENT_DEFAULTS[type];
-    const parentConfig = await loadParentBrainConfig(ctx);
-    const effectiveModel = model ?? resolveModelFromBrainConfig(parentConfig, defaults.model);
-    const initialPrompt = await buildInitialPrompt(ctx, task, contextMode);
-    const toolsSelector = buildToolsSelector(type, parentConfig.tools);
-    const capabilityPaths = buildSubagentCapabilityPaths(ctx, parentConfig.paths);
-
-    ctx.slot.register(slotId, `[subagent:${subagentId}] status: launched, type: ${type}`);
-    markSubagentBoard(ctx, subagentId, type, task, "launched");
-
-    const sessionManager = new SessionManager(subagentId, ctx.pathManager);
-
-    try {
-      assertSchedulerResult(await scheduler.controlBrain("create", subagentId, {
-        model: effectiveModel,
-        soul: buildSubagentSoul(subagentId, ctx.brainId, type, defaults.readOnly),
-        subscriptions: { global: "none", enable: ["recorder"] },
-        tools: toolsSelector,
-        slots: { global: "all" },
-        paths: capabilityPaths,
-      }));
-
-      await sessionManager.newSession([
-        { role: "user", content: initialPrompt, ts: Date.now() },
-      ]);
-
-      markSubagentBoard(ctx, subagentId, type, task, "running");
-      ctx.slot.update(slotId, `[subagent:${subagentId}] status: running, type: ${type}`);
-
-      assertSchedulerResult(await scheduler.controlBrain("start", subagentId));
-      assertSchedulerResult(await scheduler.controlBrain("resume", subagentId));
-    } catch (err: any) {
-      ctx.slot.release(slotId);
-      ctx.brainBoard.removeAll(subagentId);
-      await scheduler.controlBrain("free", subagentId).catch(() => {});
-      return JSON.stringify({ error: `Failed to launch subagent: ${err.message ?? String(err)}` });
+    if (action !== "launch") {
+      return JSON.stringify({ error: `Invalid action: ${action}` });
     }
-
-    if (mode === "foreground") {
-      const outcome = await waitForSubagentCompletion({
-        scheduler,
-        sessionManager,
-        subagentId,
-        signal: ctx.signal,
-      });
-      ctx.slot.release(slotId);
-      await scheduler.controlBrain("free", subagentId).catch(() => {});
-
-      if (outcome.status === "completed") {
-        return JSON.stringify({ subagentId, status: "completed", result: outcome.result });
-      }
-      return JSON.stringify({ subagentId, status: "error", error: outcome.error });
-    }
-
-    const monitor = monitorSubagentInBackground({
-      ctx,
-      scheduler,
-      sessionManager,
-      subagentId,
-      type,
-      todoId,
-      slotId,
-    });
-    ctx.trackBackgroundTask?.(monitor);
-
-    return JSON.stringify({
-      subagentId,
-      status: "launched",
-      type,
-      mode: "background",
-    });
+    return await launchSubagent(args, ctx, scheduler);
   },
 } satisfies ToolDefinition;
 
 function detectParentType(ctx: ToolContext): SubagentType | null {
   const value = ctx.brainBoard.get(ctx.brainId, "subagentType");
-  if (value === "observe" || value === "plan" || value === "act") return value;
+  if (typeof value === "string" && isSubagentType(value)) return value;
   return null;
 }
 
@@ -218,35 +136,6 @@ async function loadParentBrainConfig(
   }
 }
 
-function buildToolsSelector(
-  type: SubagentType,
-  parentTools?: CapabilitySelector,
-): CapabilitySelector {
-  if (type !== "act") {
-    return {
-      global: "none",
-      enable: SUBAGENT_DEFAULTS[type].tools.filter((name) => !RESERVED_TOOLS.has(name)),
-    };
-  }
-
-  if (!parentTools) {
-    return { global: "all", disable: [...RESERVED_TOOLS] };
-  }
-
-  if (parentTools.global === "all") {
-    return {
-      ...parentTools,
-      disable: [...new Set([...(parentTools.disable ?? []), ...RESERVED_TOOLS])],
-    };
-  }
-
-  return {
-    global: "none",
-    enable: (parentTools.enable ?? []).filter((name) => !RESERVED_TOOLS.has(name)),
-    config: parentTools.config,
-  };
-}
-
 function resolveModelFromBrainConfig(
   brainJson: BrainJson,
   fallback = "gemini-2.0-flash",
@@ -256,40 +145,37 @@ function resolveModelFromBrainConfig(
   return model ?? fallback;
 }
 
-function buildSubagentCapabilityPaths(
-  ctx: ToolContext,
-  inherited?: CapabilityPathRedirects,
-): CapabilityPathRedirects {
-  return {
-    tools: inherited?.tools ?? `brains/${ctx.brainId}/tools`,
-    slots: inherited?.slots ?? `brains/${ctx.brainId}/slots`,
-    subscriptions: inherited?.subscriptions ?? `brains/${ctx.brainId}/subscriptions`,
-  };
+function resolveRequestedEffort(args: Record<string, unknown>): SubagentEffort | null {
+  if (args.model !== undefined) {
+    throw new Error("model is no longer supported; use quality or effort with low/medium/high.");
+  }
+
+  const quality = args.quality == null ? undefined : String(args.quality).trim();
+  const effort = args.effort == null ? undefined : String(args.effort).trim();
+
+  if (quality && !isSubagentEffort(quality)) return null;
+  if (effort && !isSubagentEffort(effort)) return null;
+  if (quality && effort && quality !== effort) {
+    throw new Error(`quality (${quality}) conflicts with effort (${effort}).`);
+  }
+
+  return (quality ?? effort ?? undefined) as SubagentEffort | undefined ?? null;
 }
 
-function buildSubagentSoul(
-  subagentId: string,
-  parentBrainId: string,
-  type: SubagentType,
-  readOnly: boolean,
+function resolveSubagentModel(
+  parentConfig: BrainJson,
+  defaultEffort: SubagentEffort,
+  requestedEffort: SubagentEffort | null,
 ): string {
-  return [
-    `# ${subagentId}`,
-    "",
-    `你是由 brain \`${parentBrainId}\` 启动的一次性 ${type} subagent。`,
-    "",
-    "## 约束",
-    "- 默认中文回复，代码注释用英文",
-    readOnly ? "- 当前为只读模式，不要修改文件" : "- 当前可执行修改，但只为当前任务做最小改动",
-    "- 不要调用 manage_brain 或再次调用 subagent",
-    "- 完成后必须给出明确的最终文本总结，不要无限继续调用工具",
-    "",
-    "## 工作方式",
-    "1. 先快速理解当前任务和上下文",
-    "2. 必要时调用工具收集信息或执行",
-    "3. 收尾时给出简洁结果，便于父 brain 直接复用",
-    "",
-  ].filter(Boolean).join("\n");
+  const effort = requestedEffort ?? defaultEffort;
+  switch (effort) {
+    case "low":
+      return "gemini-2.5-flash";
+    case "medium":
+      return resolveModelFromBrainConfig(parentConfig);
+    case "high":
+      return "claude-opus-4-6";
+  }
 }
 
 function assertSchedulerResult(result: string): void {
@@ -302,61 +188,6 @@ function assertSchedulerResult(result: string): void {
   ) {
     throw new Error(result);
   }
-}
-
-async function buildInitialPrompt(
-  ctx: ToolContext,
-  task: string,
-  contextMode: ContextMode,
-): Promise<string> {
-  if (contextMode === "none") return task;
-
-  const sessionManager = new SessionManager(ctx.brainId, ctx.pathManager);
-  const history = await sessionManager.loadPromptHistory({ keepToolResults: 4 });
-  const contextText = renderParentContext(history, contextMode);
-  if (!contextText) return task;
-
-  return [
-    "Primary task:",
-    task,
-    "",
-    "Parent context for reference:",
-    contextText,
-  ].join("\n");
-}
-
-function renderParentContext(history: LLMMessage[], contextMode: ContextMode): string {
-  const maxMessages = contextMode === "summary" ? 8 : 20;
-  const maxChars = contextMode === "summary" ? 6000 : 16000;
-
-  const relevant = history
-    .filter((msg) => msg.role !== "tool")
-    .slice(-maxMessages)
-    .map((msg) => `[${msg.role}] ${serializeContent(msg.content)}`)
-    .filter((line) => line.trim().length > 0);
-
-  if (relevant.length === 0) return "";
-
-  let text = relevant.join("\n\n");
-  if (text.length > maxChars) {
-    text = `[truncated]\n${text.slice(text.length - maxChars)}`;
-  }
-  return text;
-}
-
-function serializeContent(content: LLMMessage["content"]): string {
-  if (typeof content === "string") {
-    return stripThinking(content).replace(/\s+/g, " ").trim();
-  }
-  try {
-    return JSON.stringify(content);
-  } catch {
-    return "[unserializable content]";
-  }
-}
-
-function stripThinking(text: string): string {
-  return text.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
 }
 
 function markSubagentBoard(
@@ -380,84 +211,426 @@ async function monitorSubagentInBackground(opts: {
   sessionManager: SessionManager;
   subagentId: string;
   type: SubagentType;
-  todoId?: string;
-  slotId: string;
 }): Promise<void> {
-  const { ctx, scheduler, sessionManager, subagentId, type, todoId, slotId } = opts;
+  const { ctx, scheduler, sessionManager, subagentId, type } = opts;
+
+  const outcome = await waitForSubagentCompletion({
+    scheduler,
+    sessionManager,
+    subagentId,
+  });
+
+  if (outcome.status === "question") {
+    recordQuestionState(ctx, subagentId, outcome.question);
+    ctx.eventBus.emitToSelf({
+      source: "tool:subagent",
+      type: "subagent_question",
+      payload: { subagentId, type, question: outcome.question },
+      ts: Date.now(),
+      priority: 0,
+      handoff: "innerLoop",
+    });
+    return;
+  }
+
+  await finalizeSubagent(ctx, scheduler, subagentId, outcome.status);
+  if (outcome.status === "completed") {
+    ctx.eventBus.emitToSelf({
+      source: "tool:subagent",
+      type: "subagent_result",
+      payload: { subagentId, type, result: outcome.result },
+      ts: Date.now(),
+      priority: 0,
+      handoff: "turn",
+    });
+    return;
+  }
+
+  ctx.eventBus.emitToSelf({
+    source: "tool:subagent",
+    type: "subagent_error",
+    payload: { subagentId, type, error: outcome.error },
+    ts: Date.now(),
+    priority: 0,
+    handoff: "turn",
+  });
+}
+
+async function launchSubagent(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  scheduler: NonNullable<ReturnType<typeof getScheduler>>,
+): Promise<ToolOutput> {
+  const task = String(args.task ?? "").trim();
+  const typeRaw = String(args.type ?? "").trim();
+  const contextModeRaw = String(args.context ?? "none").trim();
+
+  if (!task) return JSON.stringify({ error: "task is required for action=launch" });
+  if (!isSubagentType(typeRaw)) {
+    return JSON.stringify({ error: `Invalid subagent type: ${typeRaw}` });
+  }
+  if (!isContextMode(contextModeRaw)) {
+    return JSON.stringify({ error: `Invalid context mode: ${contextModeRaw}` });
+  }
+
+  const type = typeRaw;
+  const mode = resolveSubagentMode(type, args.mode ? String(args.mode) : undefined);
+  if (!mode) {
+    return JSON.stringify({ error: `Invalid mode: ${String(args.mode)}` });
+  }
+  let requestedEffort: SubagentEffort | null;
+  try {
+    requestedEffort = resolveRequestedEffort(args);
+  } catch (err: any) {
+    return JSON.stringify({ error: err.message ?? String(err) });
+  }
+  if ((args.quality != null || args.effort != null) && requestedEffort === null) {
+    return JSON.stringify({ error: "Invalid quality/effort. Use one of: low, medium, high." });
+  }
+
+  const parentType = detectParentType(ctx);
+  if (parentType !== null) {
+    const allowed = RECURSION_RULES[parentType];
+    if (!allowed.includes(type)) {
+      return JSON.stringify({
+        error: `Recursion limit: ${parentType} can only spawn [${allowed.join(",")}], not ${type}`,
+      });
+    }
+  }
+
+  const subagentId = generateSubagentId(ctx.brainId);
+  const defaults = SUBAGENT_DEFAULTS[type];
+  const parentConfig = await loadParentBrainConfig(ctx);
+  const effectiveModel = resolveSubagentModel(parentConfig, defaults.defaultEffort, requestedEffort);
+  const initialPrompt = await buildInitialPrompt(ctx, task, contextModeRaw);
+  const toolsSelector = buildToolsSelector(type);
+  const sessionManager = new SessionManager(subagentId, ctx.pathManager);
+  const defaultPlanName = buildDefaultPlanName(task, subagentId);
+
+  addActiveSubagent(ctx, ctx.brainId, {
+    id: subagentId,
+    type,
+    request: task,
+    startedAt: new Date().toISOString(),
+  });
+  markSubagentBoard(ctx, subagentId, type, task, "launched");
+  ctx.brainBoard.set(subagentId, "returnMode", mode);
 
   try {
+    assertSchedulerResult(await scheduler.controlBrain("create", subagentId, {
+      model: effectiveModel,
+      soul: buildSubagentSoul(subagentId, ctx.brainId, type, defaults.readOnly),
+      subscriptions: { global: "none", enable: ["recorder"] },
+      tools: toolsSelector,
+      slots: { global: "all" },
+    }));
+
+    if (type === "plan") {
+      await injectPlanTool(ctx, subagentId, ctx.brainId, defaultPlanName);
+    }
+
+    assertSchedulerResult(await scheduler.controlBrain("start", subagentId));
+    dispatchSubagentPrompt(scheduler, subagentId, "launch", initialPrompt);
+    markSubagentRunning(ctx, subagentId);
+  } catch (err: any) {
+    await finalizeSubagent(ctx, scheduler, subagentId);
+    return JSON.stringify({ error: `Failed to launch subagent: ${err.message ?? String(err)}` });
+  }
+
+  if (mode === "foreground") {
     const outcome = await waitForSubagentCompletion({
       scheduler,
       sessionManager,
       subagentId,
+      signal: ctx.signal,
     });
-
-    if (outcome.status === "completed") {
-      ctx.eventBus.emitToSelf({
-        source: "tool:subagent",
-        type: "subagent_result",
-        payload: { subagentId, type, result: outcome.result, todoId },
-        ts: Date.now(),
-        priority: 0,
-      });
-    } else {
-      ctx.eventBus.emitToSelf({
-        source: "tool:subagent",
-        type: "subagent_error",
-        payload: { subagentId, type, error: outcome.error, todoId },
-        ts: Date.now(),
-        priority: 0,
-      });
-    }
-  } finally {
-    ctx.slot.release(slotId);
-    await scheduler.controlBrain("free", subagentId).catch(() => {});
+    return await handleForegroundOutcome({
+      ctx,
+      scheduler,
+      subagentId,
+      type,
+      outcome,
+    });
   }
+
+  const monitor = monitorSubagentInBackground({
+    ctx,
+    scheduler,
+    sessionManager,
+    subagentId,
+    type,
+  });
+  ctx.trackBackgroundTask?.(monitor);
+
+  return JSON.stringify({
+    subagentId,
+    status: "launched",
+    type,
+    mode: "background",
+  });
 }
 
-async function waitForSubagentCompletion(opts: {
+async function replyToSubagent(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  scheduler: NonNullable<ReturnType<typeof getScheduler>>,
+): Promise<ToolOutput> {
+  const subagentId = String(args.subagentId ?? "").trim();
+  const reply = String(args.reply ?? "").trim();
+  if (!subagentId) return JSON.stringify({ error: "subagentId is required for action=reply" });
+  if (!reply) return JSON.stringify({ error: "reply is required for action=reply" });
+
+  const parent = ctx.brainBoard.get(subagentId, "parent");
+  if (parent !== ctx.brainId) {
+    return JSON.stringify({ error: `Subagent '${subagentId}' is not owned by brain '${ctx.brainId}'.` });
+  }
+
+  const typeValue = ctx.brainBoard.get(subagentId, "subagentType");
+  if (typeof typeValue !== "string" || !isSubagentType(typeValue)) {
+    return JSON.stringify({ error: `Unable to resolve subagent type for '${subagentId}'.` });
+  }
+
+  const statusValue = String(ctx.brainBoard.get(subagentId, "status") ?? "");
+  if (statusValue !== "waiting_reply") {
+    return JSON.stringify({
+      error: `Subagent '${subagentId}' is not awaiting a reply (status=${statusValue || "unknown"}).`,
+    });
+  }
+
+  const mode = resolveReplyMode(ctx, subagentId, typeValue, args.mode ? String(args.mode) : undefined);
+  if (!mode) {
+    return JSON.stringify({ error: `Invalid mode: ${String(args.mode)}` });
+  }
+
+  const sessionManager = new SessionManager(subagentId, ctx.pathManager);
+  const parentBrainId = String(parent);
+
+  updateActiveSubagentRequest(ctx, parentBrainId, subagentId, reply);
+
+  try {
+    dispatchSubagentPrompt(scheduler, subagentId, "reply", buildReplyMessage(reply));
+  } catch (err: any) {
+    return JSON.stringify({ error: `Failed to deliver reply to subagent: ${err.message ?? String(err)}` });
+  }
+
+  ctx.brainBoard.set(subagentId, "returnMode", mode);
+  clearQuestionState(ctx, subagentId);
+  markSubagentRunning(ctx, subagentId);
+
+  if (mode === "foreground") {
+    const outcome = await waitForSubagentCompletion({
+      scheduler,
+      sessionManager,
+      subagentId,
+      signal: ctx.signal,
+    });
+    return await handleForegroundOutcome({
+      ctx,
+      scheduler,
+      subagentId,
+      type: typeValue,
+      outcome,
+    });
+  }
+
+  const monitor = monitorSubagentInBackground({
+    ctx,
+    scheduler,
+    sessionManager,
+    subagentId,
+    type: typeValue,
+  });
+  ctx.trackBackgroundTask?.(monitor);
+
+  return JSON.stringify({
+    subagentId,
+    status: "replied",
+    type: typeValue,
+    mode: "background",
+  });
+}
+
+async function handleForegroundOutcome(opts: {
+  ctx: ToolContext;
   scheduler: NonNullable<ReturnType<typeof getScheduler>>;
-  sessionManager: SessionManager;
   subagentId: string;
-  signal?: AbortSignal;
-}): Promise<
-  | { status: "completed"; result: string }
-  | { status: "error"; error: string }
-> {
-  const { scheduler, sessionManager, subagentId, signal } = opts;
-  const deadline = Date.now() + COMPLETION_TIMEOUT_MS;
+  type: SubagentType;
+  outcome: SubagentOutcome;
+}): Promise<ToolOutput> {
+  const { ctx, scheduler, subagentId, type, outcome } = opts;
 
-  while (Date.now() < deadline) {
-    if (signal?.aborted) {
-      await scheduler.controlBrain("stop", subagentId).catch(() => {});
-      return { status: "error", error: "Subagent interrupted by parent turn." };
-    }
-
-    const messages = await sessionManager.loadSession();
-    const result = pickCompletedResult(messages);
-    if (result) {
-      return { status: "completed", result };
-    }
-
-    await sleep(POLL_INTERVAL_MS);
+  if (outcome.status === "question") {
+    ctx.brainBoard.set(subagentId, "returnMode", "foreground");
+    recordQuestionState(ctx, subagentId, outcome.question);
+    return JSON.stringify({ subagentId, status: "question", question: outcome.question });
   }
 
-  return {
-    status: "error",
-    error: `Timed out waiting for subagent completion after ${COMPLETION_TIMEOUT_MS}ms.`,
-  };
+  await finalizeSubagent(ctx, scheduler, subagentId, outcome.status);
+  if (outcome.status === "completed") {
+    return JSON.stringify({ subagentId, status: "completed", result: outcome.result });
+  }
+  return JSON.stringify({ subagentId, status: "error", error: outcome.error });
 }
 
-function pickCompletedResult(messages: LLMMessage[]): string | null {
-  if (messages.length === 0) return null;
-  const last = messages[messages.length - 1];
-  if (last.role !== "assistant") return null;
-  if (last.toolCalls && last.toolCalls.length > 0) return null;
-
-  const text = serializeContent(last.content);
-  return text || "[subagent completed but produced no text summary]";
+function markSubagentRunning(
+  ctx: ToolContext,
+  subagentId: string,
+): void {
+  ctx.brainBoard.set(subagentId, "status", "running");
+  ctx.brainBoard.remove(subagentId, "lastQuestion");
+  ctx.brainBoard.remove(subagentId, "questionAt");
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function recordQuestionState(
+  ctx: ToolContext,
+  subagentId: string,
+  question: string,
+): void {
+  ctx.brainBoard.set(subagentId, "status", "waiting_reply");
+  ctx.brainBoard.set(subagentId, "lastQuestion", question);
+  ctx.brainBoard.set(subagentId, "questionAt", new Date().toISOString());
+}
+
+function clearQuestionState(ctx: ToolContext, subagentId: string): void {
+  ctx.brainBoard.remove(subagentId, "lastQuestion");
+  ctx.brainBoard.remove(subagentId, "questionAt");
+}
+
+async function injectPlanTool(
+  ctx: ToolContext,
+  subagentId: string,
+  parentBrainId: string,
+  defaultPlanName: string,
+): Promise<void> {
+  const toolsDir = join(ctx.pathManager.brainDir(subagentId), "tools");
+  await mkdir(toolsDir, { recursive: true });
+  await writeFile(
+    join(toolsDir, "write_plan.ts"),
+    renderWritePlanToolSource(parentBrainId, defaultPlanName),
+    "utf-8",
+  );
+}
+
+async function finalizeSubagent(
+  ctx: ToolContext,
+  scheduler: NonNullable<ReturnType<typeof getScheduler>>,
+  subagentId: string,
+  finalStatus?: "completed" | "error",
+): Promise<void> {
+  if (finalStatus) {
+    ctx.brainBoard.set(subagentId, "status", finalStatus);
+  }
+  removeActiveSubagent(ctx, subagentId);
+  ctx.brainBoard.removeAll(subagentId);
+  await scheduler.controlBrain("free", subagentId).catch(() => {});
+}
+
+function buildReplyMessage(reply: string): string {
+  return [
+    "Parent reply:",
+    reply,
+  ].join("\n");
+}
+
+function dispatchSubagentPrompt(
+  scheduler: NonNullable<ReturnType<typeof getScheduler>>,
+  subagentId: string,
+  kind: "launch" | "reply",
+  prompt: string,
+): void {
+  const brain = scheduler.getBrain(subagentId);
+  if (!brain) {
+    throw new Error(`Subagent '${subagentId}' is not running.`);
+  }
+  brain.pushEvent({
+    source: "tool:subagent",
+    type: kind === "launch" ? "subagent_task" : "subagent_reply",
+    payload: { prompt },
+    ts: Date.now(),
+    priority: 0,
+  });
+}
+
+function isContextMode(value: string): value is ContextMode {
+  return value === "none" || value === "summary" || value === "full";
+}
+
+function resolveReplyMode(
+  ctx: ToolContext,
+  subagentId: string,
+  type: SubagentType,
+  requested?: string,
+): SubagentMode | null {
+  if (requested) return resolveSubagentMode(type, requested);
+  const stored = ctx.brainBoard.get(subagentId, "returnMode");
+  if (stored === "foreground" || stored === "background") return stored;
+  return resolveSubagentMode(type);
+}
+
+function buildDefaultPlanName(task: string, subagentId: string): string {
+  const slug = task
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return slug || `plan-${subagentId.slice(-12).toLowerCase()}`;
+}
+
+function addActiveSubagent(
+  ctx: ToolContext,
+  parentBrainId: string,
+  entry: ActiveSubagentEntry,
+): void {
+  const current = getActiveSubagents(ctx, parentBrainId)
+    .filter((item) => item.id !== entry.id);
+  current.push(entry);
+  ctx.brainBoard.set(parentBrainId, "subagents.actives", current);
+}
+
+function updateActiveSubagentRequest(
+  ctx: ToolContext,
+  parentBrainId: string,
+  subagentId: string,
+  request: string,
+): void {
+  const current = getActiveSubagents(ctx, parentBrainId);
+  let changed = false;
+  const next = current.map((item) => {
+    if (item.id !== subagentId) return item;
+    changed = true;
+    return { ...item, request };
+  });
+  if (changed) {
+    ctx.brainBoard.set(parentBrainId, "subagents.actives", next);
+  }
+}
+
+function removeActiveSubagent(ctx: ToolContext, subagentId: string): void {
+  const parent = ctx.brainBoard.get(subagentId, "parent");
+  if (typeof parent !== "string" || !parent) return;
+  const current = getActiveSubagents(ctx, parent);
+  const next = current.filter((item) => item.id !== subagentId);
+  if (next.length === current.length) return;
+  if (next.length === 0) {
+    ctx.brainBoard.remove(parent, "subagents.actives");
+  } else {
+    ctx.brainBoard.set(parent, "subagents.actives", next);
+  }
+}
+
+function getActiveSubagents(ctx: ToolContext, parentBrainId: string): ActiveSubagentEntry[] {
+  const value = ctx.brainBoard.get(parentBrainId, "subagents.actives");
+  if (!Array.isArray(value)) return [];
+  return value.filter(isActiveSubagentEntry);
+}
+
+function isActiveSubagentEntry(value: unknown): value is ActiveSubagentEntry {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.id === "string"
+    && typeof item.type === "string"
+    && isSubagentType(item.type)
+    && typeof item.request === "string"
+    && typeof item.startedAt === "string";
 }

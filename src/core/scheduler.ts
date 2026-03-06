@@ -418,7 +418,6 @@ export class Scheduler {
       case "shutdown":  return this.doShutdown(target!);
       case "restart":   return this.doRestart(target!);
       case "free":      return this.doFree(target!);
-      case "resume":    return this.doResume(target!);
       default:          return `Unknown action: '${action}'`;
     }
   }
@@ -498,19 +497,6 @@ export class Scheduler {
     await this.initBrain(id, globalConfig);
     this.runBrain(id);
     return `Brain '${id}' restarted`;
-  }
-
-  private doResume(id: string): string {
-    const brain = this.brains.get(id);
-    if (!brain) return `Unknown brain: '${id}'`;
-    brain.pushEvent({
-      source: "scheduler",
-      type: "resume",
-      payload: { prompt: "<CONTINUE>" },
-      ts: Date.now(),
-      priority: 0,
-    });
-    return `Brain '${id}' resumed`;
   }
 
   private async doFree(id: string): Promise<string> {

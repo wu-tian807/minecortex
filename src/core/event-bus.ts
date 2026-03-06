@@ -42,7 +42,7 @@ export class EventBus {
   nudge(brainId: string): void {
     const queue = this.brainQueueMap.get(brainId);
     if (queue) {
-      queue.push({ source: "_system", type: "_nudge", payload: {}, ts: Date.now() });
+      queue.push({ source: "_system", type: "_nudge", payload: {}, ts: Date.now(), handoff: "turn" });
     }
   }
 

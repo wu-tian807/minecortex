@@ -1,4 +1,4 @@
-import type { Event, EventQueueInterface } from "./types.js";
+import type { Event, EventHandoff, EventQueueInterface } from "./types.js";
 
 const MAX_EVENTS = 50;
 
@@ -12,12 +12,12 @@ export class EventQueue implements EventQueueInterface {
     if (this.queue.length > MAX_EVENTS) {
       this.queue.shift();
     }
-    if (event.steer) {
+    if (resolveEventHandoff(event) === "steer") {
       for (const cb of this.steerListeners) {
         try { cb(); } catch { /* listener error */ }
       }
     }
-    if (!event.silent && this.waiter) {
+    if (resolveEventHandoff(event) !== "silent" && this.waiter) {
       const resolve = this.waiter;
       this.waiter = null;
       resolve(event);
@@ -25,7 +25,7 @@ export class EventQueue implements EventQueueInterface {
   }
 
   waitForEvent(signal?: AbortSignal): Promise<Event> {
-    const trigger = this.queue.find(e => !e.silent);
+    const trigger = this.queue.find(e => resolveEventHandoff(e) !== "silent");
     if (trigger) {
       return Promise.resolve(trigger);
     }
@@ -50,8 +50,8 @@ export class EventQueue implements EventQueueInterface {
     return this.queue.length;
   }
 
-  hasSteerEvent(): boolean {
-    return this.queue.some(e => e.steer === true);
+  hasHandoff(handoff: EventHandoff): boolean {
+    return this.queue.some((e) => resolveEventHandoff(e) === handoff);
   }
 
   onSteer(cb: () => void): { dispose(): void } {
@@ -60,4 +60,8 @@ export class EventQueue implements EventQueueInterface {
       dispose: () => { this.steerListeners.delete(cb); },
     };
   }
+}
+
+function resolveEventHandoff(event: Event): EventHandoff {
+  return event.handoff ?? "turn";
 }
