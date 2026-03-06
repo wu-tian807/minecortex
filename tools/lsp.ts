@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve, basename, extname } from "node:path";
 import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
+import { getTerminalManager } from "../src/terminal/manager.js";
 
 const ROOT = process.cwd();
 
@@ -25,9 +26,9 @@ function extractSymbolAtPosition(lines: string[], line: number, char: number): s
 
 async function grepForSymbol(
   symbol: string,
-  ctx: { terminalManager: any; brainId: string },
+  ctx: { brainId: string },
 ): Promise<string> {
-  const result = await ctx.terminalManager.exec(
+  const result = await getTerminalManager().exec(
     `rg -n --no-heading "\\b${symbol}\\b" --type-add 'code:*.{ts,tsx,js,jsx,py,go,rs,java}' -t code -l`,
     { brainId: ctx.brainId, timeoutMs: 10_000 },
   );
@@ -49,7 +50,7 @@ async function goToDefinition(
     `(?:export\\s+)?(?:function|const|let|var|class|interface|type|enum)\\s+${symbol}\\b`,
   );
 
-  const result = await ctx.terminalManager.exec(
+  const result = await getTerminalManager().exec(
     `rg -n --no-heading "${defPattern.source}" --type-add 'code:*.{ts,tsx,js,jsx}' -t code`,
     { brainId: ctx.brainId, timeoutMs: 10_000, cwd: ROOT },
   );
@@ -73,7 +74,7 @@ async function findReferences(
   const symbol = extractSymbolAtPosition(lines, line, char);
   if (!symbol) return "No symbol found at the given position.";
 
-  const result = await ctx.terminalManager.exec(
+  const result = await getTerminalManager().exec(
     `rg -n --no-heading "\\b${symbol}\\b" --type-add 'code:*.{ts,tsx,js,jsx}' -t code`,
     { brainId: ctx.brainId, timeoutMs: 10_000, cwd: ROOT },
   );

@@ -41,7 +41,6 @@ export interface AgentLoopOpts {
   brainBoard: import("./types.js").BrainBoardAPI;
   slotRegistry: DynamicSlotAPI;
   pathManager: import("./types.js").PathManagerAPI;
-  terminalManager: import("./types.js").TerminalManagerAPI;
   workspace: string;
   eventBus: EventBusAPI;
   logger?: import("./logger.js").Logger;
@@ -59,7 +58,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
   const {
     brainId, provider, tools, contextEngine,
     modelSpec, maxIterations, signal, brainBoard, slotRegistry,
-    pathManager, terminalManager, workspace, eventBus, logger,
+    pathManager, workspace, eventBus, logger,
     sessionManager, turn = 0, onAssistantMessage, hooks,
     keepToolResults = 8, showThinking = false,
   } = opts;
@@ -75,7 +74,6 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     brainBoard,
     slot: slotRegistry,
     pathManager,
-    terminalManager,
     workspace,
     trackBackgroundTask: opts.trackBackgroundTask,
     logger,
@@ -346,7 +344,6 @@ export class ConsciousBrain extends BaseBrain {
         brainBoard: this.brainBoard,
         slotRegistry: this.slotRegistry,
         pathManager: this.pathManager,
-        terminalManager: this.terminalManager,
         workspace: this.workspace,
         eventBus: this.boundEventBus,
         logger: this.logger,
@@ -402,7 +399,6 @@ export class ConsciousBrain extends BaseBrain {
       brainBoard: this.brainBoard,
       slot: this.slotRegistry,
       pathManager: this.pathManager,
-      terminalManager: this.terminalManager,
       workspace: this.workspace,
       trackBackgroundTask: (p) => {
         this.pendingTasks.add(p);

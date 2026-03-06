@@ -21,7 +21,7 @@ import { ContextEngine } from "../context/context-engine.js";
 import { SlotRegistry } from "../context/slot-registry.js";
 import { PathManager } from "../fs/path-manager.js";
 import { createFSWatcher, getFSWatcher, type FSWatcher } from "../fs/watcher.js";
-import { TerminalManager } from "../terminal/manager.js";
+import { getTerminalManager, initTerminalManager } from "../terminal/manager.js";
 import { SessionManager } from "../session/session-manager.js";
 import { Logger } from "./logger.js";
 import { createFallbackProvider, getModelSpec } from "../llm/provider.js";
@@ -65,7 +65,7 @@ export class Scheduler {
   private eventBus = new EventBus();
   private brainBoard = new BrainBoard(join(ROOT, "brains"));
   private pathManager = new PathManager(ROOT);
-  private terminalManager = new TerminalManager(this.pathManager);
+  private terminalManager = initTerminalManager(this.pathManager);
   private logger = new Logger(this.pathManager);
   private get fsWatcher(): FSWatcher | null { return getFSWatcher(); }
   private brains = new Map<string, BaseBrain>();
@@ -219,7 +219,6 @@ export class Scheduler {
       brainJson: brainConfig,
       brainBoard: this.brainBoard,
       pathManager: this.pathManager,
-      terminalManager: this.terminalManager,
       logger: this.logger,
       eventBus: this.eventBus,
     };
@@ -578,7 +577,7 @@ export class Scheduler {
     await Promise.race([Promise.all(shutdownPromises), timeout]);
 
     getFSWatcher()?.close();
-    this.terminalManager.cleanup(0);
+    getTerminalManager().cleanup(0);
     await this.logger.close();
   }
 

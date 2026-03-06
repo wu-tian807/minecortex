@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
+import { getTerminalManager } from "../src/terminal/manager.js";
 
 const DEFAULT_TIMEOUT = 30_000;
 
@@ -40,8 +41,9 @@ export default {
     const cwd = args.cwd ? String(args.cwd) : undefined;
     const timeoutMs = (args.timeout_ms as number) ?? DEFAULT_TIMEOUT;
     const extraEnv = args.env as Record<string, string> | undefined;
+    const terminalManager = getTerminalManager();
 
-    const result = await ctx.terminalManager.exec(command, {
+    const result = await terminalManager.exec(command, {
       cwd,
       env: extraEnv,
       brainId: ctx.brainId,
@@ -51,6 +53,7 @@ export default {
     const parts: string[] = [];
     if (result.backgrounded) {
       parts.push(`[backgrounded] Command still running (terminal: ${result.terminalId})`);
+      parts.push(`Log file: ${result.logFile}`);
       if (result.hint) parts.push(result.hint);
     } else {
       parts.push(`Exit code: ${result.exitCode ?? "unknown"}`);

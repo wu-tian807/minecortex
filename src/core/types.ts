@@ -147,7 +147,6 @@ export interface ToolContext {
   brainBoard: BrainBoardAPI;
   slot: DynamicSlotAPI;
   pathManager: PathManagerAPI;
-  terminalManager: TerminalManagerAPI;
   workspace: string;
   /** Register a background promise so the parent brain can await it on shutdown. */
   trackBackgroundTask?: (p: Promise<unknown>) => void;
@@ -220,11 +219,13 @@ export interface PathManagerAPI {
 
 export interface TerminalInstance {
   id: string;
+  sessionId: string;
   pid: number;
   command: string;
   cwd: string;
   brainId: string;
   startedAt: number;
+  backgrounded?: boolean;
   exitCode?: number;
   elapsedMs?: number;
   logFile: string;
@@ -242,12 +243,12 @@ export interface TerminalManagerAPI {
   get(id: string): TerminalInstance | undefined;
   list(filter?: { brainId?: string; status?: string }): TerminalInstance[];
   kill(id: string): boolean;
-  readOutput(id: string, opts?: { tail?: number }): string;
   cleanup(maxAge?: number): void;
 }
 
 export interface ExecResult {
   terminalId: string;
+  logFile: string;
   stdout: string;
   exitCode?: number;
   backgrounded: boolean;
@@ -272,7 +273,6 @@ export interface BrainInitConfig {
   brainJson: BrainJson;
   brainBoard: BrainBoardAPI;
   pathManager: PathManagerAPI;
-  terminalManager: TerminalManagerAPI;
   logger: import("./logger.js").Logger;
   eventBus: import("./event-bus.js").EventBus;
 }

@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { writeFile, readFile, mkdir, unlink } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   TerminalManagerAPI,
@@ -14,6 +13,8 @@ import type {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_STDOUT_CAPTURE = 512_000;
 
+let terminalManagerInstance: TerminalManager | null = null;
+
 interface PendingCommand {
   marker: string;
   chunks: string[];
@@ -21,48 +22,68 @@ interface PendingCommand {
 }
 
 interface ShellSession {
+  id: string;
+  baseBrainId: string;
   process: ChildProcess;
   pending: PendingCommand | null;
   ready: Promise<void>;
   markReady: (() => void) | null;
+  terminalIds: Set<string>;
+  detached: boolean;
+}
+
+export function initTerminalManager(pathManager: PathManagerAPI): TerminalManager {
+  if (!terminalManagerInstance) {
+    terminalManagerInstance = new TerminalManager(pathManager);
+  }
+  return terminalManagerInstance;
+}
+
+export function getTerminalManager(): TerminalManager {
+  if (!terminalManagerInstance) {
+    throw new Error("TerminalManager not initialized");
+  }
+  return terminalManagerInstance;
 }
 
 export class TerminalManager implements TerminalManagerAPI {
   private terminals = new Map<string, TerminalInstance>();
-  private shells = new Map<string, ShellSession>();
-  private counter = 0;
+  private sharedShells = new Map<string, ShellSession>();
+  private terminalSessions = new Map<string, ShellSession>();
+  private sessions = new Map<string, ShellSession>();
+  private terminalCounter = 0;
+  private sessionCounter = 0;
   private brainEnvCache = new Map<string, Record<string, string>>();
 
   constructor(private pathManager: PathManagerAPI) {}
 
   private logDirFor(brainId: string): string {
     const base = brainId.split(":")[0];
-    return join(this.pathManager.brainDir(base), "workspace", "terminals");
+    return join(this.pathManager.brainDir(base), "workspace", "terminate");
+  }
+
+  private baseBrainId(brainId: string): string {
+    return brainId.split(":")[0];
   }
 
   async loadBrainEnv(brainId: string): Promise<void> {
+    const base = this.baseBrainId(brainId);
     try {
       const raw = await readFile(
-        join(this.pathManager.brainDir(brainId), "brain.json"),
+        join(this.pathManager.brainDir(base), "brain.json"),
         "utf-8",
       );
       const config: BrainJson = JSON.parse(raw);
       if (config.env) {
-        this.brainEnvCache.set(brainId, config.env);
+        this.brainEnvCache.set(base, config.env);
       }
     } catch {
       // no env to load
     }
   }
 
-  private getOrCreateShell(brainId: string): ShellSession {
-    const base = brainId.split(":")[0];
-    const existing = this.shells.get(base);
-    if (existing && existing.process.exitCode === null) {
-      return existing;
-    }
-
-    const brainEnv = this.brainEnvCache.get(base) ?? {};
+  private createSession(baseBrainId: string): ShellSession {
+    const brainEnv = this.brainEnvCache.get(baseBrainId) ?? {};
     const child = spawn("bash", ["--norc", "--noprofile"], {
       cwd: this.pathManager.root(),
       env: { ...process.env, ...brainEnv, PS1: "", PS2: "" },
@@ -70,10 +91,14 @@ export class TerminalManager implements TerminalManagerAPI {
     });
 
     const session: ShellSession = {
+      id: `s${++this.sessionCounter}-${Date.now()}`,
+      baseBrainId,
       process: child,
       pending: null,
       ready: Promise.resolve(),
       markReady: null,
+      terminalIds: new Set(),
+      detached: false,
     };
 
     const handleData = (data: Buffer) => {
@@ -104,28 +129,55 @@ export class TerminalManager implements TerminalManagerAPI {
     child.stderr!.on("data", handleData);
 
     child.on("exit", () => {
-      this.shells.delete(base);
+      if (this.sharedShells.get(baseBrainId) === session) {
+        this.sharedShells.delete(baseBrainId);
+      }
+      this.sessions.delete(session.id);
+      for (const terminalId of session.terminalIds) {
+        if (this.terminalSessions.get(terminalId) === session) {
+          this.terminalSessions.delete(terminalId);
+        }
+      }
       if (session.markReady) {
         session.markReady();
         session.markReady = null;
       }
     });
 
-    this.shells.set(base, session);
+    this.sessions.set(session.id, session);
     return session;
+  }
+
+  private getOrCreateSharedShell(brainId: string): ShellSession {
+    const base = this.baseBrainId(brainId);
+    const existing = this.sharedShells.get(base);
+    if (existing && existing.process.exitCode === null) {
+      return existing;
+    }
+    const session = this.createSession(base);
+    this.sharedShells.set(base, session);
+    return session;
+  }
+
+  private detachSharedShell(brainId: string, session: ShellSession): void {
+    const base = this.baseBrainId(brainId);
+    if (this.sharedShells.get(base) === session) {
+      session.detached = true;
+      this.sharedShells.delete(base);
+    }
   }
 
   async exec(command: string, opts: ExecOpts): Promise<ExecResult> {
     const logDir = this.logDirFor(opts.brainId);
     await mkdir(logDir, { recursive: true });
 
-    const id = `t${++this.counter}-${Date.now()}`;
+    const id = `t${++this.terminalCounter}-${Date.now()}`;
     const logFile = join(logDir, `${id}.txt`);
     const startedAt = Date.now();
     const marker = `__MCEND_${id}__`;
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-    const session = this.getOrCreateShell(opts.brainId);
+    const session = this.getOrCreateSharedShell(opts.brainId);
 
     // Serialize: wait for previous command to finish if shell is still occupied
     await session.ready;
@@ -146,6 +198,7 @@ export class TerminalManager implements TerminalManagerAPI {
 
     const instance: TerminalInstance = {
       id,
+      sessionId: session.id,
       pid: session.process.pid!,
       command,
       cwd: opts.cwd ?? ".",
@@ -154,6 +207,8 @@ export class TerminalManager implements TerminalManagerAPI {
       logFile,
     };
     this.terminals.set(id, instance);
+    this.terminalSessions.set(id, session);
+    session.terminalIds.add(id);
 
     // Gate for the next command
     let readyResolve!: () => void;
@@ -168,6 +223,8 @@ export class TerminalManager implements TerminalManagerAPI {
         chunks: [],
         onComplete: (output, exitCode) => {
           clearTimeout(timer);
+          this.terminalSessions.delete(id);
+          session.terminalIds.delete(id);
           instance.exitCode = exitCode;
           instance.elapsedMs = Date.now() - startedAt;
           this.writeLog(instance, output, true);
@@ -176,6 +233,7 @@ export class TerminalManager implements TerminalManagerAPI {
             settled = true;
             resolve({
               terminalId: id,
+              logFile,
               stdout: output.slice(0, MAX_STDOUT_CAPTURE),
               exitCode,
               backgrounded: false,
@@ -187,13 +245,16 @@ export class TerminalManager implements TerminalManagerAPI {
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
+        instance.backgrounded = true;
+        this.detachSharedShell(opts.brainId, session);
         const output = session.pending?.chunks.join("") ?? "";
         this.writeLog(instance, output);
         resolve({
           terminalId: id,
+          logFile,
           stdout: output.slice(0, MAX_STDOUT_CAPTURE),
           backgrounded: true,
-          hint: `Command still running (pid ${session.process.pid}). Use readOutput("${id}") to check later.`,
+          hint: `Command still running (pid ${session.process.pid}). Read the log file: ${logFile}`,
         });
         // pending stays set — when marker arrives it will update instance and ungate next command
       }, timeoutMs);
@@ -218,10 +279,7 @@ export class TerminalManager implements TerminalManagerAPI {
   }
 
   kill(id: string): boolean {
-    const t = this.terminals.get(id);
-    if (!t) return false;
-    const base = t.brainId.split(":")[0];
-    const session = this.shells.get(base);
+    const session = this.terminalSessions.get(id);
     if (!session || session.process.exitCode !== null) return false;
     try {
       // Send Ctrl+C to interrupt the current command without killing the shell
@@ -232,27 +290,14 @@ export class TerminalManager implements TerminalManagerAPI {
     }
   }
 
-  readOutput(id: string, opts?: { tail?: number }): string {
-    const t = this.terminals.get(id);
-    if (!t) return `Terminal ${id} not found`;
-    try {
-      const content = readFileSync(t.logFile, "utf-8");
-      if (opts?.tail) {
-        const lines = content.split("\n");
-        return lines.slice(-opts.tail).join("\n");
-      }
-      return content;
-    } catch {
-      return `Log file not available for terminal ${id}`;
-    }
-  }
-
   cleanup(maxAge?: number): void {
     if (maxAge === 0) {
-      for (const [, session] of this.shells) {
+      for (const [, session] of this.sessions) {
         try { session.process.kill("SIGTERM"); } catch {}
       }
-      this.shells.clear();
+      this.sharedShells.clear();
+      this.terminalSessions.clear();
+      this.sessions.clear();
     }
 
     const cutoff = Date.now() - (maxAge ?? 3_600_000);
@@ -272,10 +317,12 @@ export class TerminalManager implements TerminalManagerAPI {
     const header = [
       "---",
       `id: ${instance.id}`,
+      `session_id: ${instance.sessionId}`,
       `pid: ${instance.pid}`,
       `cwd: ${instance.cwd}`,
       `command: ${instance.command}`,
       `brain: ${instance.brainId}`,
+      `backgrounded: ${instance.backgrounded ? "true" : "false"}`,
       `started_at: ${new Date(instance.startedAt).toISOString()}`,
       "---",
       "",

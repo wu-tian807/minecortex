@@ -9,7 +9,6 @@ import type {
   EventBusAPI,
   BrainBoardAPI,
   PathManagerAPI,
-  TerminalManagerAPI,
 } from "./types.js";
 import type { Logger } from "./logger.js";
 import type { EventBus } from "./event-bus.js";
@@ -33,7 +32,6 @@ export abstract class BaseBrain implements BrainInterface {
   // Shared singletons (passed in via config)
   protected readonly brainBoard: BrainBoardAPI;
   protected readonly pathManager: PathManagerAPI;
-  protected readonly terminalManager: TerminalManagerAPI;
   protected readonly logger: Logger;
   protected readonly eventBus: EventBus;
 
@@ -48,7 +46,6 @@ export abstract class BaseBrain implements BrainInterface {
     // Shared singletons
     this.brainBoard = config.brainBoard;
     this.pathManager = config.pathManager;
-    this.terminalManager = config.terminalManager;
     this.logger = config.logger;
     this.eventBus = config.eventBus;
 

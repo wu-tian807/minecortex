@@ -8,7 +8,6 @@ import type {
   BrainBoardAPI,
   DynamicSlotAPI,
   PathManagerAPI,
-  TerminalManagerAPI,
   Event,
   ModelSpec,
 } from "../src/core/types.js";
@@ -189,7 +188,6 @@ export default {
           brainBoard: ctx.brainBoard,
           slotRegistry,
           pathManager: ctx.pathManager,
-          terminalManager: ctx.terminalManager,
           workspace: ctx.workspace,
           eventBus: ctx.eventBus,
           logger: ctx.logger,
