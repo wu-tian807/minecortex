@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { ToolDefinition, FSWatcherAPI, FSChangeEvent } from "../core/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
@@ -56,6 +56,7 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
 
   private handleChange(event: FSChangeEvent): void {
     if (!this.loaderCtx) return;
+    if (!this.matchesConfiguredDir(event.path)) return;
     const name = event.path.replace(/.*\//, "").replace(/\.ts$/, "");
 
     if (event.type === "delete") {
@@ -74,11 +75,23 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
     }
   }
 
+  private matchesConfiguredDir(path: string): boolean {
+    if (!this.loaderCtx) return false;
+    const dirs = [
+      this.loaderCtx.globalCapabilityDir ?? join(this.loaderCtx.globalDir, "tools"),
+      this.loaderCtx.localCapabilityDir ?? join(this.loaderCtx.brainDir, "tools"),
+    ];
+    return dirs.some((dir) => {
+      const prefix = relative(this.loaderCtx!.globalDir, dir).replace(/\\/g, "/");
+      return prefix.length > 0 && (path === prefix || path.startsWith(`${prefix}/`));
+    });
+  }
+
   async load(ctx: LoaderContext): Promise<ToolDefinition[]> {
     this.loaderCtx = ctx;
     const paths = await this.discover(
-      join(ctx.globalDir, "tools"),
-      join(ctx.brainDir, "tools"),
+      ctx.globalCapabilityDir ?? join(ctx.globalDir, "tools"),
+      ctx.localCapabilityDir ?? join(ctx.brainDir, "tools"),
     );
     this.toolPaths = paths;
     await this.loadAll(paths, ctx);

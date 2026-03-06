@@ -31,7 +31,7 @@ const TOOL_ICONS: Record<string, string> = {
   grep: "🔍",
   web_search: "🌐",
   web_fetch: "🌐",
-  spawn_thought: "🤖",
+  subagent: "🤖",
   todo_write: "📋",
 };
 
@@ -188,10 +188,10 @@ class EventRecorder {
     const argsStr = JSON.stringify(args);
     const preview = argsStr.length > 120 ? argsStr.slice(0, 117) + "..." : argsStr;
 
-    if (name === "spawn_thought") {
+    if (name === "subagent") {
       const task = String(args.task ?? "");
       const type = String(args.type ?? "");
-      this.writeQA(`> 🤖 \`spawn_thought\` (${type}): ${task.slice(0, 120)}\n\n`).catch(() => {});
+      this.writeQA(`> 🤖 \`subagent\` (${type}): ${task.slice(0, 120)}\n\n`).catch(() => {});
     } else {
       this.writeQA(`> ${icon} \`${name}\`(${preview})\n`).catch(() => {});
     }
@@ -201,7 +201,7 @@ class EventRecorder {
   recordToolResult(name: string, result: unknown, durationMs: number): void {
     const resultStr = typeof result === "string" ? result : JSON.stringify(result);
 
-    if (name !== "spawn_thought") {
+    if (name !== "subagent") {
       const qaPreview = resultStr.length > 500 ? resultStr.slice(0, 497) + "..." : resultStr;
       this.writeQA(`\`\`\`\n${qaPreview}\n\`\`\`\n\n`).catch(() => {});
     } else {
@@ -210,7 +210,7 @@ class EventRecorder {
         const r = typeof result === "string" ? JSON.parse(result) : result as Record<string, unknown>;
         status = String((r as Record<string, unknown>)?.status ?? "completed");
       } catch { /* keep default */ }
-      this.writeQA(`> spawn_thought ${status} (${durationMs}ms)\n\n`).catch(() => {});
+      this.writeQA(`> subagent ${status} (${durationMs}ms)\n\n`).catch(() => {});
     }
 
     const evPreview = resultStr.slice(0, 300);

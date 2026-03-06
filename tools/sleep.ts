@@ -50,7 +50,7 @@ export default {
     return (
       `<tick> Waited 30s of requested ${seconds}s. ` +
       `Remaining: ${remaining}s. ` +
-      `Consider checking spawn_thought output or calling sleep again for the rest.`
+      `Consider checking subagent output or calling sleep again for the rest.`
     );
   },
 } satisfies ToolDefinition;

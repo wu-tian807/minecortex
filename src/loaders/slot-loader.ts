@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { ContextSlot, SlotFactory, SlotContext } from "../context/types.js";
 import type { FSWatcherAPI, FSChangeEvent } from "../core/types.js";
 import type { LoaderContext } from "./types.js";
@@ -77,6 +77,7 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
   }
 
   private handleDirectChange(event: FSChangeEvent): void {
+    if (!this.matchesConfiguredDir(event.path)) return;
     const name = event.path.replace(/.*\//, "").replace(/\.ts$/, "");
     if (event.type === "delete") {
       const existing = this.registry.get(name);
@@ -99,6 +100,18 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
     await this.reload(name, absolutePath, this.loaderCtx);
   }
 
+  private matchesConfiguredDir(path: string): boolean {
+    if (!this.loaderCtx) return false;
+    const dirs = [
+      this.loaderCtx.globalCapabilityDir ?? join(this.loaderCtx.globalDir, "slots"),
+      this.loaderCtx.localCapabilityDir ?? join(this.loaderCtx.brainDir, "slots"),
+    ];
+    return dirs.some((dir) => {
+      const prefix = relative(this.loaderCtx!.globalDir, dir).replace(/\\/g, "/");
+      return prefix.length > 0 && (path === prefix || path.startsWith(`${prefix}/`));
+    });
+  }
+
   invalidateSlot(name: string): void {
     const slots = this.registry.get(name);
     if (slots) {
@@ -114,8 +127,8 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
   async load(ctx: LoaderContext): Promise<ContextSlot[]> {
     this.loaderCtx = ctx;
     const paths = await this.discover(
-      join(ctx.globalDir, "slots"),
-      join(ctx.brainDir, "slots"),
+      ctx.globalCapabilityDir ?? join(ctx.globalDir, "slots"),
+      ctx.localCapabilityDir ?? join(ctx.brainDir, "slots"),
     );
     this.slotPaths = paths;
     await this.loadAll(paths, ctx);

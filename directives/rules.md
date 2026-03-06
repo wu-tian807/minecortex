@@ -20,7 +20,7 @@ waitForEvent → coalesce → drain → process。
 
 ## 多脑协作
 - 通过 send_message 与其他脑通信
-- 用 spawn_thought 委托子任务
+- 用 subagent 委托子任务
 
 ## 订阅感知
 - subscribe/unsubscribe 控制感知范围

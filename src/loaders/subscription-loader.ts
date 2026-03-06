@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type {
   EventSource,
   EventSourceFactory,
@@ -74,6 +74,7 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
     const self = this;
     const handler = (event: import("../core/types.js").FSChangeEvent) => {
       if (!self.lastCtx) return;
+      if (!self.matchesConfiguredDir(event.path)) return;
       const name = event.path.replace(/\.ts$/, "").split("/").pop() ?? "";
       const fullPath = self.pathMap.get(name);
       if (fullPath) {
@@ -87,11 +88,23 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
     watcher.register(/brains\/[^/]+\/brain\.json$/, () => {});
   }
 
+  private matchesConfiguredDir(path: string): boolean {
+    if (!this.lastCtx) return false;
+    const dirs = [
+      this.lastCtx.globalCapabilityDir ?? join(this.lastCtx.globalDir, "subscriptions"),
+      this.lastCtx.localCapabilityDir ?? join(this.lastCtx.brainDir, "subscriptions"),
+    ];
+    return dirs.some((dir) => {
+      const prefix = relative(this.lastCtx!.globalDir, dir).replace(/\\/g, "/");
+      return prefix.length > 0 && (path === prefix || path.startsWith(`${prefix}/`));
+    });
+  }
+
   async load(ctx: LoaderContext): Promise<EventSource[]> {
     this.lastCtx = ctx;
     const paths = await this.discover(
-      join(ctx.globalDir, "subscriptions"),
-      join(ctx.brainDir, "subscriptions"),
+      ctx.globalCapabilityDir ?? join(ctx.globalDir, "subscriptions"),
+      ctx.localCapabilityDir ?? join(ctx.brainDir, "subscriptions"),
     );
     this.pathMap = paths;
     await this.loadAll(paths, ctx);

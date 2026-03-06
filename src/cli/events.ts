@@ -34,7 +34,7 @@ const TOOL_ICONS: Record<string, string> = {
   grep:         "🔍",
   web_search:   "🌐",
   web_fetch:    "🌐",
-  spawn_thought: "🤖",
+  subagent: "🤖",
   todo_write:   "📋",
 };
 
@@ -71,12 +71,12 @@ export function formatEvent(ev: RendererEvent): string | null {
 
     case "tool_call": {
       const tag = ev.brain ? `${C.dim}${ev.brain}${C.reset} ` : "";
-      if (ev.name === "spawn_thought") {
+      if (ev.name === "subagent") {
         const task = String(ev.args?.task ?? "");
         const type = String(ev.args?.type ?? "");
         const mode = String(ev.args?.mode ?? "background");
         return (
-          `\n${C.magenta}┌─ ${C.bold}thought${C.reset} ${C.dim}(${type}, ${mode})${C.reset}\n` +
+          `\n${C.magenta}┌─ ${C.bold}subagent${C.reset} ${C.dim}(${type}, ${mode})${C.reset}\n` +
           `${C.magenta}│${C.reset}  ${C.dim}${task.slice(0, 80)}${C.reset}\n`
         );
       }
@@ -88,7 +88,7 @@ export function formatEvent(ev: RendererEvent): string | null {
 
     case "tool_result": {
       const tag = ev.brain ? `${C.dim}${ev.brain} ${C.reset}` : "";
-      if (ev.name === "spawn_thought") {
+      if (ev.name === "subagent") {
         let status = "completed";
         try {
           status = String((JSON.parse(ev.preview) as Record<string, unknown>)?.status ?? "completed");

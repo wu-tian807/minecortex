@@ -5,4 +5,6 @@ export interface LoaderContext {
   brainDir: string;
   globalDir: string;
   selector: CapabilitySelector;
+  globalCapabilityDir?: string;
+  localCapabilityDir?: string;
 }

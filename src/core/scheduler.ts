@@ -1,13 +1,15 @@
 /** @desc Scheduler — singleton managers, brain discovery, ScriptBrain support, shutdown handling */
 
 import { readFile, readdir, stat, mkdir, writeFile, access, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { existsSync } from "node:fs";
 import type {
   BrainJson,
   MineclawConfig,
   ModelsConfig,
   BrainInitConfig,
+  CapabilitySelector,
+  CapabilityPathRedirects,
 } from "./types.js";
 import { EventBus } from "./event-bus.js";
 import { BrainBoard } from "./brain-board.js";
@@ -228,6 +230,7 @@ export class Scheduler {
     const brainConfig = await this.loadBrainConfig(brainId);
     const brainDir = this.pathManager.brainDir(brainId);
     const baseConfig = this.createBrainInitConfig(brainId, brainConfig);
+    const capabilityDirs = this.resolveCapabilityDirs(brainDir, brainConfig.paths);
 
     await this.terminalManager.loadBrainEnv(brainId);
 
@@ -257,6 +260,8 @@ export class Scheduler {
       brainDir,
       globalDir: ROOT,
       selector: selectorTools,
+      globalCapabilityDir: capabilityDirs.tools.global,
+      localCapabilityDir: capabilityDirs.tools.local,
     });
 
     // Setup slot registry and context engine
@@ -280,6 +285,8 @@ export class Scheduler {
       brainDir,
       globalDir: ROOT,
       selector: selectorSlots,
+      globalCapabilityDir: capabilityDirs.slots.global,
+      localCapabilityDir: capabilityDirs.slots.local,
     });
 
     // Create provider
@@ -303,18 +310,6 @@ export class Scheduler {
     }
 
     const modelSpec = getModelSpec(modelName);
-
-    // Inject __allTools for spawn_thought access
-    for (const t of tools) {
-      if (t.name === "spawn_thought") {
-        const origExecute = t.execute;
-        const allToolsRef = tools;
-        t.execute = (args, toolCtx) => {
-          (toolCtx as any).__allTools = allToolsRef;
-          return origExecute(args, toolCtx);
-        };
-      }
-    }
 
     // Create ConsciousBrain
     const consciousConfig: ConsciousBrainInitConfig = {
@@ -383,6 +378,8 @@ export class Scheduler {
       brainDir,
       globalDir: ROOT,
       selector: selectorSub,
+      globalCapabilityDir: this.resolveCapabilityDirs(brainDir, brainConfig.paths).subscriptions.global,
+      localCapabilityDir: this.resolveCapabilityDirs(brainDir, brainConfig.paths).subscriptions.local,
     });
   }
 
@@ -406,6 +403,9 @@ export class Scheduler {
     model?: string;
     soul?: string;
     subscriptions?: Record<string, unknown>;
+    tools?: CapabilitySelector;
+    slots?: CapabilitySelector;
+    paths?: CapabilityPathRedirects;
     autoStart?: boolean;
   }): Promise<string> {
     this.logger.info("scheduler", 0, `brain_control: ${action}${target ? ` → '${target}'` : ""}`);
@@ -435,6 +435,9 @@ export class Scheduler {
     model?: string;
     soul?: string;
     subscriptions?: Record<string, unknown>;
+    tools?: CapabilitySelector;
+    slots?: CapabilitySelector;
+    paths?: CapabilityPathRedirects;
     autoStart?: boolean;
   }): Promise<string> {
     if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
@@ -452,6 +455,9 @@ export class Scheduler {
       brainJson.models = { ...(brainJson.models as object ?? {}), model: opts.model };
     }
     if (opts?.subscriptions) brainJson.subscriptions = opts.subscriptions;
+    if (opts?.tools) brainJson.tools = opts.tools;
+    if (opts?.slots) brainJson.slots = opts.slots;
+    if (opts?.paths) brainJson.paths = opts.paths;
     await writeFile(join(brainDir, "brain.json"), JSON.stringify(brainJson, null, 2) + "\n", "utf-8");
     await writeFile(join(brainDir, "soul.md"), opts?.soul ?? Scheduler.defaultSoul(id), "utf-8");
 
@@ -519,6 +525,23 @@ export class Scheduler {
       this.logger.info("scheduler", 0, `brain dir deleted: brains/${id}/`);
     }
     return `Brain '${id}' freed`;
+  }
+
+  private resolveCapabilityDirs(
+    brainDir: string,
+    redirects?: CapabilityPathRedirects,
+  ): Record<"tools" | "slots" | "subscriptions", { global: string; local: string }> {
+    const resolveLocalDir = (kind: "tools" | "slots" | "subscriptions") => {
+      const redirected = redirects?.[kind];
+      if (!redirected) return join(brainDir, kind);
+      return isAbsolute(redirected) ? redirected : join(ROOT, redirected);
+    };
+
+    return {
+      tools: { global: join(ROOT, "tools"), local: resolveLocalDir("tools") },
+      slots: { global: join(ROOT, "slots"), local: resolveLocalDir("slots") },
+      subscriptions: { global: join(ROOT, "subscriptions"), local: resolveLocalDir("subscriptions") },
+    };
   }
 
   /** Start a brain's run loop (fire-and-forget with error logging) */
