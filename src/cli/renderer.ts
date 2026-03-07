@@ -32,6 +32,7 @@ interface MineclawJson {
 
 const PROMPT             = `${C.cyan}›${C.reset} `;
 const PROMPT_VISIBLE_LEN = 2; // "› "
+const THINKING_PREVIEW_MAX = 120;
 
 // ─── CLIRenderer ───
 
@@ -64,6 +65,10 @@ export class CLIRenderer {
 
   // Status bar component (brain/session label + context ring + spinner)
   private statusBar = new StatusBar();
+  private thinkingPreview = "";
+  private textPreview = "";
+  private streamedTextThisTurn = false;
+  private streamedThinkingThisTurn = false;
 
   constructor(rootDir: string, callbacks: RendererCallbacks) {
     this.rootDir    = rootDir;
@@ -94,13 +99,33 @@ export class CLIRenderer {
 
   // ─── Footer (status bar + input line) ───
   //
-  // The renderer always occupies 2 fixed lines at the bottom:
+  // The renderer always occupies 3 fixed lines at the bottom:
+  //   line N-2: dim thinking preview (streaming only)
   //   line N-1: dim status bar  (brain / session info + optional spinner)
   //   line N:   prompt + input buffer
   //
-  // print() clears those 2 lines, writes content, then redraws them.
+  // print() clears those 3 lines, writes content, then redraws them.
   // redrawInputLine() only redraws line N (for typing / backspace).
   // redrawStatusBar() only redraws line N-1 (for spinner updates).
+
+  private renderThinkingPreview(): string {
+    const activePreview = this.thinkingPreview
+      ? { icon: "💭", text: this.thinkingPreview }
+      : this.textPreview
+        ? { icon: "…", text: this.textPreview }
+        : null;
+    if (!activePreview) return "";
+    const normalized = activePreview.text.replace(/\s+/g, " ").trim();
+    if (!normalized) return "";
+    const clipped = normalized.length > THINKING_PREVIEW_MAX
+      ? `...${normalized.slice(-(THINKING_PREVIEW_MAX - 3))}`
+      : normalized;
+    return `${C.dim}${activePreview.icon} ${clipped}${C.reset}`;
+  }
+
+  private writeThinkingPreview(): void {
+    process.stdout.write(this.renderThinkingPreview());
+  }
 
   private writeStatusBar(): void {
     process.stdout.write(this.statusBar.render());
@@ -108,6 +133,10 @@ export class CLIRenderer {
 
   private drawFooter(): void {
     if (!this.isTTY) return;
+    clearLine();
+    cursorToCol0();
+    this.writeThinkingPreview();
+    process.stdout.write("\n");
     this.writeStatusBar();
     process.stdout.write("\n");
     clearLine();
@@ -126,6 +155,16 @@ export class CLIRenderer {
     cursorToCol(PROMPT_VISIBLE_LEN + this.inputBuffer.length);
   }
 
+  private redrawThinkingPreview(): void {
+    if (!this.isTTY || this.overlay) return;
+    cursorToCol0();
+    cursorUp(2);
+    clearLine();
+    this.writeThinkingPreview();
+    cursorDown(2);
+    cursorToCol(PROMPT_VISIBLE_LEN + this.inputBuffer.length);
+  }
+
   private redrawInputLine(): void {
     if (!this.isTTY) return;
     clearLine();
@@ -133,11 +172,11 @@ export class CLIRenderer {
     process.stdout.write(PROMPT + this.inputBuffer);
   }
 
-  /** Clear the 2-line footer area (cursor lands at start of status bar line). */
+  /** Clear the 3-line footer area (cursor lands at start of thinking line). */
   private clearFooter(): void {
     cursorToCol0();           // col 0 of input line
-    cursorUp(1);              // up to status bar
-    clearToEnd();             // clear status bar + input line
+    cursorUp(2);              // up to thinking line
+    clearToEnd();             // clear thinking + status bar + input line
   }
 
   // ─── Context usage subscription ───
@@ -170,10 +209,78 @@ export class CLIRenderer {
     this.drawFooter();
   }
 
+  private appendTextChunk(text: string): void {
+    if (!text) return;
+    this.streamedTextThisTurn = true;
+    this.textPreview += text;
+    if (this.isTTY) {
+      this.redrawThinkingPreview();
+    }
+  }
+
+  private appendThinkingChunk(text: string): void {
+    if (!text) return;
+    this.streamedThinkingThisTurn = true;
+    this.thinkingPreview += text;
+    if (this.isTTY) {
+      this.redrawThinkingPreview();
+    }
+  }
+
+  private resetStreamingState(): void {
+    this.thinkingPreview = "";
+    this.textPreview = "";
+    this.streamedTextThisTurn = false;
+    this.streamedThinkingThisTurn = false;
+  }
+
+  private finalizeLiveAssistant(): void {
+    const hadPreview = Boolean(this.thinkingPreview || this.textPreview);
+    this.thinkingPreview = "";
+    this.textPreview = "";
+    this.streamedTextThisTurn = false;
+    this.streamedThinkingThisTurn = false;
+    if (hadPreview && this.isTTY) {
+      this.redrawThinkingPreview();
+    }
+  }
+
   private printEvent(ev: RendererEvent, isLive = false): void {
     // turn_start/turn_end only update the thinking spinner for live events
-    if (ev.k === "turn_start") { if (isLive) this.setThinking(true);  return; }
-    if (ev.k === "turn_end")   { if (isLive) this.setThinking(false); return; }
+    if (ev.k === "turn_start") {
+      if (isLive) {
+        this.resetStreamingState();
+        this.redrawThinkingPreview();
+        this.setThinking(true);
+      }
+      return;
+    }
+    if (ev.k === "turn_end") {
+      if (isLive) {
+        this.finalizeLiveAssistant();
+        this.setThinking(false);
+      }
+      return;
+    }
+    if (ev.k === "assistant_chunk") {
+      if (!isLive) return;
+      if (ev.kind === "text") this.appendTextChunk(ev.text);
+      if (ev.kind === "thinking") this.appendThinkingChunk(ev.text);
+      return;
+    }
+    if (ev.k === "assistant" && isLive) {
+      const shouldPrintText = Boolean(ev.text?.trim());
+      const shouldPrintThinking = !this.streamedThinkingThisTurn && Boolean(ev.thinking?.trim());
+      this.finalizeLiveAssistant();
+      if (!shouldPrintText && !shouldPrintThinking) return;
+      const finalText = formatEvent({
+        ...ev,
+        text: shouldPrintText ? ev.text : undefined,
+        thinking: shouldPrintThinking ? ev.thinking : undefined,
+      });
+      if (finalText) this.print(finalText);
+      return;
+    }
     const text = formatEvent(ev);
     if (text) this.print(text);
   }
@@ -184,16 +291,9 @@ export class CLIRenderer {
     this.overlay          = ov;
     this.overlayOnConfirm = onConfirm;
     this.inputBuffer = "";
-    // Cursor is on the input line row; draw the status bar on the row above, then
-    // redraw the blank input line so the box has a clean anchor.
-    cursorToCol0();
-    cursorUp(1);
-    clearLine();
-    this.writeStatusBar();
-    cursorDown(1);
-    cursorToCol0();
-    clearLine();
-    process.stdout.write(PROMPT);
+    // Cursor is on the input line row; redraw the footer so the overlay has a clean anchor.
+    this.clearFooter();
+    this.drawFooter();
     ov.show();
   }
 
@@ -202,7 +302,7 @@ export class CLIRenderer {
     this.overlay.clear();
     this.overlay          = null;
     this.overlayOnConfirm = null;
-    this.redrawInputLine();
+    this.drawFooter();
     // Flush buffered prints
     const buffered = this.pendingPrints.splice(0);
     for (const text of buffered) this.print(text);
@@ -353,13 +453,14 @@ export class CLIRenderer {
     this.activeBrain  = brainId;
     this.activeSession = sessionId;
     this.statusBar.setContext(brainId, sessionId);
+    this.resetStreamingState();
     this.setThinking(false);
     this.subscribeContext(brainId);
     // session.json is the truth — update it so the brain uses this session going forward
     await this.writeSessionJson(brainId, sessionId);
     // activeBrain is the only thing persisted in minecortex.json
     await this.writeConfig(brainId);
-    // Clear screen, re-establish the 2-line footer anchor, then replay new session
+    // Clear screen, re-establish the footer anchor, then replay new session
     process.stdout.write("\x1b[2J\x1b[H");
     this.drawFooter();
     await this.replayAndTail();
@@ -458,7 +559,6 @@ export class CLIRenderer {
       this.inputBuffer = "";
       this.historyIdx  = -1;
       this.clearFooter();
-      process.stdout.write("\n");
       if (text) {
         if (this.inputHistory[this.inputHistory.length - 1] !== text) {
           this.inputHistory.push(text);

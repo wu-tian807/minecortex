@@ -183,6 +183,17 @@ class EventRecorder {
     }).catch(() => {});
   }
 
+  recordAssistantChunk(kind: "text" | "thinking", text: string): void {
+    if (!text) return;
+    this.appendEvent({
+      k: "assistant_chunk",
+      brain: this.brainId,
+      kind,
+      text,
+      ts: Date.now(),
+    }).catch(() => {});
+  }
+
   recordToolCall(name: string, args: Record<string, unknown>): void {
     const icon = TOOL_ICONS[name] ?? "▸";
     const argsStr = JSON.stringify(args);
@@ -241,7 +252,7 @@ export default function create(ctx: SourceContext): EventSource {
   const logsDir = ctx.brain.pathManager.logsDir(ctx.brain.id);
   const brainDir = ctx.brain.pathManager.brainDir(ctx.brain.id);
   const recorder = new EventRecorder(logsDir, ctx.brain.id);
-  const _showThinking = getShowThinking(ctx);
+  const showThinking = getShowThinking(ctx);
 
   return {
     name: "recorder",
@@ -269,6 +280,18 @@ export default function create(ctx: SourceContext): EventSource {
         ctx.brain.hooks.on(HookEvent.AssistantMessage, ({ msg }) =>
           recorder.recordAssistantMessage(msg)
         )
+      );
+
+      unsubs.push(
+        ctx.brain.hooks.on(HookEvent.StreamChunk, ({ chunk }) => {
+          if (chunk.type === "text") {
+            recorder.recordAssistantChunk("text", chunk.text);
+            return;
+          }
+          if (chunk.type === "thinking" && showThinking) {
+            recorder.recordAssistantChunk("thinking", chunk.text);
+          }
+        })
       );
 
       unsubs.push(

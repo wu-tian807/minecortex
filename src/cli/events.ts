@@ -8,6 +8,7 @@ export type RendererEvent =
   | { k: "user_input";   text: string; ts: number }
   | { k: "brain_message"; source: string; text: string; ts: number }
   | { k: "cli_message";  source: string; text: string; ts: number }
+  | { k: "assistant_chunk"; brain?: string; kind: "text" | "thinking"; text: string; ts: number }
   | { k: "assistant";    brain?: string; text?: string; thinking?: string; ts: number }
   | { k: "tool_call";    brain?: string; name: string; args: Record<string, unknown>; ts: number }
   | { k: "tool_result";  brain?: string; name: string; preview: string; durationMs: number; ts: number }
@@ -68,6 +69,9 @@ export function formatEvent(ev: RendererEvent): string | null {
       if (text) out += `${tag}${text}\n`;
       return out ? out + "\n" : null;
     }
+
+    case "assistant_chunk":
+      return null;
 
     case "tool_call": {
       const tag = ev.brain ? `${C.dim}${ev.brain}${C.reset} ` : "";
