@@ -59,6 +59,10 @@ function toolResultText(msg: LLMMessage): string {
         .join("");
 }
 
+interface ToolResponseCollectOptions {
+  textFallback?: boolean;
+}
+
 /** Convert a terminal tool result message into a Gemini functionResponse part. */
 export function toolResultPartToGemini(msg: LLMMessage): any {
   const functionName = msg.toolName ?? "unknown_tool";
@@ -76,17 +80,30 @@ export function toolResultPartToGemini(msg: LLMMessage): any {
 }
 
 /** Group contiguous terminal tool results into one Gemini user turn. */
-export function collectToolResponsesToGemini(messages: LLMMessage[], startIndex: number): {
+export function collectToolResponsesToGemini(
+  messages: LLMMessage[],
+  startIndex: number,
+  options: ToolResponseCollectOptions = {},
+): {
   content: any;
   nextIndex: number;
 } {
+  const textFallback = options.textFallback ?? false;
   const parts: any[] = [];
   let index = startIndex;
 
   while (index < messages.length && messages[index].role === "tool") {
     const msg = messages[index];
     if (msg.toolStatus !== "pending") {
-      parts.push(toolResultPartToGemini(msg));
+      if (textFallback) {
+        const toolName = msg.toolName ?? "unknown_tool";
+        const resultText = toolResultText(msg);
+        parts.push({
+          text: `[Historical tool result: ${toolName}]\n${resultText || "(empty result)"}`,
+        });
+      } else {
+        parts.push(toolResultPartToGemini(msg));
+      }
     }
     index++;
   }

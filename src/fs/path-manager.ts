@@ -43,10 +43,6 @@ export class PathManager implements PathManagerAPI {
     const targetBrain = input.brain ?? callerBrainId;
     const raw = input.path;
 
-    if (this.isBrainLocalPattern(raw)) {
-      return resolve(this.brainDir(targetBrain), raw);
-    }
-
     if (raw.startsWith("/")) return normalize(raw);
 
     return resolve(this.brainDir(targetBrain), "workspace", raw);
@@ -79,19 +75,5 @@ export class PathManager implements PathManagerAPI {
 
     // Outside project root or non-evolve: deny
     return false;
-  }
-
-  private isBrainLocalPattern(raw: string): boolean {
-    if (raw.startsWith("/")) return false;
-    const localPrefixes = [
-      "state.json",
-      "brain.json",
-      "memory/",
-      "src/",
-      "notes/",
-      "inbox/",
-      "outbox/",
-    ];
-    return localPrefixes.some(p => raw === p || raw.startsWith(p));
   }
 }

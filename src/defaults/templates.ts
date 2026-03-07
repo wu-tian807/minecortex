@@ -1,12 +1,22 @@
 /** 默认配置模板 */
 
 import type { BrainJson, MineclawConfig, ModelSpec } from "../core/types.js";
+import { BRAIN_DEFAULTS } from "./brain-defaults.js";
 
 export const DEFAULT_BRAIN_JSON: BrainJson = {
-  models: {},
+  models: {
+    showThinking: true,
+  },
+  coalesceMs: BRAIN_DEFAULTS.coalesceMs,
+  maxIterations: BRAIN_DEFAULTS.maxIterations,
   subscriptions: { global: "none", enable: ["cli", "recorder"] },
   tools: { global: "all", disable: ["manage_brain"] },
   slots: { global: "all" },
+  session: {
+    keepToolResults: BRAIN_DEFAULTS.session.keepToolResults,
+    keepMedias: BRAIN_DEFAULTS.session.keepMedias,
+  },
+  timezone: BRAIN_DEFAULTS.timezone,
 };
 
 export const DEFAULT_MINECLAW_JSON: MineclawConfig = {
@@ -18,9 +28,14 @@ export const DEFAULT_MINECLAW_JSON: MineclawConfig = {
 };
 
 export const DEFAULT_LLM_KEY_JSON = {
-  gemini: {
+  "gemini-3": {
     api_key: "",
-    api: "google-generative-ai",
+    api: "google-gemini-3",
+    models: ["gemini-3.1-pro-preview"],
+  },
+  "gemini-2": {
+    api_key: "",
+    api: "google-gemini-2",
     models: ["gemini-2.5-flash", "gemini-2.5-pro"],
   },
   "azure-claude": {

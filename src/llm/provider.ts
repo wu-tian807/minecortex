@@ -29,7 +29,7 @@ interface KeyEntry {
 
 type ProviderFactory = (opts: ProviderFactoryOpts) => LLMProvider;
 
-// ── Adapter Registry (keyed by api type, e.g. "google-generative-ai") ──
+// ── Adapter Registry (keyed by api type, e.g. "google-gemini-2") ──
 
 const registry = new Map<string, ProviderFactory>();
 
@@ -121,7 +121,7 @@ export function resolveModelParams(
   const reasoningEffort = spec.reasoning
     ? (modelsConfig?.reasoningEffort ?? undefined)
     : undefined;
-  const showThinking = modelsConfig?.showThinking ?? false;
+  const showThinking = modelsConfig?.showThinking ?? true;
 
   return { temperature, maxTokens, reasoningEffort, showThinking };
 }

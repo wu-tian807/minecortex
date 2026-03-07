@@ -14,20 +14,25 @@ import {
 
 function messagesToGemini3(messages: LLMMessage[]): any[] {
   const contents: any[] = [];
+  let textFallbackForNextToolTurn = false;
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (msg.role === "system") continue;
 
     if (msg.role === "tool") {
-      const grouped = collectToolResponsesToGemini(messages, i);
+      const grouped = collectToolResponsesToGemini(messages, i, {
+        textFallback: textFallbackForNextToolTurn,
+      });
       contents.push(grouped.content);
+      textFallbackForNextToolTurn = false;
       i = grouped.nextIndex - 1;
       continue;
     }
 
     if (msg.role === "assistant") {
       const parts: any[] = [];
+      const shouldTextifyToolBatch = msg.toolCalls?.some((tc) => !tc.thoughtSignature) ?? false;
 
       if (msg.thinking) {
         const part: any = { thought: true, text: msg.thinking };
@@ -44,7 +49,7 @@ function messagesToGemini3(messages: LLMMessage[]): any[] {
 
       if (msg.toolCalls?.length) {
         for (const tc of msg.toolCalls) {
-          if (!tc.thoughtSignature) {
+          if (shouldTextifyToolBatch) {
             const argsStr = JSON.stringify(tc.arguments ?? {}, null, 2);
             parts.push({
               text: `[Historical context: tool "${tc.name}" was called with arguments: ${argsStr}. Do not mimic this format - use proper function calling.]`,
@@ -56,6 +61,8 @@ function messagesToGemini3(messages: LLMMessage[]): any[] {
             });
           }
         }
+
+        textFallbackForNextToolTurn = shouldTextifyToolBatch;
       }
 
       if (parts.length > 0) {

@@ -1,7 +1,12 @@
 {
-  "gemini": {
+  "gemini-3": {
     "api_key": "",
-    "api": "google-generative-ai",
+    "api": "google-gemini-3",
+    "models": ["gemini-3.1-pro-preview"]
+  },
+  "gemini-2": {
+    "api_key": "",
+    "api": "google-gemini-2",
     "models": ["gemini-2.5-flash", "gemini-2.5-pro"]
   },
   "azure-claude": {

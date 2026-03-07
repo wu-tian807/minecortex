@@ -96,6 +96,6 @@ function createGemini2Provider(opts: ProviderFactoryOpts): LLMProvider {
   };
 }
 
-registerProvider("google-generative-ai", createGemini2Provider);
+registerProvider("google-gemini-2", createGemini2Provider);
 
 export { createGemini2Provider };
