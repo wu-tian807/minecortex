@@ -5,7 +5,7 @@ import { isAbsolute, join } from "node:path";
 import { existsSync } from "node:fs";
 import type {
   BrainJson,
-  MineclawConfig,
+  MinecortexConfig,
   ModelsConfig,
   BrainInitConfig,
   CapabilitySelector,
@@ -45,7 +45,7 @@ export function getScheduler(): Scheduler | null {
  */
 function resolveModelsConfig(
   brainConfig: BrainJson,
-  globalConfig: MineclawConfig,
+  globalConfig: MinecortexConfig,
 ): ModelsConfig {
   const globalModels = globalConfig.models ?? {};
   const brainModels = brainConfig.models ?? {};
@@ -187,7 +187,7 @@ export class Scheduler {
     };
   }
 
-  private async initBrain(brainId: string, globalConfig: MineclawConfig): Promise<void> {
+  private async initBrain(brainId: string, globalConfig: MinecortexConfig): Promise<void> {
     const brainConfig = await this.loadBrainConfig(brainId);
     const brainDir = this.pathManager.brainDir(brainId);
     const baseConfig = this.createBrainInitConfig(brainId, brainConfig);
@@ -563,9 +563,9 @@ export class Scheduler {
     await this.shutdownAll();
   }
 
-  private async loadGlobalConfig(): Promise<MineclawConfig> {
+  private async loadGlobalConfig(): Promise<MinecortexConfig> {
     try {
-      const raw = await readFile(join(ROOT, "mineclaw.json"), "utf-8");
+      const raw = await readFile(join(ROOT, "minecortex.json"), "utf-8");
       return JSON.parse(raw);
     } catch {
       return {};

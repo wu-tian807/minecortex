@@ -1,6 +1,6 @@
 /** 默认配置模板 */
 
-import type { BrainJson, MineclawConfig, ModelSpec } from "../core/types.js";
+import type { BrainJson, MinecortexConfig, ModelSpec } from "../core/types.js";
 import { BRAIN_DEFAULTS } from "./brain-defaults.js";
 
 export const DEFAULT_BRAIN_JSON: BrainJson = {
@@ -19,7 +19,7 @@ export const DEFAULT_BRAIN_JSON: BrainJson = {
   timezone: BRAIN_DEFAULTS.timezone,
 };
 
-export const DEFAULT_MINECLAW_JSON: MineclawConfig = {
+export const DEFAULT_MINECORTEX_JSON: MinecortexConfig = {
   models: {
     model: "gemini-2.5-flash",
     maxRetries: 3,

@@ -598,7 +598,7 @@ waitForEvent → coalesce → drain → process。
 }
 ```
 
-`model: null` → 使用 `mineclaw.json` 的 `defaults.model` 全局默认值。
+`model: null` → 使用 `minecortex.json` 的 `defaults.model` 全局默认值。
 
 **CapabilitySelector 字段语义更新**：
 

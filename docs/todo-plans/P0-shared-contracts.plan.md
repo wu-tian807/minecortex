@@ -247,7 +247,7 @@ subscription 通过 `brainBoard.get()` 获取 `model.contextWindow`、`tokens.*`
 - Event (扩展 steer)
 - ContextSlot, SlotKind, SlotFactory, SlotContext
 - EventSource, EventSourceFactory, SourceContext (含 brainBoard)
-- CapabilitySelector, BrainJson, MineclawConfig, ModelSpec
+- CapabilitySelector, BrainJson, MinecortexConfig, ModelSpec
 - ThoughtType, ThoughtConfig
 - PathManagerAPI, FSWatcherAPI, WatchRegistration
 - TerminalInstance, TerminalManagerAPI, ExecResult

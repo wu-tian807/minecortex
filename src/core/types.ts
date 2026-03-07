@@ -138,7 +138,7 @@ export interface BrainJson {
   timezone?: string;
 }
 
-export interface MineclawConfig {
+export interface MinecortexConfig {
   /** 全局模型配置 */
   models?: ModelsConfig;
 }

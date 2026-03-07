@@ -67,7 +67,7 @@ export class CLIRenderer {
 
   constructor(rootDir: string, callbacks: RendererCallbacks) {
     this.rootDir    = rootDir;
-    this.configPath = join(rootDir, "mineclaw.json");
+    this.configPath = join(rootDir, "minecortex.json");
     this.callbacks  = callbacks;
   }
 
@@ -357,7 +357,7 @@ export class CLIRenderer {
     this.subscribeContext(brainId);
     // session.json is the truth — update it so the brain uses this session going forward
     await this.writeSessionJson(brainId, sessionId);
-    // activeBrain is the only thing persisted in mineclaw.json
+    // activeBrain is the only thing persisted in minecortex.json
     await this.writeConfig(brainId);
     // Clear screen, re-establish the 2-line footer anchor, then replay new session
     process.stdout.write("\x1b[2J\x1b[H");

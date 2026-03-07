@@ -202,7 +202,7 @@ export interface ModelSpec { input; reasoning; contextWindow; maxOutput; ... }
 // Brain 配置
 export interface CapabilitySelector { default; enable?; disable?; config?; }
 export interface BrainJson { model?; temperature?; ...; env?; session?; slots?; }
-export interface MineclawConfig { defaults?: { model? }; }
+export interface MinecortexConfig { defaults?: { model? }; }
 
 // Brain 接口
 export interface BrainInterface { id; run(signal); }
@@ -316,7 +316,7 @@ graph TD
 ```
 mineclaw/
 ├── AGENTIC.md
-├── mineclaw.json
+├── minecortex.json
 ├── package.json / tsconfig.json
 │
 │── slots/                         # 全局 Slot factory (新增顶层目录)

@@ -1133,7 +1133,7 @@ const THOUGHT_DEFAULTS: Record<ThoughtType, ThoughtConfig> = {
 - **结果返回**：匿名 agent 退出时自动生成总结消息发给调用者（background → `ctx.emit()`，foreground → 直接 return）
 - **动态 Slot**：spawn 时 `ctx.slot.register("thought:t1", "▶ observe: ...")`，完成时 `ctx.slot.release("thought:t1")`
 - **AbortSignal**：`ctx.signal` 是所有工具的通用基础设施（脑生命周期），spawn_thought 直接透传给内部 LLM 调用即可
-- **model 选择**："fast" 映射到 mineclaw.json 的 `defaults.fastModel`，"inherit" 使用父脑模型
+- **model 选择**："fast" 映射到 minecortex.json 的 `defaults.fastModel`，"inherit" 使用父脑模型
 
 **background 模式 LLM 执行流程**：
 

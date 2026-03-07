@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  DEFAULT_MINECLAW_JSON,
+  DEFAULT_MINECORTEX_JSON,
   DEFAULT_LLM_KEY_JSON,
   DEFAULT_MODELS_JSON,
 } from "./templates.js";
@@ -28,7 +28,7 @@ async function ensureDir(path: string): Promise<void> {
 
 /**
  * 确保所有默认配置文件存在
- * - mineclaw.json
+ * - minecortex.json
  * - key/llm_key.json
  * - key/models.json
  * - brains/ 目录
@@ -37,8 +37,8 @@ export async function ensureDefaultConfigs(root: string): Promise<void> {
   await ensureDir(join(root, "key"));
   await ensureDir(join(root, "brains"));
 
-  if (await ensureFile(join(root, "mineclaw.json"), DEFAULT_MINECLAW_JSON)) {
-    console.log("Created default mineclaw.json");
+  if (await ensureFile(join(root, "minecortex.json"), DEFAULT_MINECORTEX_JSON)) {
+    console.log("Created default minecortex.json");
   }
 
   if (await ensureFile(join(root, "key", "llm_key.json"), DEFAULT_LLM_KEY_JSON)) {

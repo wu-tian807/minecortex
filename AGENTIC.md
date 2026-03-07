@@ -138,7 +138,7 @@ interface EventBusAPI {
 
 当前配置来源分成三层：
 
-1. `mineclaw.json`
+1. `minecortex.json`
 2. `brains/<id>/brain.json`
 3. `key/llm_key.json` 与 `key/models.json`
 
@@ -522,7 +522,7 @@ Scheduler **不应该**承担：
 ```text
 mineclaw/
 ├── AGENTIC.md
-├── mineclaw.json
+├── minecortex.json
 ├── directives/
 ├── skills/
 ├── tools/

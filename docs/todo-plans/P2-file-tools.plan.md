@@ -59,7 +59,7 @@ class PathManager {
 
   constructor(projectRoot: string) {
     this.projectRoot = projectRoot;
-    // 注册已知目录（可通过 mineclaw.json 覆盖）
+    // 注册已知目录（可通过 minecortex.json 覆盖）
     this.knownDirs = new Map([
       ["brains",        "brains"],
       ["tools",         "tools"],
@@ -115,7 +115,7 @@ class PathManager {
 ### 为什么是 PathManager 而不是 resolvePath 函数
 
 - **集中管理**：所有已知目录在一个地方注册，项目结构变更只需改一处
-- **可配置**：未来可通过 `mineclaw.json` 的 `paths` 字段覆盖默认目录
+- **可配置**：未来可通过 `minecortex.json` 的 `paths` 字段覆盖默认目录
 - **消费方解耦**：TerminalManager 通过 `pathManager.dir("terminals")` 定位日志目录，不关心具体路径
 - **一致性**：所有工具、Loader、Manager 共用同一个 PathManager 实例
 
