@@ -8,6 +8,8 @@ import type {
   ToolDefinition,
   ToolContext,
   DynamicSlotAPI,
+  DynamicToolAPI,
+  DynamicSubscriptionAPI,
   ModelSpec,
 } from "./types.js";
 import type { LLMProvider, LLMMessage, LLMToolCall, LLMResponse } from "../llm/types.js";
@@ -31,6 +33,8 @@ export interface AgentLoopOpts {
   brainId: string;
   provider: LLMProvider;
   tools: ToolDefinition[];
+  dynamicTools: DynamicToolAPI;
+  dynamicSubscriptions: DynamicSubscriptionAPI;
   contextEngine: ContextEngine;
   modelSpec: ModelSpec;
   maxIterations: number;
@@ -54,7 +58,7 @@ export interface AgentLoopOpts {
 
 export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | null> {
   const {
-    brainId, provider, tools, contextEngine,
+    brainId, provider, tools, dynamicTools, dynamicSubscriptions, contextEngine,
     modelSpec, maxIterations, signal, brainBoard, slotRegistry,
     pathManager, workspace, eventBus, logger,
     sessionManager, turn = 0, onAssistantMessage, hooks,
@@ -72,6 +76,8 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     eventBus,
     brainBoard,
     slot: slotRegistry,
+    tools: dynamicTools,
+    subscriptions: dynamicSubscriptions,
     pathManager,
     workspace,
     trackBackgroundTask: opts.trackBackgroundTask,
@@ -115,7 +121,18 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
         break;
       }
       logger?.error(brainId, turn, `LLM call failed: ${err.message}`);
-      throw err;
+
+      const errorText = `[LLM error: ${err.message?.slice(0, 200) ?? "unknown"}]`;
+      await lifecycle.appendAssistantTurn({
+        role: "assistant",
+        content: errorText,
+        ts: Date.now(),
+      });
+      hooks?.emit(HookEvent.AssistantMessage, {
+        msg: { role: "assistant", content: errorText },
+        turn,
+      });
+      break;
     }
 
     logger?.debug(brainId, turn,
@@ -199,6 +216,8 @@ export interface ConsciousBrainInitConfig extends BrainInitConfig {
   model: string;
   provider: LLMProvider;
   tools: ToolDefinition[];
+  dynamicTools: DynamicToolAPI;
+  dynamicSubscriptions: DynamicSubscriptionAPI;
   slotRegistry: SlotRegistry;
   contextEngine: ContextEngine;
   sessionManager: SessionManager;
@@ -211,6 +230,8 @@ export interface ConsciousBrainInitConfig extends BrainInitConfig {
 export class ConsciousBrain extends BaseBrain {
   private provider: LLMProvider;
   private tools: ToolDefinition[];
+  private dynamicTools: DynamicToolAPI;
+  private dynamicSubscriptions: DynamicSubscriptionAPI;
   private slotRegistry: SlotRegistry;
   private contextEngine: ContextEngine;
   private sessionManager: SessionManager;
@@ -225,6 +246,8 @@ export class ConsciousBrain extends BaseBrain {
     super(config);
     this.provider = config.provider;
     this.tools = config.tools;
+    this.dynamicTools = config.dynamicTools;
+    this.dynamicSubscriptions = config.dynamicSubscriptions;
     this.slotRegistry = config.slotRegistry;
     this.contextEngine = config.contextEngine;
     this.sessionManager = config.sessionManager;
@@ -235,6 +258,10 @@ export class ConsciousBrain extends BaseBrain {
   updateTools(tools: ToolDefinition[]): void {
     this.tools = tools;
     this.logger.info(this.id, 0, `tools reloaded: ${tools.length} total`);
+  }
+
+  setDynamicSubscriptions(api: DynamicSubscriptionAPI): void {
+    this.dynamicSubscriptions = api;
   }
 
   async run(_signal: AbortSignal): Promise<void> {
@@ -323,6 +350,8 @@ export class ConsciousBrain extends BaseBrain {
         brainId: this.id,
         provider: this.provider,
         tools: this.tools,
+        dynamicTools: this.dynamicTools,
+        dynamicSubscriptions: this.dynamicSubscriptions,
         contextEngine: this.contextEngine,
         modelSpec: this.modelSpec,
         maxIterations: this.brainJson.maxIterations ?? BRAIN_DEFAULTS.maxIterations,
@@ -344,8 +373,11 @@ export class ConsciousBrain extends BaseBrain {
         },
         shouldYieldInnerLoop: () => this.queue.hasHandoff("innerLoop"),
       });
-    } catch {
+    } catch (err: any) {
       aborted = signal.aborted;
+      if (!aborted) {
+        this.logger.error(this.id, this.currentTurn, `process failed: ${err?.message ?? err}`);
+      }
     } finally {
       this.hooks.emit(HookEvent.TurnEnd, { turn: this.currentTurn, aborted });
     }
@@ -383,6 +415,8 @@ export class ConsciousBrain extends BaseBrain {
       eventBus: this.boundEventBus,
       brainBoard: this.brainBoard,
       slot: this.slotRegistry,
+      tools: this.dynamicTools,
+      subscriptions: this.dynamicSubscriptions,
       pathManager: this.pathManager,
       workspace: this.workspace,
       trackBackgroundTask: (p) => {

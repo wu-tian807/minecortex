@@ -39,12 +39,14 @@ export default {
   async execute(args, ctx): Promise<ToolOutput> {
     const command = String(args.command);
     const cwd = args.cwd ? String(args.cwd) : undefined;
+    const initialCwd = ctx.brainBoard.get(ctx.brainId, "current_dir") as string | undefined;
     const timeoutMs = (args.timeout_ms as number) ?? DEFAULT_TIMEOUT;
     const extraEnv = args.env as Record<string, string> | undefined;
     const terminalManager = getTerminalManager();
 
     const result = await terminalManager.exec(command, {
       cwd,
+      initialCwd,
       env: extraEnv,
       brainId: ctx.brainId,
       timeoutMs,

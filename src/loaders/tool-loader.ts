@@ -1,5 +1,5 @@
 import { join, relative } from "node:path";
-import type { ToolDefinition, FSWatcherAPI, FSChangeEvent } from "../core/types.js";
+import type { ToolDefinition, FSWatcherAPI, FSChangeEvent, DynamicToolAPI } from "../core/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
 
@@ -19,6 +19,23 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
   private toolPaths: Map<string, string> = new Map();
   private onToolsChange: ((tools: ToolDefinition[]) => void) | null = null;
 
+  // ─── DynamicRegistry layer ───
+
+  private dynamicMap = new Map<string, ToolDefinition>();
+
+  readonly dynamic: DynamicToolAPI = {
+    register: (key: string, tool: ToolDefinition) => {
+      this.dynamicMap.set(key, tool);
+      this.notifyChange();
+    },
+    release: (key: string) => {
+      this.dynamicMap.delete(key);
+      this.notifyChange();
+    },
+    get: (key: string) => this.dynamicMap.get(key),
+    list: () => [...this.dynamicMap.values()],
+  };
+
   setCallback(onChange: (tools: ToolDefinition[]) => void): void {
     this.onToolsChange = onChange;
   }
@@ -35,10 +52,14 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
     return def;
   }
 
+  allActive(): ToolDefinition[] {
+    const staticTools = [...this.registry.values()].filter((t): t is ToolDefinition => t !== null);
+    const dynamicTools = [...this.dynamicMap.values()];
+    return [...staticTools, ...dynamicTools];
+  }
+
   private notifyChange(): void {
-    this.onToolsChange?.(
-      [...this.registry.values()].filter((t): t is ToolDefinition => t !== null),
-    );
+    this.onToolsChange?.(this.allActive());
   }
 
   onRegister(_name: string, _instance: ToolDefinition | null): void {
@@ -95,6 +116,6 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
     );
     this.toolPaths = paths;
     await this.loadAll(paths, ctx);
-    return [...this.registry.values()].filter((t): t is ToolDefinition => t !== null);
+    return this.allActive();
   }
 }

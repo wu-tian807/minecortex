@@ -159,25 +159,45 @@ export interface ToolDefinition {
   execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolOutput>;
 }
 
+// ─── DynamicRegistry — unified runtime register/release interface ───
+
+/**
+ * Generic interface for runtime (in-memory) registration of capabilities.
+ * All three capability systems (slot / tool / subscription) implement this
+ * with their respective instance type T so their dynamic APIs stay symmetric.
+ */
+export interface DynamicRegistry<T> {
+  register(key: string, instance: T): void;
+  release(key: string): void;
+  get(key: string): T | undefined;
+  list(): T[];
+}
+
+/** Slot-specific dynamic API: adds content-centric `update` helper. */
+export interface DynamicSlotAPI extends DynamicRegistry<string> {
+  update(id: string, content: string): void;
+}
+
+/** Runtime tool registration/release, exposed as ctx.tools in ToolContext. */
+export type DynamicToolAPI = DynamicRegistry<ToolDefinition>;
+
+/** Runtime subscription registration/release, exposed as ctx.subscriptions in ToolContext. */
+export type DynamicSubscriptionAPI = DynamicRegistry<EventSource>;
+
 export interface ToolContext {
   brainId: string;
   signal: AbortSignal;
   eventBus: EventBusAPI;
   brainBoard: BrainBoardAPI;
   slot: DynamicSlotAPI;
+  tools: DynamicToolAPI;
+  subscriptions: DynamicSubscriptionAPI;
   pathManager: PathManagerAPI;
   workspace: string;
   /** Register a background promise so the parent brain can await it on shutdown. */
   trackBackgroundTask?: (p: Promise<unknown>) => void;
   /** Logger for sub-agents to inherit real-time debug output. */
   logger?: import("./logger.js").Logger;
-}
-
-export interface DynamicSlotAPI {
-  register(id: string, content: string): void;
-  update(id: string, content: string): void;
-  release(id: string): void;
-  get(id: string): string | undefined;
 }
 
 // ─── BrainBoard (reactive state registry) ───
@@ -252,6 +272,9 @@ export interface TerminalInstance {
 
 export interface ExecOpts {
   cwd?: string;
+  /** Only applied when a brand-new bash session is created (e.g. after timeout/background).
+   *  Has no effect if an existing session is reused — preserving the model's own cd state. */
+  initialCwd?: string;
   env?: Record<string, string>;
   brainId: string;
   timeoutMs?: number;

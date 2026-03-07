@@ -82,10 +82,10 @@ export class TerminalManager implements TerminalManagerAPI {
     }
   }
 
-  private createSession(baseBrainId: string): ShellSession {
+  private createSession(baseBrainId: string, initialCwd?: string): ShellSession {
     const brainEnv = this.brainEnvCache.get(baseBrainId) ?? {};
     const child = spawn("bash", ["--norc", "--noprofile"], {
-      cwd: this.pathManager.root(),
+      cwd: initialCwd ?? this.pathManager.root(),
       env: { ...process.env, ...brainEnv, PS1: "", PS2: "" },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -148,13 +148,13 @@ export class TerminalManager implements TerminalManagerAPI {
     return session;
   }
 
-  private getOrCreateSharedShell(brainId: string): ShellSession {
+  private getOrCreateSharedShell(brainId: string, initialCwd?: string): ShellSession {
     const base = this.baseBrainId(brainId);
     const existing = this.sharedShells.get(base);
     if (existing && existing.process.exitCode === null) {
       return existing;
     }
-    const session = this.createSession(base);
+    const session = this.createSession(base, initialCwd);
     this.sharedShells.set(base, session);
     return session;
   }
@@ -177,7 +177,7 @@ export class TerminalManager implements TerminalManagerAPI {
     const marker = `__MCEND_${id}__`;
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-    const session = this.getOrCreateSharedShell(opts.brainId);
+    const session = this.getOrCreateSharedShell(opts.brainId, opts.initialCwd);
 
     // Serialize: wait for previous command to finish if shell is still occupied
     await session.ready;

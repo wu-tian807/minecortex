@@ -9,6 +9,7 @@ import type {
   BrainContextAPI,
   PathManagerAPI,
   Event,
+  DynamicSubscriptionAPI,
 } from "../core/types.js";
 import type { BrainHooksAPI } from "../hooks/types.js";
 import type { LoaderContext } from "./types.js";
@@ -22,6 +23,32 @@ interface SubscriptionEntry {
 export class SubscriptionLoader extends BaseLoader<EventSourceFactory, SubscriptionEntry> {
   private emitter: ((event: Event) => void) | null = null;
   private brainContext: BrainContextAPI | null = null;
+
+  // ─── DynamicRegistry layer ───
+
+  private dynamicMap = new Map<string, EventSource>();
+
+  readonly dynamic: DynamicSubscriptionAPI = {
+    register: (key: string, source: EventSource) => {
+      this.dynamicMap.set(key, source);
+      if (this.emitter) {
+        try {
+          source.start(this.emitter);
+        } catch (err) {
+          console.error(`[SubscriptionLoader.dynamic] start failed for "${key}":`, err);
+        }
+      }
+    },
+    release: (key: string) => {
+      const source = this.dynamicMap.get(key);
+      if (source) {
+        try { source.stop(); } catch { /* already stopped */ }
+        this.dynamicMap.delete(key);
+      }
+    },
+    get: (key: string) => this.dynamicMap.get(key),
+    list: () => [...this.dynamicMap.values()],
+  };
 
   setEmitter(emit: (event: Event) => void): void {
     this.emitter = emit;

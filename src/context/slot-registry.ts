@@ -2,53 +2,35 @@ import type { DynamicSlotAPI } from "../core/types.js";
 import type { ContextSlot } from "./types.js";
 
 export class SlotRegistry implements DynamicSlotAPI {
-  private slots = new Map<string, ContextSlot>();
+  // Two separate maps mirror the ToolLoader pattern:
+  // staticSlots  — managed exclusively by SlotLoader (file discovery / hot-reload)
+  // dynamicSlots — managed exclusively by tools via ctx.slot (DynamicSlotAPI)
+  // Neither side can corrupt the other's entries.
+  private staticSlots = new Map<string, ContextSlot>();
+  private dynamicSlots = new Map<string, ContextSlot>();
 
-  // ─── Loader-level operations ───
+  // ─── Static layer (SlotLoader callbacks) ───
 
   registerSlot(slot: ContextSlot): void {
-    this.slots.set(slot.id, slot);
-  }
-
-  update(id: string, content: string): void {
-    const slot = this.slots.get(id);
-    if (slot) {
-      slot.content = content;
-      slot.version++;
-    }
+    this.staticSlots.set(slot.id, slot);
   }
 
   removeSlot(id: string): void {
-    this.slots.delete(id);
+    this.staticSlots.delete(id);
   }
 
   getSlot(id: string): ContextSlot | undefined {
-    return this.slots.get(id);
+    return this.staticSlots.get(id);
   }
 
   all(): ContextSlot[] {
-    return [...this.slots.values()];
-  }
-
-  // ─── Render helpers ───
-
-  renderSystem(): string {
-    const sorted = [...this.slots.values()]
-      .filter((s) => !s.condition || s.condition())
-      .sort((a, b) => a.order - b.order);
-
-    const parts: string[] = [];
-    for (const slot of sorted) {
-      const text = typeof slot.content === "function" ? slot.content() : slot.content;
-      if (text) parts.push(text);
-    }
-    return parts.join("\n\n");
+    return [...this.staticSlots.values(), ...this.dynamicSlots.values()];
   }
 
   // ─── DynamicSlotAPI (for tools via ToolContext.slot) ───
 
   register(id: string, content: string): void {
-    this.slots.set(id, {
+    this.dynamicSlots.set(id, {
       id,
       order: 100,
       priority: 3,
@@ -57,17 +39,32 @@ export class SlotRegistry implements DynamicSlotAPI {
     });
   }
 
+  update(id: string, content: string): void {
+    const slot = this.dynamicSlots.get(id);
+    if (slot) {
+      slot.content = content;
+      slot.version++;
+    }
+  }
+
   release(id: string): void {
-    this.slots.delete(id);
+    this.dynamicSlots.delete(id);
   }
 
   get(id: string): string | undefined {
-    const slot = this.slots.get(id);
+    const slot = this.dynamicSlots.get(id);
     if (!slot) return undefined;
     return typeof slot.content === "function" ? slot.content() : slot.content;
   }
 
+  list(): string[] {
+    return [...this.dynamicSlots.values()].map((s) =>
+      typeof s.content === "function" ? s.content() : s.content,
+    ).filter((c): c is string => typeof c === "string");
+  }
+
   clear(): void {
-    this.slots.clear();
+    this.staticSlots.clear();
+    this.dynamicSlots.clear();
   }
 }

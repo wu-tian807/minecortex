@@ -237,7 +237,7 @@ export class Scheduler {
     // ScriptBrain path
     if (this.isScriptBrain(brainId)) {
       const brain = new ScriptBrain(baseConfig);
-      const sources = await this.loadSubscriptions(brainId, brainDir, brainConfig, brain);
+      const { sources } = await this.loadSubscriptions(brainId, brainDir, brainConfig, brain);
       brain.setSources(sources);
       this.brains.set(brainId, brain);
       this.logger.info("scheduler", 0, `ScriptBrain '${brainId}' 就绪`);
@@ -311,12 +311,15 @@ export class Scheduler {
 
     const modelSpec = getModelSpec(modelName);
 
-    // Create ConsciousBrain
+    // Create ConsciousBrain — subscriptions loaded after brain creation (hooks must be available)
+    // Pass stub dynamic APIs first; real references are wired after subLoader is ready.
     const consciousConfig: ConsciousBrainInitConfig = {
       ...baseConfig,
       model: modelName,
       provider,
       tools,
+      dynamicTools: toolLoader.dynamic,
+      dynamicSubscriptions: { register: () => {}, release: () => {}, get: () => undefined, list: () => [] },
       slotRegistry,
       contextEngine,
       sessionManager,
@@ -327,8 +330,9 @@ export class Scheduler {
     const brain = new ConsciousBrain(consciousConfig);
 
     // Load subscriptions AFTER brain creation (so hooks is available)
-    const sources = await this.loadSubscriptions(brainId, brainDir, brainConfig, brain);
+    const { sources, loader: subLoader } = await this.loadSubscriptions(brainId, brainDir, brainConfig, brain);
     brain.setSources(sources);
+    brain.setDynamicSubscriptions(subLoader.dynamic);
 
     this.brains.set(brainId, brain);
 
@@ -348,7 +352,7 @@ export class Scheduler {
     brainDir: string,
     brainConfig: BrainJson,
     brain: BaseBrain,
-  ): Promise<import("./types.js").EventSource[]> {
+  ): Promise<{ sources: import("./types.js").EventSource[]; loader: SubscriptionLoader }> {
     const subLoader = new SubscriptionLoader();
     subLoader.setEmitter((event) => brain.pushEvent(event));
 
@@ -373,7 +377,7 @@ export class Scheduler {
     if (this.fsWatcher) subLoader.registerWatchPatterns(this.fsWatcher);
 
     const selectorSub = brainConfig.subscriptions ?? BRAIN_DEFAULTS.subscriptions;
-    return subLoader.load({
+    const sources = await subLoader.load({
       brainId,
       brainDir,
       globalDir: ROOT,
@@ -381,6 +385,7 @@ export class Scheduler {
       globalCapabilityDir: this.resolveCapabilityDirs(brainDir, brainConfig.paths).subscriptions.global,
       localCapabilityDir: this.resolveCapabilityDirs(brainDir, brainConfig.paths).subscriptions.local,
     });
+    return { sources, loader: subLoader };
   }
 
   // ─── Private helper: remove brain from memory ───

@@ -46,9 +46,9 @@ function buildFocusContent(targetPath: string): string {
   const rel = relative(ROOT, targetPath) || ".";
   parts.push(`## Focus: ${rel}`);
 
-  // Try AGENTS.md first, then README.md
+  // Try CLAUDE.md first, then AGENTS.md
   let docContent = "";
-  for (const name of ["AGENTS.md", "README.md"]) {
+  for (const name of ["CLAUDE.md", "AGENTS.md"]) {
     try {
       docContent = readFileSync(join(targetPath, name), "utf-8");
       parts.push(`\n### ${name}\n${docContent}`);
@@ -68,16 +68,16 @@ function buildFocusContent(targetPath: string): string {
 }
 
 const create: SlotFactory = (ctx): ContextSlot => {
-  const defaultPath = join(ROOT, "brains", ctx.brainId);
+  const { brainId, brainBoard } = ctx;
 
   return {
     id: "context-file:current",
     order: 60,
     priority: 5,
-    content: () => buildFocusContent(defaultPath),
+    condition: () => brainBoard.get(brainId, "current_dir") != null,
+    content: () => buildFocusContent(brainBoard.get(brainId, "current_dir") as string),
     version: 0,
   };
 };
 
 export default create;
-export { buildFocusContent };

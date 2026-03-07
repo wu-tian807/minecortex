@@ -1,16 +1,16 @@
 import { statSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import type { ToolDefinition } from "../src/core/types.js";
-import { buildFocusContent } from "../slots/context-file.js";
 
 const ROOT = process.cwd();
 
 export default {
   name: "focus",
   description:
-    "Switch working focus to a directory. Updates the context-file slot " +
-    "with AGENTS.md/README.md and directory tree from the target path. " +
-    "Call with no path to reset to the brain's default directory.",
+    "Switch working focus to a directory. Sets current_dir in brainboard, " +
+    "which makes the context-file slot show CLAUDE.md/AGENTS.md and directory tree " +
+    "from the target path, and sets the default cwd for new shell sessions. " +
+    "Call with no path to clear focus.",
   input_schema: {
     type: "object",
     properties: {
@@ -41,10 +41,7 @@ export default {
       return `Permission denied: cannot access ${targetPath}`;
     }
 
-    ctx.slot.release("context-file:current");
-
-    const content = buildFocusContent(targetPath);
-    ctx.slot.register("context-file:current", content);
+    ctx.brainBoard.set(ctx.brainId, "current_dir", targetPath);
 
     const rel = relative(ROOT, targetPath) || ".";
     return `Focus set to: ${rel}`;
