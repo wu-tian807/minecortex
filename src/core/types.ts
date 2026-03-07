@@ -204,8 +204,12 @@ export interface ToolContext {
 
 export type WatchCallback = (value: unknown, prev: unknown) => void;
 
+export interface BrainBoardSetOptions {
+  persist?: boolean;
+}
+
 export interface BrainBoardAPI {
-  set(brainId: string, key: string, value: unknown): void;
+  set(brainId: string, key: string, value: unknown, options?: BrainBoardSetOptions): void;
   get(brainId: string, key: string): unknown;
   remove(brainId: string, key: string): void;
   removeAll(brainId: string): void;

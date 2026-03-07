@@ -41,7 +41,7 @@ export default {
       return `Permission denied: cannot access ${targetPath}`;
     }
 
-    ctx.brainBoard.set(ctx.brainId, "current_dir", targetPath);
+    ctx.brainBoard.set(ctx.brainId, "current_dir", targetPath, { persist: false });
 
     const rel = relative(ROOT, targetPath) || ".";
     return `Focus set to: ${rel}`;

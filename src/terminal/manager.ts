@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { writeFile, readFile, mkdir, unlink } from "node:fs/promises";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type {
   TerminalManagerAPI,
@@ -25,11 +26,13 @@ interface ShellSession {
   id: string;
   baseBrainId: string;
   process: ChildProcess;
+  shellPath: string;
   pending: PendingCommand | null;
   ready: Promise<void>;
   markReady: (() => void) | null;
   terminalIds: Set<string>;
   detached: boolean;
+  spawnError?: Error;
 }
 
 export function initTerminalManager(pathManager: PathManagerAPI): TerminalManager {
@@ -82,10 +85,56 @@ export class TerminalManager implements TerminalManagerAPI {
     }
   }
 
+  private resolveShellPath(brainEnv: Record<string, string>): string {
+    const envShell = brainEnv.SHELL || process.env.SHELL;
+    const candidates = [
+      envShell,
+      "/usr/bin/bash",
+      "/bin/bash",
+      "bash",
+    ].filter((value): value is string => Boolean(value));
+
+    for (const candidate of candidates) {
+      if (!candidate.includes("/")) return candidate;
+      if (existsSync(candidate)) return candidate;
+    }
+    return "bash";
+  }
+
+  private resolveSessionCwd(initialCwd?: string): string {
+    if (!initialCwd) return this.pathManager.root();
+    try {
+      if (statSync(initialCwd).isDirectory()) {
+        return initialCwd;
+      }
+    } catch {
+      // Fall back to the project root when persisted focus points at a stale path.
+    }
+    return this.pathManager.root();
+  }
+
+  private cleanupSession(baseBrainId: string, session: ShellSession): void {
+    if (this.sharedShells.get(baseBrainId) === session) {
+      this.sharedShells.delete(baseBrainId);
+    }
+    this.sessions.delete(session.id);
+    for (const terminalId of session.terminalIds) {
+      if (this.terminalSessions.get(terminalId) === session) {
+        this.terminalSessions.delete(terminalId);
+      }
+    }
+    if (session.markReady) {
+      session.markReady();
+      session.markReady = null;
+    }
+  }
+
   private createSession(baseBrainId: string, initialCwd?: string): ShellSession {
     const brainEnv = this.brainEnvCache.get(baseBrainId) ?? {};
-    const child = spawn("bash", ["--norc", "--noprofile"], {
-      cwd: initialCwd ?? this.pathManager.root(),
+    const shellPath = this.resolveShellPath(brainEnv);
+    const sessionCwd = this.resolveSessionCwd(initialCwd);
+    const child = spawn(shellPath, ["--norc", "--noprofile"], {
+      cwd: sessionCwd,
       env: { ...process.env, ...brainEnv, PS1: "", PS2: "" },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -94,6 +143,7 @@ export class TerminalManager implements TerminalManagerAPI {
       id: `s${++this.sessionCounter}-${Date.now()}`,
       baseBrainId,
       process: child,
+      shellPath,
       pending: null,
       ready: Promise.resolve(),
       markReady: null,
@@ -125,23 +175,24 @@ export class TerminalManager implements TerminalManagerAPI {
       cb(output, isNaN(exitCode) ? undefined : exitCode);
     };
 
-    child.stdout!.on("data", handleData);
-    child.stderr!.on("data", handleData);
+    child.stdout?.on("data", handleData);
+    child.stderr?.on("data", handleData);
+
+    child.on("error", (err) => {
+      session.spawnError = err instanceof Error ? err : new Error(String(err));
+      if (session.pending) {
+        const cb = session.pending.onComplete;
+        session.pending = null;
+        cb(
+          `Shell unavailable (${session.shellPath}): ${session.spawnError.message}`,
+          127,
+        );
+      }
+      this.cleanupSession(baseBrainId, session);
+    });
 
     child.on("exit", () => {
-      if (this.sharedShells.get(baseBrainId) === session) {
-        this.sharedShells.delete(baseBrainId);
-      }
-      this.sessions.delete(session.id);
-      for (const terminalId of session.terminalIds) {
-        if (this.terminalSessions.get(terminalId) === session) {
-          this.terminalSessions.delete(terminalId);
-        }
-      }
-      if (session.markReady) {
-        session.markReady();
-        session.markReady = null;
-      }
+      this.cleanupSession(baseBrainId, session);
     });
 
     this.sessions.set(session.id, session);
@@ -199,7 +250,7 @@ export class TerminalManager implements TerminalManagerAPI {
     const instance: TerminalInstance = {
       id,
       sessionId: session.id,
-      pid: session.process.pid!,
+      pid: session.process.pid ?? -1,
       command,
       cwd: opts.cwd ?? ".",
       brainId: opts.brainId,
@@ -209,6 +260,22 @@ export class TerminalManager implements TerminalManagerAPI {
     this.terminals.set(id, instance);
     this.terminalSessions.set(id, session);
     session.terminalIds.add(id);
+
+    if (session.spawnError || !session.process.stdin) {
+      this.terminalSessions.delete(id);
+      session.terminalIds.delete(id);
+      const message = `Shell unavailable (${session.shellPath}): ${session.spawnError?.message ?? "unknown spawn failure"}`;
+      instance.exitCode = 127;
+      instance.elapsedMs = Date.now() - startedAt;
+      this.writeLog(instance, message, true);
+      return {
+        terminalId: id,
+        logFile,
+        stdout: message,
+        exitCode: 127,
+        backgrounded: false,
+      };
+    }
 
     // Gate for the next command
     let readyResolve!: () => void;
@@ -259,7 +326,32 @@ export class TerminalManager implements TerminalManagerAPI {
         // pending stays set — when marker arrives it will update instance and ungate next command
       }, timeoutMs);
 
-      session.process.stdin!.write(wrapped);
+      try {
+        session.process.stdin!.write(wrapped);
+      } catch (err) {
+        clearTimeout(timer);
+        this.terminalSessions.delete(id);
+        session.terminalIds.delete(id);
+        session.pending = null;
+        if (session.markReady) {
+          session.markReady();
+          session.markReady = null;
+        }
+        const message = `Shell write failed (${session.shellPath}): ${err instanceof Error ? err.message : String(err)}`;
+        instance.exitCode = 127;
+        instance.elapsedMs = Date.now() - startedAt;
+        this.writeLog(instance, message, true);
+        if (!settled) {
+          settled = true;
+          resolve({
+            terminalId: id,
+            logFile,
+            stdout: message,
+            exitCode: 127,
+            backgrounded: false,
+          });
+        }
+      }
     });
   }
 

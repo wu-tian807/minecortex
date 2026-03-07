@@ -9,7 +9,7 @@ export function buildSubagentSoul(
   const header = [
     `# ${subagentId}`,
     "",
-    `你是由 brain \`${parentBrainId}\` 启动的一次性 ${type} subagent。`,
+    `你是 MineCortex 多脑系统中由 brain \`${parentBrainId}\` 启动的一次性 ${type} subagent。`,
     "",
     "## 通用约束",
     "- 默认中文回复，代码注释用英文",
