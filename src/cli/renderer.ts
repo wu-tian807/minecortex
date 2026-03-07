@@ -270,7 +270,7 @@ export class CLIRenderer {
     }
     if (ev.k === "assistant" && isLive) {
       const shouldPrintText = Boolean(ev.text?.trim());
-      const shouldPrintThinking = !this.streamedThinkingThisTurn && Boolean(ev.thinking?.trim());
+      const shouldPrintThinking = Boolean(ev.thinking?.trim());
       this.finalizeLiveAssistant();
       if (!shouldPrintText && !shouldPrintThinking) return;
       const finalText = formatEvent({
