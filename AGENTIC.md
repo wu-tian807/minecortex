@@ -1,99 +1,79 @@
-# AGENTIC.md — MineClaw 框架规范（必读）
+# AGENTIC.md — MineClaw 当前架构说明
 
-> MineClaw 是一个多脑 AI Agent 框架，当前用于通用编程助手场景。
-> 未来将扩展为 Minecraft 游戏 AI 的"大脑侧"框架（MineAvatar 是"身体"）。
-> 详细设计见 [evolution-design.md](../evolution-design.md)。
-
----
-
-## 1. 核心信念
-
-**目录即大脑。** 所有状态都在文件系统中，`ls` 可见，`git` 可追溯。
-
-```
-brains/       → ls 就知道有哪些脑
-skills/       → ls 就知道会什么技能
-slots/        → ls 就知道有哪些上下文插槽
-tools/        → ls 就知道有哪些工具
-```
-
-删目录 = 遗忘。拷目录 = 克隆。`git push` = 灵魂备份。
-
-**多脑并行。** 每个 Brain 是独立的 Agent Loop，拥有自己的 Session、EventQueue、Hooks。
-脑之间通过 EventBus 路由消息，绝不共享 LLM Session。
+> 这份文档描述的是当前代码已经实现的框架结构，而不是历史设计草稿。
+> 关注点是：脑如何运行、能力如何装配、Session 如何持久化、日志与热更新如何工作。
 
 ---
 
-## 2. 多脑系统
+## 1. 当前定位
 
-### Brain = 目录
+MineClaw 是一个**多脑目录驱动**的 Agent 框架。
 
-每个 Brain 是一个自治单元，完整自包含在 `brains/<id>/` 目录中。
-**Scheduler 启动时扫描 `brains/` 目录自动发现所有脑区**——不需要中心化注册表。
+- `brains/<id>/` 就是一个完整脑区
+- 脑之间通过 `EventBus` 通信
+- 每个脑都有自己的队列、Session、Hooks、日志目录
+- 配置和持久化数据都落在文件系统中
 
-### brain.json — 脑的完整配置
+核心原则：
 
-```jsonc
-// brains/coder/brain.json
-{
-  "models": {
-    "model": "claude-opus-4-6",       // 模型名，可以是数组（fallback 链）
-    "temperature": 0.7,               // 可选
-    "maxTokens": 8192,                // 可选
-    "reasoningEffort": "high",        // low/medium/high（推理模型）
-    "showThinking": true              // 是否显示思考过程
-  },
-  "coalesceMs": 300,                  // 事件合并窗口（毫秒）
-  "subscriptions": { "global": "none", "enable": ["stdin", "stdout"] },
-  "tools": { "global": "all" },
-  "slots": { "global": "all" },
-  "maxIterations": 200,               // 单次事件处理的最大 LLM 调用次数
-  "session": {
-    "keepToolResults": 8,             // 微压缩保留最近 N 个 tool_result
-    "keepMedias": 2                   // 微压缩保留最近 N 个多媒体消息
-  }
-}
-```
+1. 目录即边界。脑的配置、状态、能力覆盖都能在目录结构中看见。
+2. Session 不共享。脑之间可以发事件，但绝不共享同一份 LLM 历史。
+3. 运行时能力可热更新，但配置文件以磁盘为准，不依赖配置 watcher。
 
-### mineclaw.json — 全局默认配置
+---
 
-```jsonc
-// mineclaw.json
-{
-  "models": {
-    "model": "gemini-3.1-pro-preview"  // brain.json 未指定时的 fallback
-  }
-}
-```
+## 2. Brain 运行模型
 
-### 脑的类型
+### 脑的两种实现
 
-| 类型 | 条件 | 行为 |
+| 类型 | 条件 | 用途 |
 |------|------|------|
-| **ConsciousBrain** | 有 `models.model` | Agent Loop：wait → coalesce → drain → process |
-| **ScriptBrain** | 有 `brains/<id>/src/index.ts` | 纯脚本驱动，无 LLM |
+| `ConsciousBrain` | 配了 `models.model` | 有 LLM 的主 Agent Loop |
+| `ScriptBrain` | 存在 `brains/<id>/src/index.ts` | 纯脚本脑，无 LLM |
 
-Scheduler 启动时根据配置自动选择脑类型。
+当前调度器会扫描 `brains/` 自动发现脑，并根据目录内容选择实现。
 
-### 脑目录结构
+### BaseBrain 统一入口
 
-```
-brains/<id>/
-├── brain.json      # 必须：脑配置
-├── soul.md         # 必须：身份/人格/行为准则
-├── session.json    # 自动创建：当前 session 指针
-├── sessions/       # 自动创建：LLM 会话历史
-│   └── s_<ts>/
-│       ├── messages.jsonl
-│       └── medias/
-├── workspace/      # 可选：脑的工作目录
-├── logs/           # 可选：脑的日志
-├── tools/          # 可选：脑专属工具
-├── skills/         # 可选：脑专属技能
-├── slots/          # 可选：脑专属插槽
-├── subscriptions/  # 可选：脑专属订阅源
-└── directives/     # 可选：脑专属指令
-```
+`BaseBrain` 不再只是抽象基类，它现在负责统一的主入口语义：
+
+- 注册脑自己的 `EventQueue`
+- 暴露 `boundEventBus`
+- 管 `shutdown/free`
+- 在 `run()` 外层安装 brain 级日志上下文
+- 子类只需要实现 `runMain()`
+
+这意味着：
+
+- “主 run 的上下文流程”是框架层规则，不再散落在各脑实现里
+- `console.*` 在 brain 主循环里能自动继承到正确的 `brainId`
+
+### ConsciousBrain 主循环
+
+ConsciousBrain 的主循环仍然是：
+
+1. 等待事件
+2. 合并窗口 `coalesceMs`
+3. `drain()` 成一个事件批次
+4. 追加成 user 消息
+5. 进入 `runAgentLoop()`
+6. 如果 LLM 产生 tool calls，则通过 `runToolBatch()` 落盘 pending/result
+
+除此之外，ConsciousBrain 还支持：
+
+- 命令队列 `queueCommand()`
+- 当前 turn 中断 `turnAbort`
+- handoff 驱动的 `innerLoop` / `steer`
+
+### ScriptBrain
+
+ScriptBrain 只负责：
+
+- `import brains/<id>/src/index.ts`
+- 可选执行 `start(ctx)`
+- 每轮 drain 后调用 `update(events, ctx)`
+
+它不参与 LLM、tool lifecycle 或 prompt 组装。
 
 ---
 
@@ -101,614 +81,494 @@ brains/<id>/
 
 ### Event 结构
 
-```typescript
+```ts
+type EventHandoff = "silent" | "turn" | "innerLoop" | "steer";
+
 interface Event {
-  source: string;       // 来源：stdin / heartbeat / brain:xxx / tool:xxx
-  type: string;         // 类型：message / tick / resume
+  source: string;
+  type: string;
   payload: unknown;
   ts: number;
-  priority?: number;    // 0=immediate, 1=normal(默认), 2=low
-  silent?: boolean;     // true = 入队但不触发处理
-  steer?: boolean;      // true = 立即中断当前 LLM 调用
+  to?: string;
+  priority?: number;
+  handoff?: EventHandoff;
 }
 ```
+
+旧的 `silent` / `steer` 布尔心智已经过时，当前统一使用 `handoff`：
+
+- `silent`: 只入队，不触发处理
+- `turn`: 默认行为，下一个 turn 处理
+- `innerLoop`: 当前事件批次结束后尽快让出
+- `steer`: 立即中断当前 turn
 
 ### EventQueue
 
-每个脑拥有独立的 EventQueue，负责：
-- `push(event)` — 入队
-- `drain()` — 按 priority 排序后批量取出
-- `waitForEvent(signal)` — 阻塞等待下一个非 silent 事件
-- `hasSteerEvent()` — 检查是否有 steer 事件
-- `onSteer(cb)` — 注册 steer 回调（用于中断当前 LLM 调用）
+每个脑有独立 `EventQueue`，关键能力：
 
-### EventBus — 脑间路由
+- `push(event)`
+- `drain()`
+- `pending()`
+- `hasHandoff(handoff)`
+- `onSteer(cb)`
 
-```typescript
-bus.emit(event, sourceBrainId)   // 发送事件，自动路由到目标脑
-bus.nudge(brainId)               // 唤醒目标脑（用于命令队列）
-bus.register(brainId, queue)     // 注册脑的队列
-bus.unregister(brainId)          // 注销
-```
+### EventBusAPI
 
-跨脑消息通过 `event.payload.to` 字段路由：
-- `to: "brain_id"` — 点对点
-- `to: "*"` — 广播到所有其他脑
+脑内部和工具看到的是 `boundEventBus`：
 
-### Agent Loop（ConsciousBrain）
-
-```typescript
-while (!signal.aborted) {
-  const trigger = await queue.waitForEvent(signal);   // 阻塞等待
-  if (!queue.hasSteerEvent() && trigger.priority > 0) {
-    await sleep(coalesceMs);                          // 合并窗口
-  }
-  const events = queue.drain();                       // 批量取出
-  await process(events);                              // LLM + tool loop
+```ts
+interface EventBusAPI {
+  emit(event: Event): void;
+  emitToSelf(event: Event): void;
+  observe(handler: (event: Event) => void): () => void;
 }
 ```
 
-**Steer 机制**：当收到 `steer: true` 的事件时，立即中断当前 LLM 调用并处理新事件。
+注意：
+
+- `emit()` 走全局路由
+- `emitToSelf()` 直接入本脑队列
+- `observe()` 是近期引入的重要能力，用于 renderer/recorder 之类的旁路观察
 
 ---
 
-## 4. 上下文系统
+## 4. 配置与文件真相
 
-### Slot — 上下文插槽
+### 配置分层
 
-System Prompt 由多个 **Slot** 按 `order` 排序后拼接。每个 Slot：
+当前配置来源分成三层：
 
-```typescript
-interface ContextSlot {
-  id: string;                           // 唯一标识
-  order: number;                        // 排序权重（小的在前）
-  priority: number;                     // 裁剪优先级（低的先被裁）
-  condition?: () => boolean;            // 动态条件
-  content: string | (() => string);     // 内容（可懒加载）
-  version: number;                      // 版本号
+1. `mineclaw.json`
+2. `brains/<id>/brain.json`
+3. `key/llm_key.json` 与 `key/models.json`
+
+其中：
+
+- `brain.json` 覆盖全局模型配置
+- `llm_key.json` 负责模型到 provider section 的映射
+- `models.json` 提供 `ModelSpec`
+
+### 当前配置读取原则
+
+配置文件现在按“磁盘即真相”处理：
+
+- provider 每次创建时都重新读取 `key/llm_key.json`
+- `getModelSpec()` 每次都会重新读取 `key/models.json`
+- 不再依赖 watcher 才能生效
+
+因此配置变更的正确心智是：
+
+- 配置：按需读取
+- 运行态状态：内存同步 + 持久化
+
+### `showThinking`
+
+当前默认值已经统一到“开”：
+
+- `resolveModelParams()` 中默认 `showThinking = true`
+- 默认模板也显式写出 `showThinking: true`
+
+---
+
+## 5. Session 与 Tool Lifecycle
+
+### Session 指针
+
+每个脑的当前 Session 由 `brains/<id>/session.json` 决定：
+
+```json
+{
+  "currentSessionId": "s_..."
 }
 ```
 
-### SlotRegistry
+这就是当前 active session 的单一事实来源。
 
-```typescript
-registry.registerSlot(slot)   // 注册
-registry.removeSlot(id)       // 移除
-registry.update(id, content)  // 更新内容
-registry.all()                // 获取全部
-registry.renderSystem()       // 渲染 System Prompt
+### Session 目录
+
+```text
+brains/<id>/
+├── session.json
+└── sessions/
+    └── s_<ts>/
+        ├── messages.jsonl
+        ├── medias/
+        └── events.jsonl   # renderer 侧 UI 事件
 ```
 
-### 内置 Slots
+说明：
 
-| Slot | 来源 | 用途 |
-|------|------|------|
-| `soul` | `brains/<id>/soul.md` | 脑的身份/人格 |
-| `directives` | `directives/*.md` | 行为指令 |
-| `skills` | `skills/*.md` | 技能摘要列表 |
-| `tools` | `tools/*.ts` | 工具描述 |
-| `todos` | BrainBoard | 当前任务列表 |
-| `context-file` | BrainBoard | 当前关注的文件 |
+- `messages.jsonl` 是 LLM 历史
+- `medias/` 存大媒体外置文件
+- `events.jsonl` 是 renderer 消费的 UI 事件流，不等于 LLM 消息历史
 
-### Prompt Pipeline
+### SessionManager / SessionStore
 
-```
-1. Resolve  — 懒加载 slot.content()
-2. Filter   — 按 condition() 过滤
-3. Sort     — 按 order 排序
-4. Render   — 变量替换 ${VAR_NAME}
-5. Budget   — 按 priority 裁剪超预算的 slot
-```
+当前 session 持久化已经拆成两层：
 
-变量来源：BrainBoard 中的键值 + 内置变量（BRAIN_ID, WORKSPACE, CURRENT_TIME）
+- `SessionManager`: 面向脑与工具生命周期
+- `SessionStore`: 负责落盘、锁、原子写、序列化
+
+这次拆分后，session 修复和工具消息对齐也更清晰。
+
+### Tool lifecycle 已稳定
+
+工具调用不再只是“直接拼消息”，而是显式分成：
+
+1. assistant 写出 `toolCalls`
+2. `appendToolPendings()`
+3. tool 执行
+4. `appendToolResult()`
+
+当前 `tool` 消息有明确状态：
+
+- `pending`
+- `completed`
+- `failed`
+- `synthetic`
+
+这也是近期 session 稳定性改造的核心成果之一。
 
 ---
 
-## 5. 能力系统
+## 6. Capability 系统
 
-### CapabilitySelector — 统一的能力选择器
+### 统一选择器
 
-```typescript
+`tools` / `slots` / `subscriptions` 共用同一个选择器模型：
+
+```ts
 interface CapabilitySelector {
-  global: "all" | "none";        // 基准
-  enable?: string[];             // 额外启用
-  disable?: string[];            // 额外禁用
-  config?: Record<string, ...>;  // 各能力的配置
+  global: "all" | "none";
+  enable?: string[];
+  disable?: string[];
+  config?: Record<string, Record<string, unknown>>;
 }
 ```
 
-适用于：`subscriptions` / `tools` / `slots`
+### 路径重定向
 
-### 三层能力解析
+`brain.json.paths` 允许对三类能力目录做重定向：
 
+```ts
+interface CapabilityPathRedirects {
+  tools?: string;
+  slots?: string;
+  subscriptions?: string;
+}
 ```
-1. 全局能力池（tools/ slots/ subscriptions/）
-2. brain.json 选择器过滤
-3. 脑内目录覆盖（brains/<id>/tools/ 等）
+
+### DynamicRegistry
+
+这是近期重构里最重要的抽象之一：
+
+```ts
+interface DynamicRegistry<T> {
+  register(key: string, instance: T): void;
+  release(key: string): void;
+  get(key: string): T | undefined;
+  list(): T[];
+}
 ```
 
-脑内同名 > 全局。
+对应三个运行时 API：
 
-### Loaders
+- `DynamicToolAPI`
+- `DynamicSlotAPI`
+- `DynamicSubscriptionAPI`
 
-| Loader | 目录 | 产物 |
-|--------|------|------|
-| ToolLoader | `tools/` | `ToolDefinition[]` |
-| SlotLoader | `slots/` | `ContextSlot[]` |
-| SubscriptionLoader | `subscriptions/` | `EventSource[]` |
+含义是：
 
-所有 Loader 支持 FSWatcher 热重载。
+- 磁盘能力通过 loader 加载
+- 运行时能力通过 dynamic API 注入/释放
+- 三套系统现在语义对齐了
+
+### Loader 职责
+
+| Loader | 负责什么 |
+|--------|----------|
+| `ToolLoader` | `ToolDefinition` 导入、热重载、动态工具并入 |
+| `SlotLoader` | slot 模块导入，以及 `soul/directives/skills` 失效 |
+| `SubscriptionLoader` | `EventSource` 导入、启动、热重载、动态订阅并入 |
 
 ---
 
-## 6. 订阅源（Subscriptions）
+## 7. Slot / Prompt 系统
 
-### EventSource 接口
+Prompt 组装仍然基于 Slot，但当前要注意两个边界：
 
-```typescript
-interface EventSource {
-  name: string;
-  start(emit: (event: Event) => void): void;
-  stop(): void;
-}
+1. `soul.md` / `directives/*.md` / `skills/*.md` 的内容语义由对应 slot `.ts` 管理
+2. watcher 只是负责让这些 slot 失效，不直接解析 markdown
 
-type EventSourceFactory = (ctx: SourceContext) => EventSource;
-```
+也就是说：
 
-### 内置订阅源
+- `SlotLoader` 监听底层文件变化
+- 然后 `invalidateSlot("soul" | "directives" | "skills")`
+- 真正重新读取内容的是对应 slot 工厂
 
-| 名称 | 用途 |
-|------|------|
-| `stdin` | 终端输入，支持 `/command` 解析 |
-| `stdout` | 终端输出（LLM 响应流式输出） |
-| `heartbeat` | 定时心跳 |
-| `auto_compact` | 自动压缩触发器 |
-
-### SourceContext
-
-```typescript
-interface SourceContext {
-  brainId: string;
-  brainDir: string;
-  config?: Record<string, unknown>;
-  brainBoard: BrainBoardAPI;
-  hooks: BrainHooksAPI;
-  onCommand?: (toolName, args, target?, reason?) => void;
-}
-```
+这比旧文档里“Scheduler 直接重载 directives”那套说法更准确。
 
 ---
 
-## 7. 工具系统（Tools）
+## 8. 热更新与 FSWatcher
 
-### ToolDefinition
+### 当前应该保留 watcher 的只有两类
 
-```typescript
-interface ToolDefinition {
-  name: string;
-  description: string;
-  input_schema: { type: "object"; properties: ...; required?: string[] };
-  execute: (args, ctx: ToolContext) => Promise<ToolOutput>;
-}
+1. 运行时状态同步
+2. 源码/slot 输入文件热更新
 
-type ToolOutput = string | ContentPart[];  // 支持多模态返回
-```
+### 当前 watcher 分工
+
+- `BrainBoard.registerFSWatcher()`
+  - 监听 `brains/brainboard.json`
+  - 解决文件与内存状态同步
+
+- `ToolLoader`
+  - 监听 `tools/*.ts` 与 `brains/<id>/tools/*.ts`
+
+- `SlotLoader`
+  - 监听 `slots/*.ts`
+  - 监听 `directives/*.md` / `skills/*.md` / `soul.md`
+  - 文件变化时做 slot invalidation
+
+- `SubscriptionLoader`
+  - 监听 `subscriptions/*.ts`
+
+- `Scheduler`
+  - 只保留 brain 目录删除监听
+
+### 不再推荐的模式
+
+配置文件热重载 watcher 已不再是推荐方向：
+
+- `brain.json`
+- `key/llm_key.json`
+- `key/models.json`
+
+这些文件更适合“读取时生效”，而不是依赖 watcher 推送。
+
+---
+
+## 9. 日志体系：Logger 与 console
+
+### 现在的结构
+
+当前日志系统已经改成两层：
+
+1. `Logger`
+2. `console` bridge
+
+`Logger` 负责：
+
+- 结构化 level
+- 全局 `logs/debug.log`
+- per-brain `logs/debug.log`
+- per-brain `logs/latest.log`
+
+`console` 现在不再是“旁路输出”，而是通过 bridge 接进 `Logger`：
+
+- `console.log/info/warn/error/debug`
+- 自动继承当前 `brainId/turn`
+- 依赖 `AsyncLocalStorage`
+
+### 上下文传播
+
+核心能力：
+
+- `runWithLogContext()`
+- `getLogContext()`
+- `BaseBrain.run()` 安装 brain 根上下文
+- turn/command/tool 链路再细化上下文
+
+因此现在在脑、工具、订阅、loader 里写 `console.log(...)`，会自动落到对应脑的日志，而不是只掉进全局日志。
+
+### 使用约定
+
+推荐心智：
+
+- `logger.*`
+  - 框架级、生命周期级、错误恢复级日志
+  - 显式而稳定
+
+- `console.*`
+  - loader 热更新
+  - 工具/脚本内部运行信息
+  - 临时打点
+  - 开发者自然偏好的日志入口
+
+简单说：
+
+- 重要系统语义继续用 `logger`
+- 开发侧、局部运行信息可以直接用 `console`
+
+### 日志分层速记
+
+看到一个模块时，先按下面这张表判断：
+
+| 模块层次 | 默认做法 |
+|----------|----------|
+| `Scheduler` / `BaseBrain` / `ConsciousBrain` | 用 `logger.*` |
+| `tools/` / `slots/` / `subscriptions/` / `loaders/` | 用 `console.*` |
+| `session` 恢复/修复提示 | 用 `console.warn` |
+| `registry` / `context` / 纯 helper | 默认不打日志 |
+| `cli` 渲染输出 | `process.stdout.write`，这不是日志 |
+
+补充约束：
+
+- 不要在 `SlotRegistry`、`EventBus` 这类容器/路由层随手加日志
+- 不要把 CLI 绘制输出误当成日志系统的一部分
+- 如果一条信息代表“系统生命周期、错误恢复、fallback、崩溃”，优先回到 `logger.*`
+
+---
+
+## 10. Tool / Subscription / Script 上下文
 
 ### ToolContext
 
-```typescript
+```ts
 interface ToolContext {
   brainId: string;
   signal: AbortSignal;
-  emit: (event: Event) => void;
+  eventBus: EventBusAPI;
   brainBoard: BrainBoardAPI;
   slot: DynamicSlotAPI;
+  tools: DynamicToolAPI;
+  subscriptions: DynamicSubscriptionAPI;
   pathManager: PathManagerAPI;
-  terminalManager: TerminalManagerAPI;
   workspace: string;
   trackBackgroundTask?: (p: Promise<unknown>) => void;
   logger?: Logger;
 }
 ```
 
-### 内置工具
+重点变化：
 
-| 工具 | 用途 |
-|------|------|
-| `read_file` | 读文件，支持图片 |
-| `write_file` | 写文件 |
-| `edit_file` | 编辑文件（search/replace） |
-| `multi_edit` | 批量编辑 |
-| `shell` | 执行命令 |
-| `grep` | 搜索代码 |
-| `glob` | 文件匹配 |
-| `list_dir` | 列目录 |
-| `spawn_thought` | 派生子 Agent |
-| `send_message` | 跨脑消息 |
-| `manage_brain` | 脑管理（create/start/stop/free） |
-| `todo_write` | 任务管理 |
-| `compact` | 会话压缩 |
-| `focus` | 设置关注文件 |
-| `subscribe` / `unsubscribe` | 动态订阅管理 |
-| `read_skill` | 读取技能详情 |
-| `web_search` / `web_fetch` | Web 访问 |
-| `sleep` | 延时 |
-| `lsp` | 语言服务器协议操作 |
+- `eventBus` 是 brain-bound facade，不是裸全局 bus
+- `tools/subscriptions/slot` 都已切到动态 API
+- `logger` 仍然可传，但写 `console.*` 也能正确落日志
 
----
+### SourceContext
 
-## 8. Session 与压缩
-
-### SessionManager
-
-```typescript
-sessionManager.createSession()           // 创建新 session
-sessionManager.loadSession()             // 加载当前 session
-sessionManager.appendMessage(msg)        // 追加消息
-sessionManager.newSession(initialMsgs)   // 创建新 session 并初始化
-sessionManager.resetSession()            // 清空当前 session
-```
-
-Session 数据结构：
-- `session.json` — 当前 session 指针
-- `sessions/<sid>/messages.jsonl` — 消息记录
-- `sessions/<sid>/medias/` — 大媒体文件（>50KB 自动外置）
-
-### 三层压缩
-
-| 层 | 时机 | 策略 |
-|----|------|------|
-| **微压缩** | 每次 LLM 调用前 | 旧 tool_result → `[Previous: used X]` |
-| **摘要压缩** | token 超阈值 | LLM/模板生成摘要替换历史 |
-| **新建 Session** | 手动/自动 | 保留摘要，清空历史 |
-
-### 多模态支持
-
-```typescript
-type ContentPart =
-  | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string }
-  | { type: "video"; data: string; mimeType: string }
-  | { type: "audio"; data: string; mimeType: string };
-```
-
-大媒体自动序列化为 `*_ref` 类型，反序列化时按需加载。
-
----
-
-## 9. Hooks 系统
-
-### HookEvent
-
-```typescript
-enum HookEvent {
-  AssistantMessage = "assistantMessage",
-  TurnStart = "turnStart",
-  TurnEnd = "turnEnd",
-  ToolCall = "toolCall",
-  ToolResult = "toolResult",
-  StreamChunk = "streamChunk",
+```ts
+interface SourceContext {
+  brain: BrainContextAPI;
+  eventConfig?: Record<string, unknown>;
 }
 ```
 
-### BrainHooksAPI
-
-```typescript
-interface BrainHooksAPI {
-  on<E extends HookEvent>(event: E, cb: (payload) => void): () => void;
-}
-```
-
-Hooks 用于：
-- 订阅源监听 LLM 输出（stdout）
-- 自动压缩检测（auto_compact）
-- 调试/日志
+订阅源拿到的是整个 `brain` facade，而不是零散字段。
 
 ---
 
-## 10. BrainBoard — 响应式状态注册表
+## 11. LLM Provider 与 Gemini 路由
 
-### 接口
+### Provider registry
 
-```typescript
-interface BrainBoardAPI {
-  set(brainId, key, value): void;
-  get(brainId, key): unknown;
-  remove(brainId, key): void;
-  removeAll(brainId): void;
-  removeByPrefix(prefix): void;
-  getAll(brainId): Record<string, unknown>;
-  brainIds(): string[];
-  watch(brainId, key, cb): () => void;
-  loadFromDisk(): void;
-  registerFSWatcher(watcher): void;
-}
-```
+当前 provider 由 `api` 类型显式注册：
 
-### 用途
+- `google-gemini-2`
+- `google-gemini-3`
+- `anthropic`
+- `openai-compatible`
+- 其他适配器
 
-- 存储脑的运行时状态（todos, currentContextUsage, focusFiles 等）
-- 跨脑状态共享（任何脑可读其他脑的状态）
-- 持久化到 `brains/brainboard.json`
-- 支持 FSWatcher 热重载
+### key/llm_key.json
 
----
+模型与 provider section 的关系由 `llm_key.json` 决定，不再依赖旧兼容别名推断。
 
-## 11. LLM Provider 系统
+当前 Gemini 已拆清：
 
-### 适配器注册
+- Gemini 3 模型走 `google-gemini-3`
+- Gemini 2 模型走 `google-gemini-2`
 
-```typescript
-registerProvider("google-generative-ai", (opts) => new GeminiProvider(opts));
-registerProvider("anthropic", (opts) => new AnthropicProvider(opts));
-registerProvider("openai-compatible", (opts) => new OpenAICompatProvider(opts));
-```
+### 跨模型 Session 回放
 
-### 模型配置
+Gemini 3 对 tool replay 和 `thoughtSignature` 更严格。
 
-`key/llm_key.json`：
-```json
-{
-  "google": {
-    "api_key": "xxx",
-    "api": "google-generative-ai",
-    "models": ["gemini-2.5-flash", "gemini-3.1-pro-preview"]
-  }
-}
-```
+当前实现已经支持：
 
-`key/models.json`：
-```json
-{
-  "gemini-2.5-flash": {
-    "input": ["text", "image"],
-    "reasoning": false,
-    "contextWindow": 1000000,
-    "maxOutput": 8192,
-    "defaultTemperature": 0.7,
-    "tokensPerChar": 0.3
-  }
-}
-```
+- 保留 Gemini 3 合法签名
+- 遇到历史消息没有 Gemini 3 签名时
+- 在**消息适配阶段**动态把历史 tool call/result 文本化
+- 不修改持久化 session 本身
 
-### Fallback 链
-
-```jsonc
-// brain.json
-{
-  "models": {
-    "model": ["claude-opus-4-6", "gemini-3.1-pro-preview"]  // 第一个失败自动切换
-  }
-}
-```
+这是当前 Gemini 兼容策略的关键约束。
 
 ---
 
-## 12. Scheduler
+## 12. Scheduler 负责什么
 
-### 职责
+Scheduler 当前职责很聚焦：
 
-- 扫描 `brains/` 发现脑
-- 初始化各组件（ToolLoader, SlotLoader, SubscriptionLoader, ContextEngine, SessionManager）
-- 启动脑的 run loop
-- 注册热重载处理器
-- 处理信号（Ctrl+C 停止当前脑，再按退出）
+1. 发现 brains
+2. 读取配置
+3. 构造 loaders / registry / provider / sessionManager
+4. 创建 `ConsciousBrain` 或 `ScriptBrain`
+5. 启动 run loop
+6. 处理脑控制命令与进程信号
 
-### 脑管理 API
+Scheduler **不应该**承担：
 
-```typescript
-scheduler.controlBrain("list")                        // 列出活跃脑
-scheduler.controlBrain("create", "newbrain", opts)    // 创建
-scheduler.controlBrain("start", "brainId")            // 启动
-scheduler.controlBrain("stop", "brainId")             // 停止当前调用
-scheduler.controlBrain("shutdown", "brainId")         // 完全关闭
-scheduler.controlBrain("restart", "brainId")          // 重启
-scheduler.controlBrain("free", "brainId")             // 释放（删除目录）
-scheduler.controlBrain("resume", "brainId")           // 恢复
-```
+- slot 内容语义管理
+- directives/soul/skills 的实际读取
+- 配置文件 watcher 驱动的热更新解释
 
-### 热重载
-
-FSWatcher 监听：
-- `brain.json` 变更 → 重载模型配置
-- `directives/*.md` → 自动重新渲染
-- `skills/*.md` → 自动更新摘要
-- `soul.md` → 立即生效
+这些职责已经更清晰地下沉到各自模块里。
 
 ---
 
-## 13. 目录结构
+## 13. 当前目录地图
 
-```
+```text
 mineclaw/
 ├── AGENTIC.md
-├── mineclaw.json              # 全局默认配置
-│
-│   ── 全局能力池 ──
-│
-├── subscriptions/             # 事件订阅源
-│   ├── stdin.ts
-│   ├── stdout.ts
-│   ├── heartbeat.ts
-│   └── auto_compact.ts
-├── tools/                     # 工具定义
-│   ├── read_file.ts
-│   ├── write_file.ts
-│   ├── shell.ts
-│   ├── spawn_thought.ts
-│   └── ...
-├── slots/                     # 上下文插槽
-│   ├── soul.ts
-│   ├── directives.ts
-│   ├── skills.ts
-│   ├── tools.ts
-│   ├── todos.ts
-│   └── context-file.ts
-├── skills/                    # 技能库
-├── directives/                # 行为指令
-│
-│   ── 脑区 ──
-│
+├── mineclaw.json
+├── directives/
+├── skills/
+├── tools/
+├── slots/
+├── subscriptions/
+├── key/
+│   ├── llm_key.json
+│   ├── llm_key.example.json
+│   └── models.json
 ├── brains/
-│   ├── brainboard.json        # 响应式状态持久化
-│   └── coder/
+│   ├── brainboard.json
+│   └── <brain>/
 │       ├── brain.json
 │       ├── soul.md
 │       ├── session.json
 │       ├── sessions/
-│       └── workspace/
-│
-├── key/                       # API 密钥
-│   ├── llm_key.json
-│   └── models.json
-│
-└── src/                       # 框架基础设施
-    ├── core/                  #   Brain / EventBus / EventQueue / Scheduler
-    ├── context/               #   ContextEngine / SlotRegistry / PromptPipeline
-    ├── llm/                   #   Provider / 适配器 / 流处理
-    ├── loaders/               #   ToolLoader / SlotLoader / SubscriptionLoader
-    ├── session/               #   SessionManager / Compaction
-    ├── hooks/                 #   BrainHooks
-    ├── terminal/              #   TerminalManager
-    └── fs/                    #   PathManager / FSWatcher
+│       ├── workspace/
+│       ├── logs/
+│       ├── tools/
+│       ├── slots/
+│       ├── subscriptions/
+│       ├── directives/
+│       ├── skills/
+│       └── src/
+└── src/
+    ├── core/
+    ├── context/
+    ├── llm/
+    ├── loaders/
+    ├── session/
+    ├── hooks/
+    ├── fs/
+    ├── cli/
+    └── terminal/
 ```
 
 ---
 
-## 14. 核心概念速查
+## 14. 开发时的简明约定
 
-| 概念 | 一句话 |
-|------|--------|
-| **目录即大脑** | `brains/<id>/` = 完整自包含的脑区 |
-| **ConsciousBrain** | 有 LLM 的脑，运行 Agent Loop |
-| **ScriptBrain** | 纯脚本脑，无 LLM |
-| **EventQueue** | 每脑独立的事件队列，支持 steer 中断 |
-| **EventBus** | 脑间消息路由 |
-| **Slot** | 上下文插槽，动态组装 System Prompt |
-| **SlotRegistry** | Slot 的注册表，支持条件加载 |
-| **CapabilitySelector** | 统一的能力选择器 (global + enable/disable) |
-| **Loader** | 能力加载器，支持热重载 |
-| **SessionManager** | Session 管理，支持多模态 |
-| **微压缩** | 旧 tool_result → 占位符 |
-| **BrainBoard** | 响应式状态注册表，跨脑共享 |
-| **Hooks** | 生命周期钩子 (TurnStart/End, ToolCall/Result) |
-| **Steer** | 立即中断当前 LLM 调用 |
-| **Fallback 链** | 多模型自动切换 |
+1. 改框架语义时，优先改 `src/core/types.ts` 和这份文档，避免概念漂移。
+2. 配置文件优先走“读取时生效”，不要先想着给配置挂 watcher。
+3. loader/工具/脚本里的运行信息允许直接用 `console.*`。
+4. 生命周期、错误恢复、fallback、调度器级事件仍优先用 `logger.*`。
+5. 新增能力时，先想它属于 `tool`、`slot` 还是 `subscription`，再决定 loader 和 dynamic API 的接入方式。
 
 ---
 
-## 15. 文件规范
-
-### 允许的文件类型
-
-`.ts` · `.json` · `.md` · `.jsonl`
-
-**禁止**: `.yaml` · `.toml` · `.env` · `.yml`
-
-### 代码规模
-
-- 单文件 ≤ 300 行
-- 函数 ≤ 50 行
-- 嵌套 ≤ 3 层
-
-### @desc 注释
-
-每个 `.ts` 文件第一行:
-
-```typescript
-// @desc <English, one line, ≤30 tokens>
-```
-
-`grep -r @desc src/` 获得全项目地图。
-
----
-
-## 16. Minecraft 专供设计（TODO）
-
-> 以下是 MineClaw 作为 Minecraft 游戏 AI 框架的核心设计愿景。
-> 当前框架已支持基础能力，Minecraft 特有功能待实现。
-
-### 架构：身体与大脑分离
-
-```
-MineAvatar (Java)          MineClaw (TypeScript)
-    身体                        大脑
-     │                           │
-     └──── WebSocket JSON ───────┘
-           帧率无关协议
-```
-
-- **MineAvatar** 不含任何策略，只有执行
-- **MineClaw** 不含任何执行，只有决策
-- 分界线是 WebSocket JSON — 任何能发 JSON 的系统都能当大脑
-
-### 三速分层
-
-不同层运行在不同时钟频率，互不阻塞：
-
-| 层 | 运行时 | 频率 | 职责 |
-|----|--------|------|------|
-| 脑层 | TypeScript | 秒~分钟 | 意图/策略/反思 |
-| 执行层 | Java | tick 级 (50ms) | BT 遍历/原子动作/事件检测 |
-
-### 五脑初始设计
-
-| Brain | model | src/ | 频率 | 职责 |
-|-------|-------|------|------|------|
-| **Planner** | — | ✓ | 1~5s | HTN 分解 + GOAP 搜索 + BT 组装 |
-| **Executor** | — | ✓ | 事件 | Safety 拼接 + BT 推送 + ActionResult 收集 |
-| **Intent** | ✓ | — | 10min | 意图管理 + 目标优先级 + 进化审批 |
-| **Social** | ✓ | — | 事件 | 对话回复 + 指令解析 + 社交行为 |
-| **Reflect** | ✓ | — | 30min | 失败诊断 + Skill 创作/修改 + 脑区进化 |
-
-**设计原则**：
-- Planner/Executor 是纯脚本脑（无 LLM），负责高频低延迟的行为规划
-- Intent/Social/Reflect 是意识脑（有 LLM），负责低频高智能的决策
-- 以上是初始脑区，不是上限。evolve 模式下可长出新脑
-
-### 行为规划
-
-| 系统 | 用途 |
-|------|------|
-| **HTN** (Hierarchical Task Network) | 任务分解："获取钻石" → 找矿 → 挖掘 → 收集 |
-| **GOAP** (Goal-Oriented Action Planning) | 动态规划：根据当前状态搜索最优行动序列 |
-| **BT** (Behavior Tree) | 执行控制：Safety 优先 → 主任务 → fallback |
-
-### Skills（Minecraft 特化）
-
-Skill 不限于一种格式——任何可复用的策略/知识/模板：
-
-| 类型 | 格式 | 例子 |
-|------|------|------|
-| BT 子树模板 | `.json` | 挖矿行为树、战斗行为树 |
-| HTN 策略 | `.md` / `.ts` | "获取钻石"的分解路径 |
-| 通用指南 | `.md` | 建筑美学原则、交易策略 |
-| GOAP 动作集 | `.ts` | 一组相关动作的 cost 定义 |
-
-### Safety 子树
-
-Safety 不是独立 Brain，而是 BT Root Selector 的最高优先级子树。
-每 tick 自动优先检查（血量低→吃→逃）。
-
-### 进化模式
-
-| 手段 | 做什么 | 例子 |
-|------|--------|------|
-| 改数据文件 | 调参数、改知识 | GOAP cost、HTN 方法 |
-| 改 soul.md | 改脑的人格/指令 | 让 Intent 更激进 |
-| 写 `src/` | 给脑加脚本能力 | Reflect 给自己写分析工具 |
-| 加 `model` | 给脚本脑开意识 | 给 Planner 加 LLM 辅助决策 |
-| 新建脑目录 | 长出新脑区 | 创建 `brains/explorer/` |
-| 休眠脑 | 停心跳，保留目录 | ROI 低的脑暂停 |
-
-进化操作走 `request_approval` 消息：
-ReflectBrain 写 proposal → EventBus 发审批请求 → IntentBrain 审批 → 执行或放弃
-
-### 自然选择
-
-有 LLM 的脑消耗 token。ReflectBrain 定期审计脑区 ROI
-（唤醒次数 / 采纳率 / token 消耗）。ROI 过低 → 提议休眠。
-
----
-
-*文档版本: 2026-03-04*
+*文档版本: 2026-03-07*
