@@ -142,45 +142,6 @@ export class Scheduler {
   private registerHotReloadHandlers(): void {
     if (!this.fsWatcher) return;
 
-    // brain.json changes
-    this.fsWatcher.register(/brains\/([^/]+)\/brain\.json$/, async (evt) => {
-      const match = evt.path.match(/brains\/([^/]+)\/brain\.json$/);
-      if (!match) return;
-      const brainId = match[1];
-      this.logger.info("scheduler", 0, `brain.json changed for '${brainId}', reloading config...`);
-      const brain = this.brains.get(brainId);
-      if (!brain) return;
-
-      await this.terminalManager.loadBrainEnv(brainId);
-
-      if (brain instanceof ConsciousBrain) {
-        const brainConfig = await this.loadBrainConfig(brainId);
-        const globalCfg = await this.loadGlobalConfig();
-        const modelsConfig = resolveModelsConfig(brainConfig, globalCfg);
-        const modelRaw = modelsConfig.model;
-        if (modelRaw) {
-          const modelName = Array.isArray(modelRaw) ? modelRaw[0] : modelRaw;
-          const models = Array.isArray(modelRaw) ? modelRaw : [modelRaw];
-          const provider = createFallbackProvider(models, modelsConfig, {
-            onRetry: (model, info) => {
-              this.logger.warn(brainId, 0, `[${model}] 重试 ${info.attempt}/${info.maxRetries}: ${info.error.message}`);
-            },
-            onFallback: (from, to, err) => {
-              this.logger.warn(brainId, 0, `Fallback ${from} → ${to}: ${err.message}`);
-            },
-          });
-          const modelSpec = getModelSpec(modelName);
-          brain.updateConfig({ provider, modelSpec, brainConfig });
-          this.logger.info("scheduler", 0, `脑区 '${brainId}' 热重载完成 (model: ${modelName})`);
-        }
-      }
-    });
-
-    // Directive file changes
-    this.fsWatcher.register(/directives\/[^/]+\.md$/, () => {
-      this.logger.info("scheduler", 0, "Directive file changed (hot-reload via slot re-read on next prompt)");
-    });
-
     // Brain directory deletion
     this.fsWatcher.register(/^brains\/([^/]+)\/?$/, async (evt) => {
       const match = evt.path.match(/^brains\/([^/]+)\/?$/);
@@ -254,6 +215,7 @@ export class Scheduler {
     // Load tools
     const selectorTools = brainConfig.tools ?? BRAIN_DEFAULTS.tools;
     const toolLoader = new ToolLoader();
+    toolLoader.setLogContext(brainId);
     if (this.fsWatcher) toolLoader.registerWatchPatterns(this.fsWatcher);
     const tools = await toolLoader.load({
       brainId,
@@ -270,6 +232,7 @@ export class Scheduler {
 
     const selectorSlots = brainConfig.slots ?? BRAIN_DEFAULTS.slots;
     const slotLoader = new SlotLoader();
+    slotLoader.setLogContext(brainId);
     slotLoader.setSlotContext({
       brainId,
       brainDir,
@@ -354,6 +317,7 @@ export class Scheduler {
     brain: BaseBrain,
   ): Promise<{ sources: import("./types.js").EventSource[]; loader: SubscriptionLoader }> {
     const subLoader = new SubscriptionLoader();
+    subLoader.setLogContext(brainId);
     subLoader.setEmitter((event) => brain.pushEvent(event));
 
     // Build BrainContextAPI for subscriptions

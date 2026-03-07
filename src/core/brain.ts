@@ -21,6 +21,7 @@ import { renderEventDisplay } from "../context/event-router.js";
 import { HookEvent } from "../hooks/types.js";
 import { runToolBatch } from "./tool-batch-runner.js";
 import { BaseBrain } from "./base-brain.js";
+import { runWithLogContext } from "./logger.js";
 import { BRAIN_DEFAULTS } from "../defaults/brain-defaults.js";
 
 function sleep(ms: number): Promise<void> {
@@ -57,157 +58,159 @@ export interface AgentLoopOpts {
 }
 
 export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | null> {
-  const {
-    brainId, provider, tools, dynamicTools, dynamicSubscriptions, contextEngine,
-    modelSpec, maxIterations, signal, brainBoard, slotRegistry,
-    pathManager, workspace, eventBus, logger,
-    sessionManager, turn = 0, onAssistantMessage, hooks,
-    keepToolResults = 8, showThinking = false,
-    shouldYieldInnerLoop,
-  } = opts;
+  return await runWithLogContext({ brainId: opts.brainId, turn: opts.turn ?? 0 }, async () => {
+    const {
+      brainId, provider, tools, dynamicTools, dynamicSubscriptions, contextEngine,
+      modelSpec, maxIterations, signal, brainBoard, slotRegistry,
+      pathManager, workspace, eventBus, logger,
+      sessionManager, turn = 0, onAssistantMessage, hooks,
+      keepToolResults = 8, showThinking = false,
+      shouldYieldInnerLoop,
+    } = opts;
 
-  const lifecycle = sessionManager;
-  let iterations = 0;
-  let lastResponse: LLMResponse | null = null;
+    const lifecycle = sessionManager;
+    let iterations = 0;
+    let lastResponse: LLMResponse | null = null;
 
-  const toolCtx: ToolContext = {
-    brainId,
-    signal,
-    eventBus,
-    brainBoard,
-    slot: slotRegistry,
-    tools: dynamicTools,
-    subscriptions: dynamicSubscriptions,
-    pathManager,
-    workspace,
-    trackBackgroundTask: opts.trackBackgroundTask,
-    logger,
-  };
-
-  for (;;) {
-    if (signal.aborted || (maxIterations != -1 && iterations >= maxIterations) ) break;
-    iterations++;
-
-    const sessionHistory = await sessionManager.loadPromptHistory({ keepToolResults });
-
-    const boardEntries = brainBoard.getAll(brainId);
-    const vars: Record<string, string> = {};
-    for (const [k, v] of Object.entries(boardEntries)) {
-      vars[k] = typeof v === "string" ? v : JSON.stringify(v);
-    }
-    vars.BRAIN_ID = brainId;
-    vars.WORKSPACE = pathManager.resolve({ path: "." }, brainId);
-    const tz = (brainBoard.get(brainId, "timezone") as string) ?? "Asia/Shanghai";
-    vars.CURRENT_TIME = new Date().toLocaleString("zh-CN", { timeZone: tz });
-    const messages = contextEngine.assemblePrompt(
-      sessionHistory,
-      modelSpec,
-      undefined,
-      vars,
-    );
-
-    logger?.debug(brainId, turn,
-      `LLM call: ${messages.length} msgs, ${tools.length} tools, session=${sessionHistory.length}`);
-
-    let response: LLMResponse;
-    try {
-      const stream = provider.chatStream(messages, tools, signal);
-      response = await assembleResponseWithCallback(stream, (chunk) => {
-        hooks?.emit(HookEvent.StreamChunk, { chunk, turn });
-      });
-    } catch (err: any) {
-      if (signal.aborted) {
-        logger?.warn(brainId, turn, "LLM call aborted");
-        break;
-      }
-      logger?.error(brainId, turn, `LLM call failed: ${err.message}`);
-
-      const errorText = `[LLM error: ${err.message?.slice(0, 200) ?? "unknown"}]`;
-      await lifecycle.appendAssistantTurn({
-        role: "assistant",
-        content: errorText,
-        ts: Date.now(),
-      });
-      hooks?.emit(HookEvent.AssistantMessage, {
-        msg: { role: "assistant", content: errorText },
-        turn,
-      });
-      break;
-    }
-
-    logger?.debug(brainId, turn,
-      `LLM response: content=${typeof response.content === "string" ? response.content.length : "multimodal"} chars, tools=${response.toolCalls?.length ?? 0}`);
-
-    lastResponse = response;
-
-    if (response.usage) {
-      brainBoard.set(brainId, "currentContextUsage",
-        response.usage.inputTokens + response.usage.outputTokens);
-    }
-
-    let content = response.content;
-    const hasThinking = showThinking && response.thinking;
-    if (hasThinking) {
-      const thinkingBlock = `<thinking>${response.thinking}</thinking>`;
-      if (typeof content === "string") {
-        content = content ? `${thinkingBlock}\n${content}` : thinkingBlock;
-      }
-    }
-
-    const assistantMsg: LLMMessage = {
-      role: "assistant",
-      content,
-      thinking: hasThinking ? response.thinking : undefined,
-      thinkingSignature: hasThinking ? response.thinkingSignature : undefined,
-      textSignature: response.textSignature,
-      toolCalls: response.toolCalls,
-      usage: response.usage
-        ? { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens }
-        : undefined,
-      ts: Date.now(),
+    const toolCtx: ToolContext = {
+      brainId,
+      signal,
+      eventBus,
+      brainBoard,
+      slot: slotRegistry,
+      tools: dynamicTools,
+      subscriptions: dynamicSubscriptions,
+      pathManager,
+      workspace,
+      trackBackgroundTask: opts.trackBackgroundTask,
+      logger,
     };
 
-    if (signal.aborted) {
-      assistantMsg.truncated = true;
-      await lifecycle.appendAssistantTurn(assistantMsg);
-      break;
-    }
+    for (;;) {
+      if (signal.aborted || (maxIterations != -1 && iterations >= maxIterations) ) break;
+      iterations++;
 
-    await lifecycle.appendAssistantTurn(assistantMsg);
+      const sessionHistory = await sessionManager.loadPromptHistory({ keepToolResults });
 
-    hooks?.emit(HookEvent.AssistantMessage, { msg: assistantMsg, turn });
-    onAssistantMessage?.(assistantMsg);
-
-    const textContent = typeof content === "string" ? content : "";
-    const displayContent = textContent.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
-    if (displayContent) {
-      logger?.info(brainId, turn, displayContent);
-    }
-
-    if (!response.toolCalls || response.toolCalls.length === 0) {
-      if (!displayContent) {
-        logger?.warn(brainId, turn, "LLM returned empty response (no content, no tool calls)");
+      const boardEntries = brainBoard.getAll(brainId);
+      const vars: Record<string, string> = {};
+      for (const [k, v] of Object.entries(boardEntries)) {
+        vars[k] = typeof v === "string" ? v : JSON.stringify(v);
       }
-      break;
+      vars.BRAIN_ID = brainId;
+      vars.WORKSPACE = pathManager.resolve({ path: "." }, brainId);
+      const tz = (brainBoard.get(brainId, "timezone") as string) ?? "Asia/Shanghai";
+      vars.CURRENT_TIME = new Date().toLocaleString("zh-CN", { timeZone: tz });
+      const messages = contextEngine.assemblePrompt(
+        sessionHistory,
+        modelSpec,
+        undefined,
+        vars,
+      );
+
+      logger?.debug(brainId, turn,
+        `LLM call: ${messages.length} msgs, ${tools.length} tools, session=${sessionHistory.length}`);
+
+      let response: LLMResponse;
+      try {
+        const stream = provider.chatStream(messages, tools, signal);
+        response = await assembleResponseWithCallback(stream, (chunk) => {
+          hooks?.emit(HookEvent.StreamChunk, { chunk, turn });
+        });
+      } catch (err: any) {
+        if (signal.aborted) {
+          logger?.warn(brainId, turn, "LLM call aborted");
+          break;
+        }
+        logger?.error(brainId, turn, `LLM call failed: ${err.message}`);
+
+        const errorText = `[LLM error: ${err.message?.slice(0, 200) ?? "unknown"}]`;
+        await lifecycle.appendAssistantTurn({
+          role: "assistant",
+          content: errorText,
+          ts: Date.now(),
+        });
+        hooks?.emit(HookEvent.AssistantMessage, {
+          msg: { role: "assistant", content: errorText },
+          turn,
+        });
+        break;
+      }
+
+      logger?.debug(brainId, turn,
+        `LLM response: content=${typeof response.content === "string" ? response.content.length : "multimodal"} chars, tools=${response.toolCalls?.length ?? 0}`);
+
+      lastResponse = response;
+
+      if (response.usage) {
+        brainBoard.set(brainId, "currentContextUsage",
+          response.usage.inputTokens + response.usage.outputTokens);
+      }
+
+      let content = response.content;
+      const hasThinking = showThinking && response.thinking;
+      if (hasThinking) {
+        const thinkingBlock = `<thinking>${response.thinking}</thinking>`;
+        if (typeof content === "string") {
+          content = content ? `${thinkingBlock}\n${content}` : thinkingBlock;
+        }
+      }
+
+      const assistantMsg: LLMMessage = {
+        role: "assistant",
+        content,
+        thinking: hasThinking ? response.thinking : undefined,
+        thinkingSignature: hasThinking ? response.thinkingSignature : undefined,
+        textSignature: response.textSignature,
+        toolCalls: response.toolCalls,
+        usage: response.usage
+          ? { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens }
+          : undefined,
+        ts: Date.now(),
+      };
+
+      if (signal.aborted) {
+        assistantMsg.truncated = true;
+        await lifecycle.appendAssistantTurn(assistantMsg);
+        break;
+      }
+
+      await lifecycle.appendAssistantTurn(assistantMsg);
+
+      hooks?.emit(HookEvent.AssistantMessage, { msg: assistantMsg, turn });
+      onAssistantMessage?.(assistantMsg);
+
+      const textContent = typeof content === "string" ? content : "";
+      const displayContent = textContent.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
+      if (displayContent) {
+        logger?.info(brainId, turn, displayContent);
+      }
+
+      if (!response.toolCalls || response.toolCalls.length === 0) {
+        if (!displayContent) {
+          logger?.warn(brainId, turn, "LLM returned empty response (no content, no tool calls)");
+        }
+        break;
+      }
+
+      await runToolBatch({
+        toolCalls: response.toolCalls,
+        tools,
+        toolCtx,
+        lifecycle,
+        logger,
+        hooks,
+        turn,
+      });
+
+      if (shouldYieldInnerLoop?.()) {
+        logger?.debug(brainId, turn, "yielding current turn after inner loop boundary");
+        break;
+      }
     }
 
-    await runToolBatch({
-      toolCalls: response.toolCalls,
-      tools,
-      toolCtx,
-      lifecycle,
-      logger,
-      hooks,
-      turn,
-    });
-
-    if (shouldYieldInnerLoop?.()) {
-      logger?.debug(brainId, turn, "yielding current turn after inner loop boundary");
-      break;
-    }
-  }
-
-  return lastResponse;
+    return lastResponse;
+  });
 }
 
 // ─── ConsciousBrain-specific init config ───
@@ -264,7 +267,7 @@ export class ConsciousBrain extends BaseBrain {
     this.dynamicSubscriptions = api;
   }
 
-  async run(_signal: AbortSignal): Promise<void> {
+  protected async runMain(_signal: AbortSignal): Promise<void> {
     // Start event sources
     this.startSources();
 
@@ -276,7 +279,9 @@ export class ConsciousBrain extends BaseBrain {
         this.turnAbort = new AbortController();
         const combinedSignal = combineSignals(this.signal, this.turnAbort.signal);
         try {
-          await this.executeCommand(cmd.toolName, cmd.args, cmd.reason, combinedSignal);
+          await this.withLogContext(async () => {
+            await this.executeCommand(cmd.toolName, cmd.args, cmd.reason, combinedSignal);
+          }, this.currentTurn);
         } catch (err: any) {
           if (!combinedSignal.aborted) {
             this.logger.error(this.id, this.currentTurn, "command failed", err);
@@ -313,7 +318,9 @@ export class ConsciousBrain extends BaseBrain {
       this.logger.info(this.id, this.currentTurn, `▶ process [${events.length} events]`);
 
       try {
-        await this.process(events, combinedSignal);
+        await this.withLogContext(async () => {
+          await this.process(events, combinedSignal);
+        }, this.currentTurn);
       } catch (err: any) {
         if (combinedSignal.aborted) {
           this.logger.warn(this.id, this.currentTurn, "turn aborted");
@@ -366,7 +373,7 @@ export class ConsciousBrain extends BaseBrain {
         turn: this.currentTurn,
         hooks: this.hooks,
         keepToolResults: this.brainJson.session?.keepToolResults ?? BRAIN_DEFAULTS.session.keepToolResults,
-        showThinking: this.brainJson.models?.showThinking ?? false,
+        showThinking: this.brainJson.models?.showThinking ?? true,
         trackBackgroundTask: (p) => {
           this.pendingTasks.add(p);
           p.finally(() => this.pendingTasks.delete(p));

@@ -22,7 +22,7 @@ export class ScriptBrain extends BaseBrain {
     };
   }
 
-  async run(_signal: AbortSignal): Promise<void> {
+  protected async runMain(_signal: AbortSignal): Promise<void> {
     const modulePath = pathToFileURL(join(this.brainDir, "src", "index.ts")).href;
     const mod = (await import(modulePath)) as ScriptModule;
 

@@ -1,6 +1,8 @@
 import { createWriteStream, statSync, renameSync, existsSync, mkdirSync } from "node:fs";
 import type { WriteStream } from "node:fs";
 import { join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { formatWithOptions } from "node:util";
 import type { PathManagerAPI } from "./types.js";
 
 export enum LogLevel {
@@ -19,6 +21,28 @@ const LEVEL_LABELS: Record<LogLevel, string> = {
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const MAX_ROTATIONS = 5;
+type ConsoleMethod = "debug" | "log" | "info" | "warn" | "error";
+type ConsoleFn = (...args: unknown[]) => void;
+export interface LogContext {
+  brainId: string;
+  turn: number;
+}
+
+const CONSOLE_METHODS: ConsoleMethod[] = ["debug", "log", "info", "warn", "error"];
+const DEFAULT_LOG_CONTEXT: LogContext = { brainId: "scheduler", turn: 0 };
+const logContextStorage = new AsyncLocalStorage<LogContext>();
+
+const consoleBridgeState: {
+  installed: boolean;
+  logger: Logger | null;
+  defaultContext: LogContext;
+  originals: Partial<Record<ConsoleMethod, ConsoleFn>>;
+} = {
+  installed: false,
+  logger: null,
+  defaultContext: DEFAULT_LOG_CONTEXT,
+  originals: {},
+};
 
 function ts(): string {
   const d = new Date();
@@ -27,6 +51,88 @@ function ts(): string {
   const ss = String(d.getSeconds()).padStart(2, "0");
   const ms = String(d.getMilliseconds()).padStart(3, "0");
   return `${hh}:${mm}:${ss}.${ms}`;
+}
+
+function formatConsoleArgs(args: unknown[]): string {
+  if (args.length === 0) return "";
+  return formatWithOptions({ colors: false, depth: 6 }, ...args);
+}
+
+function forwardToOriginalConsole(method: ConsoleMethod, args: unknown[]): void {
+  consoleBridgeState.originals[method]?.(...args);
+}
+
+export function getLogContext(): LogContext {
+  return logContextStorage.getStore() ?? consoleBridgeState.defaultContext;
+}
+
+export function runWithLogContext<T>(
+  ctx: Partial<LogContext> & Pick<LogContext, "brainId">,
+  fn: () => T,
+): T {
+  const parent = getLogContext();
+  return logContextStorage.run({
+    brainId: ctx.brainId,
+    turn: ctx.turn ?? parent.turn,
+  }, fn);
+}
+
+export function bindLogContext<TArgs extends unknown[], TResult>(
+  ctx: Partial<LogContext> & Pick<LogContext, "brainId">,
+  fn: (...args: TArgs) => TResult,
+): (...args: TArgs) => TResult {
+  return (...args: TArgs) => runWithLogContext(ctx, () => fn(...args));
+}
+
+export function installConsoleBridge(): void {
+  if (consoleBridgeState.installed) return;
+
+  for (const method of CONSOLE_METHODS) {
+    consoleBridgeState.originals[method] = console[method].bind(console) as ConsoleFn;
+    console[method] = ((...args: unknown[]) => {
+      const logger = consoleBridgeState.logger;
+      if (!logger) {
+        forwardToOriginalConsole(method, args);
+        return;
+      }
+
+      const msg = formatConsoleArgs(args);
+      const { brainId, turn } = getLogContext();
+
+      switch (method) {
+        case "debug":
+          logger.debug(brainId, turn, msg);
+          break;
+        case "log":
+        case "info":
+          logger.info(brainId, turn, msg);
+          break;
+        case "warn":
+          logger.warn(brainId, turn, msg);
+          break;
+        case "error":
+          logger.error(brainId, turn, msg);
+          break;
+      }
+    }) as ConsoleFn;
+  }
+
+  consoleBridgeState.installed = true;
+}
+
+export function attachConsoleLogger(logger: Logger, opts?: { brainId?: string; turn?: number }): void {
+  installConsoleBridge();
+  consoleBridgeState.logger = logger;
+  consoleBridgeState.defaultContext = {
+    brainId: opts?.brainId ?? DEFAULT_LOG_CONTEXT.brainId,
+    turn: opts?.turn ?? DEFAULT_LOG_CONTEXT.turn,
+  };
+}
+
+export function detachConsoleLogger(logger?: Logger): void {
+  if (!logger || consoleBridgeState.logger === logger) {
+    consoleBridgeState.logger = null;
+  }
 }
 
 /** Per-brain file logger with latest.log (INFO+) + debug.log (all levels) */
@@ -89,6 +195,7 @@ export class Logger {
     this.globalDebugPath = join(this.logsDir, "debug.log");
     this.globalDebugStream = createWriteStream(this.globalDebugPath, { flags: "a" });
     try { this.globalDebugBytes = statSync(this.globalDebugPath).size; } catch { this.globalDebugBytes = 0; }
+    attachConsoleLogger(this);
   }
 
   debug(brainId: string, turn: number, msg: string, err?: Error): void {
@@ -110,32 +217,33 @@ export class Logger {
   private write(level: LogLevel, brainId: string, turn: number, msg: string, err?: Error): void {
     if (level < this.level) return;
 
+    const line = this.formatLine(level, brainId, turn, msg, err);
+    this.writeLine(line, level, brainId);
+  }
+
+  private formatLine(level: LogLevel, brainId: string, turn: number, msg: string, err?: Error): string {
     let line = `[${ts()}] [${LEVEL_LABELS[level]}] [${brainId}#${turn}] ${msg}`;
     if (err) line += `\n  ${err.stack ?? err.message}`;
-    line += "\n";
+    return line + "\n";
+  }
 
-    switch (level) {
-      case LogLevel.DEBUG:
-        process.stderr.write(line);
-        break;
-      case LogLevel.INFO:
-        process.stderr.write(line);
-        break;
-      case LogLevel.WARN:
-      case LogLevel.ERROR:
-        process.stderr.write(line);
-        break;
-    }
+  private writeLine(line: string, level: LogLevel, brainId: string): void {
+    process.stderr.write(line);
+    this.writeGlobal(line);
+    this.writeBrain(line, level, brainId);
+  }
 
+  private writeGlobal(line: string): void {
     this.globalDebugStream.write(line);
     this.globalDebugBytes += Buffer.byteLength(line);
     if (this.globalDebugBytes >= MAX_FILE_SIZE) this.rotateGlobal();
+  }
 
+  private writeBrain(line: string, level: LogLevel, brainId: string): void {
     const baseBrainId = brainId.split(":")[0];
-    if (baseBrainId && baseBrainId !== "scheduler" && this.pathManager) {
-      const logger = this.getOrCreateBrainLogger(baseBrainId);
-      logger.write(line, level >= LogLevel.INFO);
-    }
+    if (!baseBrainId || baseBrainId === "scheduler" || !this.pathManager) return;
+    const logger = this.getOrCreateBrainLogger(baseBrainId);
+    logger.write(line, level >= LogLevel.INFO);
   }
 
   private getOrCreateBrainLogger(brainId: string): BrainFileLogger {
@@ -172,6 +280,7 @@ export class Logger {
 
   async close(): Promise<void> {
     this.closed = true;
+    detachConsoleLogger(this);
     await this.flush();
     for (const bl of this.brainLoggers.values()) bl.close();
     this.brainLoggers.clear();

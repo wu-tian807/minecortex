@@ -14,6 +14,7 @@ import type {
 import type { BrainHooksAPI } from "../hooks/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
+import { runWithLogContext } from "../core/logger.js";
 
 interface SubscriptionEntry {
   source: EventSource;
@@ -33,9 +34,11 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
       this.dynamicMap.set(key, source);
       if (this.emitter) {
         try {
-          source.start(this.emitter);
+          runWithLogContext({ brainId: this.logBrainId, turn: 0 }, () => {
+            source.start(this.emitter!);
+          });
         } catch (err) {
-          console.error(`[SubscriptionLoader.dynamic] start failed for "${key}":`, err);
+          console.error(`[SubscriptionLoader.dynamic] start failed for "${key}"`, err);
         }
       }
     },
@@ -75,9 +78,11 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
   onRegister(name: string, entry: SubscriptionEntry): void {
     if (!this.emitter) return;
     try {
-      entry.source.start(this.emitter);
+      runWithLogContext({ brainId: this.logBrainId, turn: 0 }, () => {
+        entry.source.start(this.emitter!);
+      });
     } catch (err) {
-      console.error(`[SubscriptionLoader] subscription_error for "${name}":`, err);
+      console.error(`[SubscriptionLoader] subscription_error for "${name}"`, err);
       this.emitter({
         source: `subscription:${name}`,
         type: "subscription_error",
@@ -112,7 +117,6 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
     };
     watcher.register(/subscriptions\/[^/]+\.ts$/, handler);
     watcher.register(/brains\/[^/]+\/subscriptions\/[^/]+\.ts$/, handler);
-    watcher.register(/brains\/[^/]+\/brain\.json$/, () => {});
   }
 
   private matchesConfiguredDir(path: string): boolean {

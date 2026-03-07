@@ -85,6 +85,7 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
         this.onUnregister(name, existing);
         this.registry.delete(name);
         this.slotPaths.delete(name);
+        console.log(`[SlotLoader] removed: ${name}`);
       }
     } else {
       this.reloadSlot(name, event.path);
@@ -98,6 +99,7 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
     this.slotPaths.set(name, absolutePath);
 
     await this.reload(name, absolutePath, this.loaderCtx);
+    console.log(`[SlotLoader] hot-reloaded: ${name}`);
   }
 
   private matchesConfiguredDir(path: string): boolean {
@@ -112,16 +114,17 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
     });
   }
 
-  invalidateSlot(name: string): void {
+  invalidateSlot(name: string, reason?: string): void {
     const slots = this.registry.get(name);
     if (slots) {
       this.onSlotRemove?.(slots.map((s) => s.id));
       this.registry.delete(name);
+      console.log(reason ? `[SlotLoader] invalidated: ${name} (${reason})` : `[SlotLoader] invalidated: ${name}`);
     }
   }
 
-  invalidateBrainSlot(_event: FSChangeEvent, name: string): void {
-    this.invalidateSlot(name);
+  invalidateBrainSlot(event: FSChangeEvent, name: string): void {
+    this.invalidateSlot(name, event.path);
   }
 
   async load(ctx: LoaderContext): Promise<ContextSlot[]> {

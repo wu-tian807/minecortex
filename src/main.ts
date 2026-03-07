@@ -2,10 +2,12 @@
 
 import { createWriteStream, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { installConsoleBridge } from "./core/logger.js";
 
 // Redirect stderr (logger output) to debug.log — keeps terminal clean for the renderer
 const _debugLog = createWriteStream(join(process.cwd(), "debug.log"), { flags: "a" });
 process.stderr.write = _debugLog.write.bind(_debugLog) as typeof process.stderr.write;
+installConsoleBridge();
 
 import "./llm/gemini2.js";
 import "./llm/gemini3.js";

@@ -1,16 +1,22 @@
 import { readdir, stat } from "node:fs/promises";
 import { join, basename } from "node:path";
 import type { CapabilitySelector, FSWatcherAPI } from "../core/types.js";
+import { runWithLogContext } from "../core/logger.js";
 import type { LoaderContext } from "./types.js";
 
 export abstract class BaseLoader<TFactory, TInstance> {
   protected registry = new Map<string, TInstance>();
+  protected logBrainId = "scheduler";
 
   abstract importFactory(path: string): Promise<TFactory>;
   abstract createInstance(factory: TFactory, ctx: LoaderContext, name: string): TInstance;
   abstract onRegister(name: string, instance: TInstance): void;
   abstract onUnregister(name: string, instance: TInstance): void;
   abstract registerWatchPatterns(watcher: FSWatcherAPI): void;
+
+  setLogContext(brainId = "scheduler"): void {
+    this.logBrainId = brainId;
+  }
 
   async discover(globalDir: string, localDir: string): Promise<Map<string, string>> {
     const paths = new Map<string, string>();
@@ -48,12 +54,14 @@ export abstract class BaseLoader<TFactory, TInstance> {
       const filePath = paths.get(name);
       if (!filePath) continue;
       try {
-        const factory = await this.importFactory(`${filePath}?t=${Date.now()}`);
-        const instance = this.createInstance(factory, ctx, name);
-        this.registry.set(name, instance);
-        this.onRegister(name, instance);
+        await runWithLogContext({ brainId: this.logBrainId, turn: 0 }, async () => {
+          const factory = await this.importFactory(`${filePath}?t=${Date.now()}`);
+          const instance = this.createInstance(factory, ctx, name);
+          this.registry.set(name, instance);
+          this.onRegister(name, instance);
+        });
       } catch (err) {
-        console.error(`[BaseLoader] failed to load "${name}":`, err);
+        console.error(`[BaseLoader] failed to load "${name}"`, err);
       }
     }
     return this.registry;
@@ -71,13 +79,15 @@ export abstract class BaseLoader<TFactory, TInstance> {
     }
 
     try {
-      const factory = await this.importFactory(`${path}?t=${Date.now()}`);
-      const instance = this.createInstance(factory, ctx, name);
-      this.registry.set(name, instance);
-      this.onRegister(name, instance);
-      return instance;
+      return await runWithLogContext({ brainId: this.logBrainId, turn: 0 }, async () => {
+        const factory = await this.importFactory(`${path}?t=${Date.now()}`);
+        const instance = this.createInstance(factory, ctx, name);
+        this.registry.set(name, instance);
+        this.onRegister(name, instance);
+        return instance;
+      });
     } catch (err) {
-      console.error(`[BaseLoader] failed to reload "${name}":`, err);
+      console.error(`[BaseLoader] failed to reload "${name}"`, err);
       return undefined;
     }
   }

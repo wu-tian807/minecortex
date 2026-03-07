@@ -10,7 +10,7 @@ import type {
   BrainBoardAPI,
   PathManagerAPI,
 } from "./types.js";
-import type { Logger } from "./logger.js";
+import { runWithLogContext, type Logger } from "./logger.js";
 import type { EventBus } from "./event-bus.js";
 import { EventQueue } from "./event-queue.js";
 import { BrainHooks } from "../hooks/brain-hooks.js";
@@ -67,8 +67,18 @@ export abstract class BaseBrain implements BrainInterface {
     };
   }
 
-  /** Subclasses implement the main loop */
-  abstract run(signal: AbortSignal): Promise<void>;
+  /** Shared brain entrypoint: installs the root logging context. */
+  async run(signal: AbortSignal): Promise<void> {
+    await this.withLogContext(() => this.runMain(signal));
+  }
+
+  /** Subclasses implement their actual main loop here. */
+  protected abstract runMain(signal: AbortSignal): Promise<void>;
+
+  /** Run code under this brain's implicit console/logging context. */
+  protected withLogContext<T>(fn: () => T, turn = 0): T {
+    return runWithLogContext({ brainId: this.id, turn }, fn);
+  }
 
   /** Set event sources (called by Scheduler after loading subscriptions) */
   setSources(sources: EventSource[]): void {
