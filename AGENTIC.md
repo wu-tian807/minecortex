@@ -1,4 +1,4 @@
-# AGENTIC.md — MineClaw 当前架构说明
+# AGENTIC.md — MineCortex 当前架构说明
 
 > 这份文档描述的是当前代码已经实现的框架结构，而不是历史设计草稿。
 > 关注点是：脑如何运行、能力如何装配、Session 如何持久化、日志与热更新如何工作。
@@ -7,7 +7,7 @@
 
 ## 1. 当前定位
 
-MineClaw 是一个**多脑目录驱动**的 Agent 框架。
+MineCortex 是一个**多脑目录驱动**的 Agent 框架。
 
 - `brains/<id>/` 就是一个完整脑区
 - 脑之间通过 `EventBus` 通信
@@ -520,7 +520,7 @@ Scheduler **不应该**承担：
 ## 13. 当前目录地图
 
 ```text
-mineclaw/
+minecortex/
 ├── AGENTIC.md
 ├── minecortex.json
 ├── directives/

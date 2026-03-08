@@ -1,6 +1,6 @@
 ---
 name: "P0 附属: src/ 模块化目录设计"
-overview: "P0 共享契约层的附属设计文档。重新设计 mineclaw 的 src/ 模块化目录结构和 brain 标准目录结构，将类型按模块分文件夹组织，替代当前'所有类型堆在一个 types.ts'的方案。"
+overview: "P0 共享契约层的附属设计文档。重新设计 minecortex 的 src/ 模块化目录结构和 brain 标准目录结构，将类型按模块分文件夹组织，替代当前'所有类型堆在一个 types.ts'的方案。"
 parent: "P0"
 todos:
   - id: dir-skeleton
@@ -314,7 +314,7 @@ graph TD
 ## 四、项目根目录结构（含 slots/）
 
 ```
-mineclaw/
+minecortex/
 ├── AGENTIC.md
 ├── minecortex.json
 ├── package.json / tsconfig.json

@@ -1,7 +1,7 @@
-# MineClaw 架构深度探讨 — Slot + Tool 原语与 Thought 机制
+# MineCortex 架构深度探讨 — Slot + Tool 原语与 Thought 机制
 
 > 本文档记录了对 agenticOS/openclaw 的子 Agent 模式的调研分析，
-> 以及 MineClaw 如何用自己的架构原生地实现相同能力。
+> 以及 MineCortex 如何用自己的架构原生地实现相同能力。
 > 结论：不需要新原语，现有 BrainBus + Tool 管道已足够。
 
 ---
@@ -41,7 +41,7 @@ lead 感知子 agent 的方式：
 - Announce 系统推送结果，支持直接投递/排队/注入
 - 按深度递减工具权限（leaf agent 禁止再 spawn）
 
-### 1.3 MineClaw — brain
+### 1.3 MineCortex — brain
 
 - 永久目录，Scheduler 启动时自动发现
 - 各自独立 model/soul/tools/wake policy/state
@@ -50,14 +50,14 @@ lead 感知子 agent 的方式：
 
 ### 关键结论
 
-| 特性 | agenticOS teammate | MineClaw brain |
+| 特性 | agenticOS teammate | MineCortex brain |
 |------|-------------------|----------------|
 | 谁触发 | lead 主动调用 | Scheduler + WakePolicy 自主唤醒 |
 | 自治性 | 无，被动响应 | 有，心跳/事件/消息唤醒 |
 | 互相通信 | 通过 lead 中转 | BrainBus 直接对等通信 |
 | 事件订阅 | 不能 | 可以（stdin, minecraft-chat 等） |
 
-**有名 agent 和 brain 同构，引入会冲突。匿名 agent（一次性子任务）有价值，但实现方式应该 MineClaw 原生化。**
+**有名 agent 和 brain 同构，引入会冲突。匿名 agent（一次性子任务）有价值，但实现方式应该 MineCortex 原生化。**
 
 ---
 
@@ -247,7 +247,7 @@ LLM 看到 hint 后自然不再调用工具，tick 正常结束。
 #### active_thoughts 状态追踪（可选）
 
 如果想让脑在 system prompt 中看到"有 thought 在跑"，
-最 MineClaw 的方式是写 state.json：
+最 MineCortex 的方式是写 state.json：
 
 ```typescript
 // spawn 时：往 state.json 写入 activeThoughts
@@ -262,7 +262,7 @@ LLM 看到 hint 后自然不再调用工具，tick 正常结束。
 agenticOS 的 lead 需要非阻塞并发是因为它是**持续对话 loop**——
 lead 总有别的事可做（回答用户、查看代码、编辑文件）。
 
-MineClaw 的脑是 **tick 制**——tick 做完就睡。
+MineCortex 的脑是 **tick 制**——tick 做完就睡。
 脑内部通常是线性决策链：观察→分析→决定→执行。
 真正的并发发生在**脑与脑之间**（多个脑各自独立 tick），
 不需要在一个脑内部做并发。
@@ -272,7 +272,7 @@ LLM 一次可以返回多个 tool call，`Promise.all` 已经并行执行。
 
 ### 3.5 直接激活 vs 消息传递
 
-MineClaw 已有的两条路径自然覆盖 thought 的需求：
+MineCortex 已有的两条路径自然覆盖 thought 的需求：
 
 | 路径 | 机制 | 用于 |
 |------|------|------|
@@ -371,7 +371,7 @@ Slot 化的核心改动：
 
 ## 6. 与 agenticOS / openclaw 的设计差异总结
 
-| 设计决策 | agenticOS | openclaw | MineClaw |
+| 设计决策 | agenticOS | openclaw | MineCortex |
 |---------|-----------|----------|----------|
 | 子 Agent 机制 | AgentRegistry + TaskBoard + MessageBus | SubagentRegistry + Announce | **纯 Tool + BrainBus（零新基础设施）** |
 | 并发模型 | lead 对话 loop 内并发 | gateway 级并发 | **脑间并发（tick 制，脑内线性）** |

@@ -10,7 +10,7 @@ todos:
     content: 确定 brains/ 和 brains/<id>/ 目录规范（含 workspace/ 路径语义、无 _defaults/）
     status: pending
   - id: tool-mapping
-    content: 完成 claude-code 工具到 MineClaw 的完整映射，确认 24 个工具清单（含 lsp/sleep/list_dir，bash→shell）
+    content: 完成 claude-code 工具到 MineCortex 的完整映射，确认 24 个工具清单（含 lsp/sleep/list_dir，bash→shell）
     status: pending
   - id: p11-plan
     content: 创建 P11-core-interaction-tools.plan.md（create_brain, todo_write, compact, focus, subscribe/unsubscribe/list, lsp, sleep）
@@ -33,14 +33,14 @@ todos:
 isProject: false
 ---
 
-# MineClaw 工具集 + 指令 + 灵魂模板 设计
+# MineCortex 工具集 + 指令 + 灵魂模板 设计
 
 ## 一、brains/ 通用框架组织
 
 ### 项目根目录级结构
 
 ```
-mineclaw/
+minecortex/
 ├── brains/                     # 所有脑区实例
 │   ├── <brain-id>/
 │   │   └── ...
@@ -105,9 +105,9 @@ brains/<id>/
 **与 agentic_os 的对比**：
 
 
-| agentic_os Agent 结构           | MineClaw Brain 结构                                   | 说明              |
+| agentic_os Agent 结构           | MineCortex Brain 结构                                   | 说明              |
 | ----------------------------- | --------------------------------------------------- | --------------- |
-| `persona/SOUL.md` (系统级)       | `brains/<id>/soul.md` (per-brain)                   | MineClaw 每脑独立灵魂 |
+| `persona/SOUL.md` (系统级)       | `brains/<id>/soul.md` (per-brain)                   | MineCortex 每脑独立灵魂 |
 | `.agentic_os/sessions/<sid>/` | `brains/<id>/sessions/<sid>/`                       | 会话归脑所有          |
 | `agents/agent_xxx.md` (匿名输出)  | `brains/<id>/agents/thought_xxx.md`                 | 归调用脑所有          |
 | `src/directives/system/` (全局) | `directives/` (全局) + `brains/<id>/directives/` (脑级) | 两层覆盖            |
@@ -129,7 +129,7 @@ brains/<id>/
 ### claude-code 全工具映射
 
 
-| claude-code 工具                 | MineClaw 等价                                                        | 分类   | 所在 Plan |
+| claude-code 工具                 | MineCortex 等价                                                        | 分类   | 所在 Plan |
 | ------------------------------ | ------------------------------------------------------------------ | ---- | ------- |
 | **read_file**                  | `read_file` + brain? 参数                                            | 文件   | P2      |
 | **write_file**                 | `write_file` + brain? 参数                                           | 文件   | P2      |
@@ -256,7 +256,7 @@ target 取值:
 
 ### todo_write 工具
 
-对齐 claude-code 的 TodoWrite，但写入 MineClaw 的 Slot 系统：
+对齐 claude-code 的 TodoWrite，但写入 MineCortex 的 Slot 系统：
 
 ```typescript
 {
@@ -283,7 +283,7 @@ target 取值:
 }
 ```
 
-**与 claude-code 的区别**：MineClaw 的 todo_write 通过 `ctx.slot.register("todos", rendered)` 写入动态 Slot，不需要独立的 TaskBoard 类——Slot 系统本身就是展示层。
+**与 claude-code 的区别**：MineCortex 的 todo_write 通过 `ctx.slot.register("todos", rendered)` 写入动态 Slot，不需要独立的 TaskBoard 类——Slot 系统本身就是展示层。
 
 ### compact 工具
 
@@ -422,13 +422,13 @@ directives/
 
 ### rules.md — 框架认知
 
-对齐 agentic_os 的 `identity.md` + `process-management.md` + `sub-agent-delegation.md` + `team-communication.md`，融合 MineClaw 特有概念：
+对齐 agentic_os 的 `identity.md` + `process-management.md` + `sub-agent-delegation.md` + `team-communication.md`，融合 MineCortex 特有概念：
 
 ```markdown
 # 框架认知
 
 ## 运行环境
-你是 MineClaw 多脑系统中的一个脑区。你运行在事件驱动循环中：
+你是 MineCortex 多脑系统中的一个脑区。你运行在事件驱动循环中：
 waitForEvent → coalesce → drain → process。
 每个 drain 周期你收到一批事件，调用工具处理后进入下一轮等待。
 
@@ -494,7 +494,7 @@ waitForEvent → coalesce → drain → process。
 ### 对比各框架指令覆盖
 
 
-| agentic_os 22 个指令       | MineClaw 映射                       | 说明           |
+| agentic_os 22 个指令       | MineCortex 映射                       | 说明           |
 | ----------------------- | --------------------------------- | ------------ |
 | identity.md             | soul.md (per-brain)               | 身份在灵魂文件中     |
 | doing-tasks.md          | behavior.md §执行纪律                 | 合并           |
@@ -504,7 +504,7 @@ waitForEvent → coalesce → drain → process。
 | tool-permission.md      | 框架层强制（PathManager 权限）             | 不是 directive |
 | task-management.md      | rules.md §工具使用                    | 简化           |
 | error-learning.md       | behavior.md §执行纪律                 | 简化为"先自己排查"   |
-| workspace-files.md      | 不映射（MineClaw 无 workspace file 概念） | -            |
+| workspace-files.md      | 不映射（MineCortex 无 workspace file 概念） | -            |
 | sub-agent-delegation.md | rules.md §多脑协作                    | 合并           |
 | git-safety.md           | behavior.md §安全边界                 | 按需脑级覆盖       |
 | scratchpad.md           | 不映射（无 scratchpad 目录）              | -            |
@@ -520,7 +520,7 @@ waitForEvent → coalesce → drain → process。
 | context-compaction.md   | 框架自动（三层压缩）                        | 不是 directive |
 
 
-**MineClaw 用 2 个全局 directive 覆盖 agentic_os 22 个的等价功能**，因为：
+**MineCortex 用 2 个全局 directive 覆盖 agentic_os 22 个的等价功能**，因为：
 
 - 身份在 soul.md（per-brain）
 - 权限在框架层强制
@@ -538,7 +538,7 @@ waitForEvent → coalesce → drain → process。
 ```markdown
 # ${BRAIN_ID}
 
-你是 MineClaw 多脑系统中的 ${BRAIN_ID} 脑区。
+你是 MineCortex 多脑系统中的 ${BRAIN_ID} 脑区。
 
 ## 职责
 - (由 create_brain 时填充，或用户后续编辑)
@@ -564,7 +564,7 @@ waitForEvent → coalesce → drain → process。
 ```markdown
 # explorer
 
-你是 MineClaw 多脑系统中的 explorer 脑区。
+你是 MineCortex 多脑系统中的 explorer 脑区。
 
 ## 职责
 - (请编辑此处，定义这个脑区的核心职责)
@@ -686,23 +686,23 @@ P12 Web:        web_search, web_fetch, browser(后期)                  (3)
 框架内置:        spawn_thought (P2/roadmap §2)                        (1)
 ```
 
-**共 23 个工具**（ask_user 由 send_message 承担，不单独实现），覆盖 claude-code 工具 + Cursor list_dir 中适用于 MineClaw 的全部等价能力。
+**共 23 个工具**（ask_user 由 send_message 承担，不单独实现），覆盖 claude-code 工具 + Cursor list_dir 中适用于 MineCortex 的全部等价能力。
 
 ---
 
 ## 六、Cursor/Claude-Code 行为指令对照表
 
-将 cursor 和 claude-code 的关键行为约束逐一映射到 MineClaw 的实现位置：
+将 cursor 和 claude-code 的关键行为约束逐一映射到 MineCortex 的实现位置：
 
 
-| Cursor/Claude 指令                 | MineClaw 映射                   | 位置                  |
+| Cursor/Claude 指令                 | MineCortex 映射                   | 位置                  |
 | -------------------------------- | ----------------------------- | ------------------- |
 | "Tone: concise, direct"          | behavior.md §执行纪律             | directive           |
 | "Don't mention tool names"       | behavior.md (按需)              | directive           |
 | "Follow existing conventions"    | behavior.md §代码风格             | directive           |
 | "Don't add obvious comments"     | behavior.md §代码风格             | directive           |
 | "Read before modifying"          | behavior.md §工具使用纪律           | directive           |
-| "Use edit tools not code blocks" | 不映射（MineClaw 不是 IDE）          | -                   |
+| "Use edit tools not code blocks" | 不映射（MineCortex 不是 IDE）          | -                   |
 | "Proactiveness balance"          | behavior.md §执行纪律 "做被要求的事"    | directive           |
 | "Fix linter errors"              | behavior.md (按需脑级)            | 脑级 directive        |
 | "Security boundary"              | behavior.md §安全边界             | directive           |

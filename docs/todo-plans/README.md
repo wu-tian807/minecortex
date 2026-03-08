@@ -1,4 +1,4 @@
-# MineClaw 并行实施计划索引
+# MineCortex 并行实施计划索引
 
 > 共 13 个 Plan (P0-P12)，分 4 个阶段执行。
 > P0 是前置契约层（附属设计文档 P0-directory-design），P1-P6+P12 可完全并行，P7-P8 等待 P3，P9-P10-P11 等待多项前置完成。

@@ -1,4 +1,4 @@
-# Roadmap: Embody — MineClaw 接入 Minecraft 实施记录
+# Roadmap: Embody — MineCortex 接入 Minecraft 实施记录
 
 > 基于 [BRIDGE2MC.md](../BRIDGE2MC.md) 的实施路径，跟踪每个阶段的完成状态。
 
@@ -13,7 +13,7 @@
 - [x] 验证 spawn、位置、血量、游戏模式、维度等基础数据获取
 - [x] 验证聊天收发（bot.chat + bot.on('chat')）
 - [x] 验证在线玩家列表、附近实体、背包读取
-- [ ] 集成到 MineClaw 项目（`src/mc/bot.ts`）
+- [ ] 集成到 MineCortex 项目（`src/mc/bot.ts`）
 - [ ] 编写感知层（`src/mc/perception.ts`），接入 Slot/Subscription/Query 三种模式
 - [ ] 验证 physicsTick 行为树 tick 可行性
 - [ ] 验证进阶交互：移动、挖方块、放方块、打开箱子
@@ -22,7 +22,7 @@
 ```
 连接地址: 172.31.176.1:25565 (WSL2 → Windows)
 MC 版本: 1.21.1
-用户名: MineClaw
+用户名: MineCortex
 位置: x=2.5, y=-60.0, z=6.5
 游戏模式: creative → survival（由玩家切换）
 在线玩家: wu_tian_

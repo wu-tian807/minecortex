@@ -36,7 +36,7 @@ todos:
 
 ## 目标
 
-补全 MineClaw 的基础工具集（文件操作 + bash + 脑管理），
+补全 MineCortex 的基础工具集（文件操作 + bash + 脑管理），
 实现**通用路径管理器 (PathManager)**，以及 **bash 工具的 Terminal 实例管理**。
 
 ## 可并行
@@ -183,7 +183,7 @@ interface ExecResult {
 ---
 id: t_1709123456_a3f2
 pid: 12345
-cwd: /home/aw/Desktop/gamer/mineclaw
+cwd: /home/aw/Desktop/gamer/minecortex
 command: python train.py
 brain: responder
 started_at: 2025-02-28T20:17:00.000Z

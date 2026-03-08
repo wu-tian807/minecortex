@@ -1,15 +1,15 @@
-# MineClaw 路线图
+# MineCortex 路线图
 
 > 基于当前已完成的 agentic_os 风格 Agent Loop 架构，后续待做事项。
 >
-> 核心认知：MineClaw Agent 的本质操作和 agentic_os 是同构的——都在管理本地文件系统。
+> 核心认知：MineCortex Agent 的本质操作和 agentic_os 是同构的——都在管理本地文件系统。
 > Agent 不是"直接玩游戏"，而是通过读写 brains/、skills/、src/ 来驱动游戏。
-> 因此 agentic_os 的大部分工具能力（文件操作、Shell、搜索）对 MineClaw 同样是刚需，
+> 因此 agentic_os 的大部分工具能力（文件操作、Shell、搜索）对 MineCortex 同样是刚需，
 > 只是驱动范式从"用户对话驱动"变成了"事件驱动"。
 >
-> agentic_os 的很多独立机制在 MineClaw 的多脑范式下有更统一的抽象：
+> agentic_os 的很多独立机制在 MineCortex 的多脑范式下有更统一的抽象：
 >
-> | agentic_os 操作 | MineClaw 统一抽象 |
+> | agentic_os 操作 | MineCortex 统一抽象 |
 > |----------------|-----------------|
 > | `switch_persona` | 切换 stdin 订阅到另一个脑（每个脑 = 一个 persona） |
 > | `spawn_agent`（有名） | 创建 `brains/<id>/` 目录 + `manage_brain` 启动 |
@@ -22,7 +22,7 @@
 
 ## 0. 文件系统监听 (fs-watcher)
 
-MineClaw 的核心哲学是"目录即大脑"——所有状态都在文件系统中。
+MineCortex 的核心哲学是"目录即大脑"——所有状态都在文件系统中。
 evolve 模式下脑可以修改自身（soul.md、brain.json、skills/、src/），
 文件操作工具也会频繁读写 brains/ 目录。这些变更必须**实时生效**，不能靠重启。
 
@@ -732,20 +732,20 @@ manage_brain({ action: "list" })
 
 ## 8. 通用工具补全
 
-MineClaw Agent 的本质操作是管理本地文件系统（读写 brains/、skills/、src/ 来驱动游戏）。
+MineCortex Agent 的本质操作是管理本地文件系统（读写 brains/、skills/、src/ 来驱动游戏）。
 当前只有 1 个工具（send_message），需要补全基础工具集。
 （`read_state` 已随 state.json 一同废弃，见 §7。）
 
 ### 认知基础
 
-agentic_os 有 30+ 工具，但 MineClaw 的多脑范式提供了更高的抽象层次：
+agentic_os 有 30+ 工具，但 MineCortex 的多脑范式提供了更高的抽象层次：
 - agentic_os 的 `spawn_agent` + `agent_status` + `agent_kill` + `switch_persona` + `switch_model`
-  → MineClaw 用一个 `manage_brain` 统一
+  → MineCortex 用一个 `manage_brain` 统一
 - agentic_os 的 `switch_session` → **不映射** — Session 自动维护（三层压缩 + compact）
 - agentic_os 的 `spawn_agent`（匿名模式）→ `spawn_thought`（§2）
 - agentic_os 的订阅/触发管理 → `manage_subscription`（§3）
 
-因此 MineClaw 用 ~16 个工具即可覆盖 agentic_os 30+ 工具的等价能力。
+因此 MineCortex 用 ~16 个工具即可覆盖 agentic_os 30+ 工具的等价能力。
 
 ### 需要补全的工具
 
@@ -763,7 +763,7 @@ agentic_os 有 30+ 工具，但 MineClaw 的多脑范式提供了更高的抽象
 ##### Brain-aware 路径解析
 
 **设计灵感**：参考 agent_fcos 的 Workspace Zone 模式（`[workspace:]zone/path`），
-MineClaw 的文件工具原生支持 **brain 上下文路径**，让 Agent 操作 brain 文件时
+MineCortex 的文件工具原生支持 **brain 上下文路径**，让 Agent 操作 brain 文件时
 不需要拼写完整路径。
 
 **路径解析规则**：
@@ -810,7 +810,7 @@ function resolvePath(input: BrainAwarePath, ctx: ToolContext): string {
 
 **对比 agent_fcos 的 Zone 设计**：
 
-| agent_fcos | MineClaw |
+| agent_fcos | MineCortex |
 |-----------|----------|
 | `[workspace:]zone/path` | `path` + `brain?` 参数 |
 | Zone（assets/data/output/...）按职责分区 | Brain 目录本身就是天然分区（soul.md/brain.json/skills/memory/） |
@@ -818,7 +818,7 @@ function resolvePath(input: BrainAwarePath, ctx: ToolContext): string {
 | 默认当前 workspace | 默认调用者自身 brain |
 | Clone 时 workspace 上下文复制 | spawn_thought 时 selfId 继承 |
 
-MineClaw 不需要 Zone 层——brain 目录结构本身已经是分区。
+MineCortex 不需要 Zone 层——brain 目录结构本身已经是分区。
 `brain` 参数 = agent_fcos 的 workspace 前缀，提供跨脑访问能力。
 
 **权限控制**：
@@ -835,7 +835,7 @@ evolve 模式：
   - skills/ / src/：读写（可创建新 skill、修改代码）
 ```
 
-实现参考：可直接复用 agentic_os 的 `src/tools/` 实现，适配 MineClaw 的 ToolDefinition 接口。
+实现参考：可直接复用 agentic_os 的 `src/tools/` 实现，适配 MineCortex 的 ToolDefinition 接口。
 权限控制：结合 AGENTIC.md §7 的权限矩阵（默认模式 vs evolve 模式）。
 
 #### 8.2 脑管理（1 个）— 统一抽象

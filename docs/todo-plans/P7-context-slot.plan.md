@@ -205,7 +205,7 @@ Focus 变更时自动 release 旧 slot + register 新 slot。
 
 ```markdown
 # 身份
-你是 MineClaw 的 Listener 脑区...
+你是 MineCortex 的 Listener 脑区...
 
 # 职责
 - 监听玩家消息
