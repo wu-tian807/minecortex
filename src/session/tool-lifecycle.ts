@@ -1,3 +1,4 @@
+import type { ContentPart } from "../core/types.js";
 import type { LLMMessage, LLMToolCall } from "../llm/types.js";
 
 export interface ToolLifecycleSink {
@@ -26,15 +27,25 @@ export function createPendingToolMessages(toolCalls: LLMToolCall[]): LLMMessage[
 }
 
 export function createToolResultMessage(toolCall: LLMToolCall, result: unknown): LLMMessage {
-  const resultStr = typeof result === "string" ? result : JSON.stringify(result);
+  // Preserve ContentPart[] (multimodal tool output) as-is so the LLM adapter
+  // can format image/audio/video blocks correctly.  Plain strings pass through
+  // directly; everything else is JSON-serialised to a string.
+  const content: string | ContentPart[] =
+    isContentPartArray(result) ? result
+    : typeof result === "string" ? result
+    : JSON.stringify(result);
   return {
     role: "tool",
-    content: resultStr,
+    content,
     toolCallId: toolCall.id,
     toolName: toolCall.name,
     toolStatus: isToolErrorResult(result) ? "failed" : "completed",
     ts: Date.now(),
   };
+}
+
+function isContentPartArray(v: unknown): v is ContentPart[] {
+  return Array.isArray(v) && v.length > 0 && typeof (v as any[])[0]?.type === "string";
 }
 
 export function createSyntheticToolResult(

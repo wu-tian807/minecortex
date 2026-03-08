@@ -52,6 +52,7 @@ export interface AgentLoopOpts {
   onAssistantMessage?: (msg: LLMMessage) => void;
   hooks?: import("../hooks/brain-hooks.js").BrainHooks;
   keepToolResults?: number;
+  keepMedias?: number;
   showThinking?: boolean;
   trackBackgroundTask?: (p: Promise<unknown>) => void;
   shouldYieldInnerLoop?: () => boolean;
@@ -64,7 +65,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       modelSpec, maxIterations, signal, brainBoard, slotRegistry,
       pathManager, workspace, eventBus, logger,
       sessionManager, turn = 0, onAssistantMessage, hooks,
-      keepToolResults = 8, showThinking = false,
+      keepToolResults = 8, keepMedias = 2, showThinking = false,
       shouldYieldInnerLoop,
     } = opts;
 
@@ -90,7 +91,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       if (signal.aborted || (maxIterations != -1 && iterations >= maxIterations) ) break;
       iterations++;
 
-      const sessionHistory = await sessionManager.loadPromptHistory({ keepToolResults });
+      const sessionHistory = await sessionManager.loadPromptHistory({ keepToolResults, keepMedias });
 
       const boardEntries = brainBoard.getAll(brainId);
       const vars: Record<string, string> = {};
@@ -98,7 +99,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
         vars[k] = typeof v === "string" ? v : JSON.stringify(v);
       }
       vars.BRAIN_ID = brainId;
-      vars.WORKSPACE = pathManager.resolve({ path: "." }, brainId);
+      vars.BRAIN_DIR = pathManager.resolve({ path: "." }, brainId);
       const tz = (brainBoard.get(brainId, "timezone") as string) ?? "Asia/Shanghai";
       vars.CURRENT_TIME = new Date().toLocaleString("zh-CN", { timeZone: tz });
       const messages = contextEngine.assemblePrompt(
@@ -373,6 +374,7 @@ export class ConsciousBrain extends BaseBrain {
         turn: this.currentTurn,
         hooks: this.hooks,
         keepToolResults: this.brainJson.session?.keepToolResults ?? BRAIN_DEFAULTS.session.keepToolResults,
+        keepMedias: this.brainJson.session?.keepMedias ?? BRAIN_DEFAULTS.session.keepMedias,
         showThinking: this.brainJson.models?.showThinking ?? true,
         trackBackgroundTask: (p) => {
           this.pendingTasks.add(p);

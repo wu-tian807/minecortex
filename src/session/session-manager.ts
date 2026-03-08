@@ -42,13 +42,15 @@ export class SessionManager implements ToolLifecycleSink {
     }
 
     const repaired = repairToolPairing(messages);
-    const changed = parseErrorLine != null || JSON.stringify(repaired) !== JSON.stringify(messages);
-    if (changed) {
-      await this.store.writeRecoverySnapshot(
-        sessionId,
-        raw,
-        parseErrorLine != null ? `parse-error-line-${parseErrorLine}` : "repair",
-      );
+    const needsWrite = parseErrorLine != null || JSON.stringify(repaired) !== JSON.stringify(messages);
+    if (needsWrite) {
+      // Back up only for real anomalies (parse error or synthetic results injected
+      // for dangling tool calls); routine `pending` cleanup doesn't need a backup.
+      const isCritical = parseErrorLine != null || repaired.some((m) => m.toolStatus === "synthetic");
+      if (isCritical) {
+        const label = parseErrorLine != null ? `parse-error-line-${parseErrorLine}` : "repair";
+        await this.store.writeRecoverySnapshot(sessionId, raw, label);
+      }
       await this.store.replaceMessages(sessionId, repaired);
       return repaired;
     }
