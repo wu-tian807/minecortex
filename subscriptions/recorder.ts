@@ -265,8 +265,15 @@ export default function create(ctx: SourceContext): EventSource {
         ctx.brain.hooks.on(HookEvent.EventReceived, ({ events }) => {
           for (const e of events) {
             if (e.type === "user_input") {
-              const text = (e.payload as { text?: string })?.text ?? "";
-              recorder.recordUserInput(text);
+              const p = e.payload as { content?: string; text?: string } | undefined;
+              const text = p?.content ?? p?.text ?? "";
+              // CLI user input (source="user") is written to events.jsonl directly by the renderer
+              // with full segment data (paste blocks). Here we only write qa.md.
+              if (e.source === "user") {
+                recorder.writeQA(`## User\n${text}\n\n`).catch(() => {});
+              } else {
+                recorder.recordUserInput(text); // non-CLI source: write both qa.md + events.jsonl
+              }
             } else if (e.type === "message") {
               const payload = e.payload as { content?: string; summary?: string } | undefined;
               const text = payload?.content ?? JSON.stringify(e.payload);

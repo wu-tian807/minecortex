@@ -2,11 +2,11 @@
 
 import * as readline from "node:readline";
 import { watch, readFileSync, existsSync } from "node:fs";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { C, cursorToCol0, cursorToCol, cursorUp, cursorDown, clearLine, clearToEnd } from "./ansi.js";
-import { type RendererEvent, formatEvent } from "./events.js";
+import { type RendererEvent, type InputSegment, formatEvent, parseRendererEvent } from "./events.js";
 import { listBrainIds, listSessionIds } from "./fs-helpers.js";
 import { SelectOverlay } from "./select-overlay.js";
 import { StatusBar } from "./status-bar.js";
@@ -34,6 +34,7 @@ const PROMPT             = `${C.cyan}›${C.reset} `;
 const PROMPT_VISIBLE_LEN = 2; // "› "
 const THINKING_PREVIEW_MAX = 120;
 
+
 // ─── CLIRenderer ───
 
 export class CLIRenderer {
@@ -53,9 +54,41 @@ export class CLIRenderer {
 
   // TTY / raw mode
   private isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  private inputBuffer = "";
+  /**
+   * Input is stored as an ordered list of segments so that multiple paste
+   * batches remain independent atomic units interleaved with typed text.
+   * Each "paste" segment is deleted as a whole on a single Backspace.
+   */
+  private segments: InputSegment[] = [];
   private inputHistory: string[] = [];
   private historyIdx  = -1;
+
+  private get inputContent(): string {
+    return this.segments.map((s) => s.content).join("");
+  }
+  private inputAppendChar(ch: string): void {
+    const last = this.segments.at(-1);
+    if (last?.type === "text") { last.content += ch; }
+    else                        { this.segments.push({ type: "text", content: ch }); }
+  }
+  private inputAppendPaste(text: string): void {
+    this.segments.push({ type: "paste", content: text });
+  }
+  private inputBackspace(): void {
+    const last = this.segments.at(-1);
+    if (!last) return;
+    if (last.type === "paste") {
+      this.segments.pop();                                   // whole block deleted at once
+    } else if (last.content.length > 1) {
+      last.content = last.content.slice(0, -1);
+    } else {
+      this.segments.pop();
+    }
+  }
+  private inputClear(): void { this.segments = []; }
+  private inputSet(text: string): void {
+    this.segments = text ? [{ type: "text", content: text }] : [];
+  }
 
   // Overlay state
   private overlay: SelectOverlay | null = null;
@@ -66,9 +99,8 @@ export class CLIRenderer {
   // Status bar component (brain/session label + context ring + spinner)
   private statusBar = new StatusBar();
   private thinkingPreview = "";
-  private textPreview = "";
-  private streamedTextThisTurn = false;
-  private streamedThinkingThisTurn = false;
+  private streamingActive = false;
+  private streamingNeedsNewline = false;
 
   constructor(rootDir: string, callbacks: RendererCallbacks) {
     this.rootDir    = rootDir;
@@ -109,67 +141,50 @@ export class CLIRenderer {
   // redrawStatusBar() only redraws line N-1 (for spinner updates).
 
   private renderThinkingPreview(): string {
-    const activePreview = this.thinkingPreview
-      ? { icon: "💭", text: this.thinkingPreview }
-      : this.textPreview
-        ? { icon: "…", text: this.textPreview }
-        : null;
-    if (!activePreview) return "";
-    const normalized = activePreview.text.replace(/\s+/g, " ").trim();
+    if (!this.thinkingPreview) return "";
+    const normalized = this.thinkingPreview.replace(/\s+/g, " ").trim();
     if (!normalized) return "";
+    // Sliding window: show only the tail so the line doesn't grow unboundedly
     const clipped = normalized.length > THINKING_PREVIEW_MAX
       ? `...${normalized.slice(-(THINKING_PREVIEW_MAX - 3))}`
       : normalized;
-    return `${C.dim}${activePreview.icon} ${clipped}${C.reset}`;
-  }
-
-  private writeThinkingPreview(): void {
-    process.stdout.write(this.renderThinkingPreview());
-  }
-
-  private writeStatusBar(): void {
-    process.stdout.write(this.statusBar.render());
+    return `${C.dim}💭 ${clipped}${C.reset}`;
   }
 
   private drawFooter(): void {
     if (!this.isTTY) return;
-    clearLine();
-    cursorToCol0();
-    this.writeThinkingPreview();
-    process.stdout.write("\n");
-    this.writeStatusBar();
-    process.stdout.write("\n");
-    clearLine();
-    cursorToCol0();
-    process.stdout.write(PROMPT + this.inputBuffer);
+    clearLine(); cursorToCol0();
+    process.stdout.write(this.renderThinkingPreview() + "\n");
+    process.stdout.write(this.statusBar.render() + "\n");
+    clearLine(); cursorToCol0();
+    process.stdout.write(PROMPT + this.inputContent);
   }
 
-  /** Redraw only the status bar line without disturbing the input line. */
-  private redrawStatusBar(): void {
-    if (!this.isTTY || this.overlay) return;
-    cursorToCol0();
-    cursorUp(1);
-    clearLine();
-    this.writeStatusBar();
-    cursorDown(1);
-    cursorToCol(PROMPT_VISIBLE_LEN + this.inputBuffer.length);
+  /** Redraw a single footer row (rowsUp above the input line) without disturbing the rest. */
+  private redrawFooterRow(rowsUp: number, content: string): void {
+    if (!this.isTTY || this.overlay || this.streamingActive) return;
+    cursorToCol0(); cursorUp(rowsUp); clearLine();
+    process.stdout.write(content);
+    cursorDown(rowsUp); cursorToCol(PROMPT_VISIBLE_LEN + this.inputContent.length);
   }
 
-  private redrawThinkingPreview(): void {
-    if (!this.isTTY || this.overlay) return;
-    cursorToCol0();
-    cursorUp(2);
-    clearLine();
-    this.writeThinkingPreview();
-    cursorDown(2);
-    cursorToCol(PROMPT_VISIBLE_LEN + this.inputBuffer.length);
-  }
+  private redrawStatusBar(): void    { this.redrawFooterRow(1, this.statusBar.render()); }
+  private redrawThinkingPreview(): void { this.redrawFooterRow(2, this.renderThinkingPreview()); }
 
   private redrawInputLine(): void {
     if (!this.isTTY) return;
     clearLine();
     cursorToCol0();
-    process.stdout.write(PROMPT + this.inputBuffer);
+    let display = "";
+    for (const seg of this.segments) {
+      if (seg.type === "paste") {
+        const lines = seg.content.split("\n").length;
+        display += `\x1b[44;97m[已粘贴 ${lines} 行]\x1b[0m`; // blue bg, white text
+      } else {
+        display += seg.content;
+      }
+    }
+    process.stdout.write(PROMPT + display);
   }
 
   /** Clear the 3-line footer area (cursor lands at start of thinking line). */
@@ -210,39 +225,43 @@ export class CLIRenderer {
   }
 
   private appendTextChunk(text: string): void {
-    if (!text) return;
-    this.streamedTextThisTurn = true;
-    this.textPreview += text;
-    if (this.isTTY) {
-      this.redrawThinkingPreview();
+    if (!text || !this.isTTY || this.overlay) return;
+    if (!this.streamingActive) {
+      this.streamingActive = true;
+      this.clearFooter();
+      process.stdout.write(`${C.cyan}[${this.activeBrain}]${C.reset} `);
     }
+    this.streamingNeedsNewline = !text.endsWith("\n");
+    process.stdout.write(text);
   }
 
   private appendThinkingChunk(text: string): void {
     if (!text) return;
-    this.streamedThinkingThisTurn = true;
     this.thinkingPreview += text;
-    if (this.isTTY) {
-      this.redrawThinkingPreview();
-    }
+    this.redrawThinkingPreview();
   }
 
   private resetStreamingState(): void {
     this.thinkingPreview = "";
-    this.textPreview = "";
-    this.streamedTextThisTurn = false;
-    this.streamedThinkingThisTurn = false;
+    this.streamingActive = false;
+    this.streamingNeedsNewline = false;
   }
 
-  private finalizeLiveAssistant(): void {
-    const hadPreview = Boolean(this.thinkingPreview || this.textPreview);
-    this.thinkingPreview = "";
-    this.textPreview = "";
-    this.streamedTextThisTurn = false;
-    this.streamedThinkingThisTurn = false;
-    if (hadPreview && this.isTTY) {
-      this.redrawThinkingPreview();
+  /** Finalize live streaming state and restore the footer.
+   *  Returns true if text was already streamed inline (so the caller can skip reprinting). */
+  private finalizeLiveAssistant(): boolean {
+    const hadStreaming = this.streamingActive;
+    if (this.isTTY) {
+      if (hadStreaming) {
+        if (this.streamingNeedsNewline) process.stdout.write("\n");
+        this.drawFooter();
+      } else if (this.thinkingPreview) {
+        this.clearFooter();
+        this.drawFooter();
+      }
     }
+    this.resetStreamingState();
+    return hadStreaming;
   }
 
   private printEvent(ev: RendererEvent, isLive = false): void {
@@ -257,7 +276,7 @@ export class CLIRenderer {
     }
     if (ev.k === "turn_end") {
       if (isLive) {
-        this.finalizeLiveAssistant();
+        this.finalizeLiveAssistant(); // cleans up any leftover streaming / thinking state
         this.setThinking(false);
       }
       return;
@@ -269,16 +288,13 @@ export class CLIRenderer {
       return;
     }
     if (ev.k === "assistant" && isLive) {
-      const shouldPrintText = Boolean(ev.text?.trim());
-      const shouldPrintThinking = Boolean(ev.thinking?.trim());
-      this.finalizeLiveAssistant();
-      if (!shouldPrintText && !shouldPrintThinking) return;
-      const finalText = formatEvent({
-        ...ev,
-        text: shouldPrintText ? ev.text : undefined,
-        thinking: shouldPrintThinking ? ev.thinking : undefined,
-      });
-      if (finalText) this.print(finalText);
+      const alreadyStreamed = this.finalizeLiveAssistant();
+      const printText    = !alreadyStreamed && Boolean(ev.text?.trim());
+      const printThinking = Boolean(ev.thinking?.trim());
+      if (printText || printThinking) {
+        const out = formatEvent({ ...ev, text: printText ? ev.text : undefined, thinking: printThinking ? ev.thinking : undefined });
+        if (out) this.print(out);
+      }
       return;
     }
     const text = formatEvent(ev);
@@ -290,7 +306,7 @@ export class CLIRenderer {
   private openOverlay(ov: SelectOverlay, onConfirm: (idx: number) => Promise<void>): void {
     this.overlay          = ov;
     this.overlayOnConfirm = onConfirm;
-    this.inputBuffer = "";
+    this.inputClear();
     // Cursor is on the input line row; redraw the footer so the overlay has a clean anchor.
     this.clearFooter();
     this.drawFooter();
@@ -380,8 +396,8 @@ export class CLIRenderer {
     if (existsSync(path)) {
       const raw = await readFile(path, "utf-8");
       for (const line of raw.split("\n")) {
-        if (!line.trim()) continue;
-        try { this.printEvent(JSON.parse(line) as RendererEvent); } catch { /* skip */ }
+        const ev = parseRendererEvent(line);
+        if (ev) this.printEvent(ev);
       }
       this.tailOffset = Buffer.byteLength(raw, "utf-8");
     } else {
@@ -439,7 +455,9 @@ export class CLIRenderer {
       this.tailOffset = bytes;
       for (const line of slice.split("\n")) {
         if (!line.trim()) continue;
-        try { this.printEvent(JSON.parse(line) as RendererEvent, true); } catch { /* skip */ }
+        const ev = parseRendererEvent(line);
+        // user_input is printed immediately on handleLine; skip here to avoid duplicates
+        if (ev && ev.k !== "user_input") this.printEvent(ev, true);
       }
     } catch { /* file not ready */ }
   }
@@ -480,6 +498,19 @@ export class CLIRenderer {
     this.drawFooter();   // draw status bar + prompt
 
     process.stdin.on("data", (chunk: string) => {
+      // ── Paste detection ──────────────────────────────────────────────────────
+      // A paste arrives as one large data chunk containing newlines.
+      // A real Enter key press is just "\r" or "\n" (length 1).
+      // An escape sequence starts with \x1b — not a paste.
+      const hasNL = chunk.includes("\n") || chunk.includes("\r");
+      if (chunk.length > 1 && hasNL && chunk.charCodeAt(0) !== 27) {
+        const normalized = chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n$/, "");
+        this.inputAppendPaste(normalized);
+        this.redrawInputLine();
+        return;
+      }
+      // ─────────────────────────────────────────────────────────────────────────
+
       let i = 0;
       while (i < chunk.length) {
         const code = chunk.charCodeAt(i);
@@ -519,14 +550,14 @@ export class CLIRenderer {
     }
     // History navigation
     if (seq === "\x1b[A") {
-      this.historyIdx  = Math.min(this.historyIdx + 1, this.inputHistory.length - 1);
-      this.inputBuffer = this.inputHistory[this.inputHistory.length - 1 - this.historyIdx] ?? "";
+      this.historyIdx = Math.min(this.historyIdx + 1, this.inputHistory.length - 1);
+      this.inputSet(this.inputHistory[this.inputHistory.length - 1 - this.historyIdx] ?? "");
       this.redrawInputLine();
     } else if (seq === "\x1b[B") {
-      this.historyIdx  = Math.max(this.historyIdx - 1, -1);
-      this.inputBuffer = this.historyIdx < 0
+      this.historyIdx = Math.max(this.historyIdx - 1, -1);
+      this.inputSet(this.historyIdx < 0
         ? ""
-        : (this.inputHistory[this.inputHistory.length - 1 - this.historyIdx] ?? "");
+        : (this.inputHistory[this.inputHistory.length - 1 - this.historyIdx] ?? ""));
       this.redrawInputLine();
     }
   }
@@ -543,27 +574,26 @@ export class CLIRenderer {
 
     // ── Normal input ──
     if (code === 3)   { process.kill(process.pid, "SIGINT"); return; }
-    if (code === 4)   { if (!this.inputBuffer) process.kill(process.pid, "SIGINT"); return; }
-    if (code === 21)  { this.inputBuffer = ""; this.redrawInputLine(); return; } // Ctrl+U
+    if (code === 4)   { if (!this.inputContent) process.kill(process.pid, "SIGINT"); return; }
+    if (code === 21)  { this.inputClear(); this.redrawInputLine(); return; } // Ctrl+U
 
     if (code === 127 || code === 8) { // Backspace
-      if (this.inputBuffer.length > 0) {
-        this.inputBuffer = this.inputBuffer.slice(0, -1);
-        this.redrawInputLine();
-      }
+      this.inputBackspace();
+      this.redrawInputLine();
       return;
     }
 
     if (code === 13 || code === 10) { // Enter
-      const text = this.inputBuffer.trim();
-      this.inputBuffer = "";
-      this.historyIdx  = -1;
+      const text     = this.inputContent.trim();
+      const segments = this.segments.map(s => ({ ...s })); // snapshot before clear
+      this.inputClear();
+      this.historyIdx = -1;
       this.clearFooter();
       if (text) {
         if (this.inputHistory[this.inputHistory.length - 1] !== text) {
           this.inputHistory.push(text);
         }
-        this.handleLine(text).then(() => { if (!this.overlay) this.drawFooter(); });
+        this.handleLine(text, segments).then(() => { if (!this.overlay) this.drawFooter(); });
       } else {
         this.drawFooter();
       }
@@ -571,7 +601,7 @@ export class CLIRenderer {
     }
 
     if (code >= 32) { // Printable
-      this.inputBuffer += ch;
+      this.inputAppendChar(ch);
       process.stdout.write(ch);  // echo inline
     }
   }
@@ -643,7 +673,7 @@ export class CLIRenderer {
 
   // ─── Command router ───
 
-  private async handleLine(trimmed: string): Promise<void> {
+  private async handleLine(trimmed: string, segments: InputSegment[] = []): Promise<void> {
     if (!trimmed) return;
 
     if (trimmed === "/brains")               { await this.showBrainsOverlay();   return; }
@@ -656,7 +686,22 @@ export class CLIRenderer {
       return;
     }
 
-    if (this.activeBrain) this.callbacks.onUserInput(this.activeBrain, trimmed);
+    if (this.activeBrain) {
+      // Render immediately (with paste blocks in blue) — no need to wait for events.jsonl round-trip.
+      // Use process.stdout.write directly: the Enter handler already called clearFooter() and will
+      // call drawFooter() in the .then() — using this.print() would cause a double footer draw.
+      const ev: RendererEvent = { k: "user_input", text: trimmed, segments, ts: Date.now() };
+      const rendered = formatEvent(ev);
+      if (rendered) process.stdout.write(rendered);
+
+      // Write directly to events.jsonl so replay can restore the blue paste blocks.
+      // The recorder skips events.jsonl for CLI user_input (source="user") to avoid duplicates.
+      const evPath = this.eventsPath();
+      appendFile(evPath, JSON.stringify(ev) + "\n", "utf-8").catch(() => {});
+      this.tailOffset += Buffer.byteLength(JSON.stringify(ev) + "\n", "utf-8");
+
+      this.callbacks.onUserInput(this.activeBrain, trimmed);
+    }
   }
 
   private clearScreen(): void {

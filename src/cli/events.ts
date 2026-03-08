@@ -4,8 +4,13 @@ import { C } from "./ansi.js";
 
 // ─── Event shapes stored in events.jsonl ───
 
+export interface InputSegment {
+  type: "text" | "paste";
+  content: string;
+}
+
 export type RendererEvent =
-  | { k: "user_input";   text: string; ts: number }
+  | { k: "user_input"; text: string; segments?: InputSegment[]; ts: number }
   | { k: "brain_message"; source: string; text: string; ts: number }
   | { k: "cli_message";  source: string; text: string; ts: number }
   | { k: "assistant_chunk"; brain?: string; kind: "text" | "thinking"; text: string; ts: number }
@@ -45,12 +50,33 @@ function stripThinking(text: string): string {
   return text.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
 }
 
+// ─── Parse a JSONL line into a RendererEvent (null = invalid) ───
+
+export function parseRendererEvent(line: string): RendererEvent | null {
+  try { return JSON.parse(line) as RendererEvent; }
+  catch { return null; }
+}
+
 // ─── Render a single event to a printable string (null = skip) ───
 
 export function formatEvent(ev: RendererEvent): string | null {
   switch (ev.k) {
-    case "user_input":
-      return `${C.cyan}> ${ev.text}${C.reset}\n`;
+    case "user_input": {
+      let display = "";
+      if (ev.segments?.length) {
+        for (const seg of ev.segments) {
+          if (seg.type === "paste") {
+            const lines = seg.content.split("\n").length;
+            display += `\x1b[44;97m[已粘贴 ${lines} 行]\x1b[0m`;
+          } else {
+            display += seg.content;
+          }
+        }
+      } else {
+        display = ev.text;
+      }
+      return `${C.cyan}> ${display}${C.reset}\n`;
+    }
 
     case "brain_message":
       return `${C.magenta}⟵ ${ev.source}:${C.reset} ${ev.text.slice(0, 200)}\n\n`;

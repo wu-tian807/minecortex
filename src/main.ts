@@ -38,7 +38,7 @@ async function main() {
         source: "user",
         type: "user_input",
         to: "*",
-        payload: { text },
+        payload: { content: text },
         ts: Date.now(),
       });
     },
