@@ -6,8 +6,10 @@ const DEFAULT_TIMEOUT = 30_000;
 export default {
   name: "shell",
   description:
-    "Execute a shell command via the terminal manager. Commands that exceed the timeout " +
-    "are automatically backgrounded — use the returned terminalId to check output later. " +
+    "Execute a shell command in a persistent bash session that preserves cwd, venv, and exported vars across calls. " +
+    "Commands that exceed the timeout are backgrounded — a new session is created for subsequent commands " +
+    "with cwd restored, but any custom 'export' vars set in the timed-out session will be lost. " +
+    "Use read_file on the returned logFile path to poll a backgrounded command's progress. " +
     "IMPORTANT: Do not use grep/find/cat/sed/awk — use the dedicated tools (grep, glob, read_file, edit_file) instead. " +
     "Always quote file paths containing spaces. Use ';' or '&&' to chain commands, not newlines.",
   input_schema: {
@@ -44,19 +46,21 @@ export default {
     const extraEnv = args.env as Record<string, string> | undefined;
     const terminalManager = getTerminalManager();
 
+    const description = args.description ? String(args.description) : undefined;
     const result = await terminalManager.exec(command, {
       cwd,
       initialCwd,
       env: extraEnv,
       brainId: ctx.brainId,
       timeoutMs,
+      description,
     });
 
     const parts: string[] = [];
     if (result.backgrounded) {
-      parts.push(`[backgrounded] Command still running (terminal: ${result.terminalId})`);
-      parts.push(`Log file: ${result.logFile}`);
-      if (result.hint) parts.push(result.hint);
+      parts.push(`[backgrounded] Command still running in the background.`);
+      parts.push(`Shell state (cwd, venv, exports) is preserved — you can run the next command normally.`);
+      parts.push(`To check progress, call: read_file("${result.logFile}")`);
     } else {
       parts.push(`Exit code: ${result.exitCode ?? "unknown"}`);
     }

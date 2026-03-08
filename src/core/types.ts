@@ -282,6 +282,8 @@ export interface ExecOpts {
   env?: Record<string, string>;
   brainId: string;
   timeoutMs?: number;
+  /** Short description included in the log filename for easy identification. */
+  description?: string;
 }
 
 export interface TerminalManagerAPI {
