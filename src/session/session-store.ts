@@ -1,6 +1,5 @@
 import { readFile, writeFile, appendFile, mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
-import { randomBytes } from "node:crypto";
 import {
   isMediaContentPart,
   isMediaRefPart,
@@ -10,7 +9,6 @@ import {
 } from "../core/types.js";
 import type { LLMMessage } from "../llm/types.js";
 
-const MEDIA_INLINE_THRESHOLD = 50 * 1024; // 50KB
 
 interface SessionJson {
   currentSessionId: string;
@@ -48,10 +46,6 @@ export class SessionStore {
 
   private messagesPath(sid: string): string {
     return join(this.sessionDir(sid), "messages.jsonl");
-  }
-
-  private mediasDir(sid: string): string {
-    return join(this.sessionDir(sid), "medias");
   }
 
   private async withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -145,7 +139,7 @@ export class SessionStore {
 
     await this.withWriteLock(async () => {
       const id = await this.ensureSessionForWrite(sid);
-      const serialized = await Promise.all(msgs.map((msg) => this.serializeMessage(msg, id)));
+      const serialized = msgs.map((msg) => this.serializeMessage(msg));
       const content = serialized.map((msg) => JSON.stringify(msg)).join("\n") + "\n";
       await appendFile(this.messagesPath(id), content, "utf-8");
     });
@@ -158,7 +152,7 @@ export class SessionStore {
         return;
       }
 
-      const serialized = await Promise.all(messages.map((msg) => this.serializeMessage(msg, sid)));
+      const serialized = messages.map((msg) => this.serializeMessage(msg));
       const content = serialized.map((msg) => JSON.stringify(msg)).join("\n") + "\n";
       await this.writeAtomic(this.messagesPath(sid), content);
     });
@@ -213,32 +207,12 @@ export class SessionStore {
     return id;
   }
 
-  private async serializeMessage(msg: LLMMessage, sid: string): Promise<SerializedMessage> {
+  private serializeMessage(msg: LLMMessage): SerializedMessage {
     if (typeof msg.content === "string") {
       return { ...msg } as SerializedMessage;
     }
-
-    const parts: SerializedPart[] = [];
-    for (const part of msg.content) {
-      if (isMediaContentPart(part)) {
-        const byteSize = Buffer.byteLength(part.data, "base64");
-        if (byteSize >= MEDIA_INLINE_THRESHOLD) {
-          const mediaDir = this.mediasDir(sid);
-          await mkdir(mediaDir, { recursive: true });
-          const filename = `${Date.now()}_${randomBytes(4).toString("hex")}.${mimeToExt(part.mimeType)}`;
-          const filePath = join(mediaDir, filename);
-          await writeFile(filePath, Buffer.from(part.data, "base64"));
-          const refType = `${part.type}_ref` as "image_ref" | "video_ref" | "audio_ref";
-          parts.push({ type: refType, path: `medias/${filename}`, mimeType: part.mimeType });
-        } else {
-          parts.push(part);
-        }
-      } else {
-        parts.push(part);
-      }
-    }
-
-    return { ...msg, content: parts } as SerializedMessage;
+    // All media is stored inline as base64. medias/ folder is only for renderer display cache.
+    return { ...msg, content: msg.content as SerializedPart[] } as SerializedMessage;
   }
 
   private async deserializeMessage(msg: SerializedMessage, sid: string): Promise<LLMMessage> {
@@ -264,23 +238,4 @@ export class SessionStore {
 
     return { ...msg, content: parts } as LLMMessage;
   }
-}
-
-function mimeToExt(mime: string): string {
-  const map: Record<string, string> = {
-    "image/png": "png",
-    "image/jpeg": "jpg",
-    "image/gif": "gif",
-    "image/webp": "webp",
-    "image/svg+xml": "svg",
-    "video/mp4": "mp4",
-    "video/webm": "webm",
-    "video/quicktime": "mov",
-    "audio/mpeg": "mp3",
-    "audio/wav": "wav",
-    "audio/ogg": "ogg",
-    "audio/webm": "weba",
-    "audio/mp4": "m4a",
-  };
-  return map[mime] ?? "bin";
 }
