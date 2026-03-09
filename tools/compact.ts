@@ -8,46 +8,31 @@ import { repairToolPairing } from "../src/session/history-normalizer.js";
 import { createProvider } from "../src/llm/provider.js";
 import { assembleResponse } from "../src/llm/stream.js";
 
-const SUMMARIZE_PROMPT = `You are a session compaction assistant. Your task is to create a continuation summary that allows efficient resumption of work in a new context window where the conversation history will be replaced with this summary.
+const SUMMARIZE_PROMPT = `You are a session compaction assistant. Create a concise continuation summary so work can resume immediately in a new context window.
 
-Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts. In your analysis:
-1. Chronologically walk through each message, identifying the user's requests, your approach, key decisions, and specific details (file names, code snippets, function signatures).
-2. Note errors encountered and how they were resolved, especially user corrections.
-3. Double-check for technical accuracy and completeness.
+Output ONLY the summary text — no preamble, no analysis block, no XML tags.
 
-Then provide your structured summary in <summary> tags with these sections:
+Structure it with these sections (plain markdown headings):
 
-1. Task Overview
-   - The user's core request and success criteria
-   - Clarifications or constraints they specified
+## Task Overview
+One or two sentences: what the user asked for and the success criteria.
 
-2. Current State
-   - What has been completed so far
-   - Files created, modified, or analyzed (with paths)
-   - Key outputs or artifacts produced
+## Current State
+Bullet list of what is done, files created/modified (with paths), key outputs.
 
-3. Key Discoveries & Errors
-   - Technical constraints or requirements uncovered
-   - Decisions made and their rationale
-   - Errors encountered and how they were resolved
-   - Approaches tried that didn't work (and why)
+## Key Decisions & Errors
+Only notable: decisions made, errors encountered and how resolved, dead ends.
 
-4. User Messages
-   - List all non-tool-result user messages (to preserve intent drift and feedback)
+## User Messages (verbatim)
+Short verbatim quotes of the user's non-tool messages that capture intent drift or corrections.
 
-5. Pending Tasks & Next Steps
-   - Specific actions needed to complete the task
-   - Any blockers or open questions
-   - Priority order if multiple steps remain
-   - Include direct quotes from the most recent exchange showing where you left off
+## Pending Tasks
+Ordered list of remaining actions. Quote the last exchange to show where we left off.
 
-6. Context to Preserve
-   - User preferences or style requirements
-   - Domain-specific details that aren't obvious
-   - Any promises made to the user
+## Context to Preserve
+User preferences, domain quirks, promises made.
 
-Be concise but complete — err on the side of including information that would prevent duplicate work or repeated mistakes. Write in a way that enables immediate resumption of the task.`;
-
+Be as brief as possible — aim for under 600 words total. Every sentence must earn its place.`;
 export default {
   name: "compact",
   description:
@@ -146,7 +131,11 @@ export default {
     let summarizer: ((msgs: LLMMessage[]) => Promise<string>) | undefined;
     if (modelName) {
       try {
-        const provider = createProvider(modelName);
+        const provider = createProvider(modelName, {
+            maxTokens: 1500,   // summary 控制在 ~1000 words 以内，避免无限生成
+            showThinking: false, // 关闭 extended thinking，避免额外 token 消耗
+            temperature: 0.3,
+          });
         summarizer = async (msgs: LLMMessage[]) => {
           const conversationText = msgs
             .map(m => {
@@ -163,7 +152,14 @@ export default {
           const stream = provider.chatStream(
             [
               { role: "system", content: systemPrompt },
-              { role: "user", content: `Conversation to summarize (${msgs.length} messages):\n\n${conversationText}` },
+              {
+                role: "user",
+                content:
+                  `Below is a conversation history (${msgs.length} messages) that needs to be summarized. ` +
+                  `Write a natural-language continuation summary following your system instructions. ` +
+                  `Do NOT reproduce or reformat the conversation — synthesize what happened in your own words.\n\n` +
+                  `--- Conversation History ---\n${conversationText}\n--- End ---`,
+              },
             ],
             [],
             ctx.signal,
