@@ -11,6 +11,7 @@ export interface InputSegment {
 
 export type RendererEvent =
   | { k: "user_input"; text: string; segments?: InputSegment[]; ts: number }
+  | { k: "command"; brain: string; toolName: string; ts: number }
   | { k: "brain_message"; source: string; text: string; ts: number }
   | { k: "cli_message";  source: string; text: string; ts: number }
   | { k: "assistant_chunk"; brain?: string; kind: "text" | "thinking"; text: string; ts: number }
@@ -61,6 +62,9 @@ export function parseRendererEvent(line: string): RendererEvent | null {
 
 export function formatEvent(ev: RendererEvent): string | null {
   switch (ev.k) {
+    case "command":
+      return `${C.dim}⌘ /${ev.toolName} 已发送给 ${ev.brain}${C.reset}\n`;
+
     case "user_input": {
       let display = "";
       if (ev.segments?.length) {

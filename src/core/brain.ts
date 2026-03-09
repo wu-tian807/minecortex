@@ -460,15 +460,26 @@ export class ConsciousBrain extends BaseBrain {
       logger: this.logger,
     };
 
-    const results = await runToolBatch({
-      toolCalls: [toolCall],
-      tools: this.tools,
-      toolCtx,
-      lifecycle: this.sessionManager,
-      logger: this.logger,
-      hooks: this.hooks,
-      turn: this.currentTurn,
-    });
+    this.hooks.emit(HookEvent.TurnStart, { turn: this.currentTurn, eventCount: 1 });
+    let aborted = false;
+    let results: Awaited<ReturnType<typeof runToolBatch>>;
+    try {
+      results = await runToolBatch({
+        toolCalls: [toolCall],
+        tools: this.tools,
+        toolCtx,
+        lifecycle: this.sessionManager,
+        logger: this.logger,
+        hooks: this.hooks,
+        turn: this.currentTurn,
+      });
+    } catch (err: any) {
+      aborted = signal.aborted;
+      if (!aborted) this.logger.error(this.id, this.currentTurn, `command failed: ${err?.message ?? err}`);
+      return;
+    } finally {
+      this.hooks.emit(HookEvent.TurnEnd, { turn: this.currentTurn, aborted });
+    }
 
     const result = results[0]?.result;
     const resultStr = typeof result === "string" ? result : JSON.stringify(result ?? "");

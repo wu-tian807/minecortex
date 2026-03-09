@@ -703,7 +703,13 @@ export class CLIRenderer {
       const cmd = parseCommand(trimmed);
       if (cmd && this.activeBrain) {
         this.callbacks.onBrainCommand(this.activeBrain, cmd.toolName, cmd.args);
-        process.stdout.write(`${C.dim}⌘ /${cmd.toolName} 已发送给 ${this.activeBrain}${C.reset}\n`);
+        // Write to events.jsonl so replay can show the command (same pattern as user_input).
+        const ev: RendererEvent = { k: "command", brain: this.activeBrain, toolName: cmd.toolName, ts: Date.now() };
+        const rendered = formatEvent(ev);
+        if (rendered) process.stdout.write(rendered);
+        const evPath = this.eventsPath();
+        appendFile(evPath, JSON.stringify(ev) + "\n", "utf-8").catch(() => {});
+        this.tailOffset += Buffer.byteLength(JSON.stringify(ev) + "\n", "utf-8");
       } else if (!this.activeBrain) {
         process.stdout.write(`${C.dim}⚠ 没有激活的 brain，命令未发送${C.reset}\n`);
       } else {

@@ -95,17 +95,36 @@ export default {
       ? lastUsage.inputTokens + lastUsage.outputTokens
       : 0;
 
-    // If the last message is an assistant with unresolved tool_calls, it means compact
-    // is running as part of a parallel tool batch — those results haven't been written yet.
-    // Park the message so repairToolPairing doesn't add synthetic results for in-flight calls;
-    // the real results will be appended to the new session after compact returns.
+    // Detect in-flight tool calls that haven't received a result yet.
+    //
+    // Two layouts are possible depending on when compact runs:
+    //   A) last = assistant + toolCalls          (parallel batch, no pending written yet)
+    //   B) last = [Pending: …] tool message      (sequential: appendToolPendings already ran)
+    //
+    // In both cases we park the assistant message so repairToolPairing won't generate
+    // a synthetic error — the real result will be appended to the new session after
+    // compact returns.
     const lastMsg = messages[messages.length - 1];
-    const isInFlight =
-      lastMsg?.role === "assistant" &&
-      lastMsg.toolCalls &&
-      lastMsg.toolCalls.length > 0;
-    const baseMessages = isInFlight ? messages.slice(0, -1) : messages;
-    const parked: LLMMessage | null = isInFlight ? lastMsg : null;
+    const secondLastMsg = messages[messages.length - 2];
+
+    let baseMessages: LLMMessage[];
+    let parked: LLMMessage | null;
+
+    if (lastMsg?.role === "assistant" && lastMsg.toolCalls?.length) {
+      // Layout A
+      baseMessages = messages.slice(0, -1);
+      parked = lastMsg;
+    } else if (
+      lastMsg?.role === "tool" && lastMsg.toolStatus === "pending" &&
+      secondLastMsg?.role === "assistant" && secondLastMsg.toolCalls?.length
+    ) {
+      // Layout B — drop the pending placeholder too; the real result replaces it
+      baseMessages = messages.slice(0, -2);
+      parked = secondLastMsg;
+    } else {
+      baseMessages = messages;
+      parked = null;
+    }
 
     const compacted = microCompact(baseMessages, { keepToolResults: 3, keepMedias: 2 });
     const repaired = repairToolPairing(compacted);
