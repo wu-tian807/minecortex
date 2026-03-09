@@ -247,11 +247,31 @@ export class CLIRenderer {
     if (!text || !this.isTTY || this.overlay) return;
     if (!this.streamingActive) {
       this.streamingActive = true;
-      this.clearFooter();
+      this.clearFooter(); // cursor → thinking line, clears to end of screen
+
+      const rows = process.stdout.rows;
+      if (rows && rows > 4) {
+        // Use a scroll region so the footer stays pinned at the bottom while
+        // streaming text flows freely above it — no flicker, no save/restore per chunk.
+        //
+        // clearFooter lands the cursor at rows-2 (thinking line) when the screen
+        // is full.  Step up once more so the cursor is inside the scroll region
+        // (which ends at rows-3) before we save it.
+        cursorUp(1);
+        process.stdout.write(
+          `\x1b7` +                                                   // save cursor (inside content area)
+          `\x1b[${rows - 2};1H\x1b[2K` +                            // thinking row — clear
+          `\x1b[${rows - 1};1H\x1b[2K` + this.statusBar.render() +  // status bar
+          `\x1b[${rows};1H\x1b[2K${C.dim}${PROMPT}${C.reset}` +     // dim prompt
+          `\x1b[1;${rows - 3}r` +                                     // scroll region = content only
+          `\x1b8`,                                                     // restore cursor (content area)
+        );
+      }
+
       process.stdout.write(`${C.cyan}[${this.activeBrain}]${C.reset} `);
     }
-    this.streamingNeedsNewline = !text.endsWith("\n");
     process.stdout.write(text);
+    this.streamingNeedsNewline = !text.endsWith("\n");
   }
 
   private appendThinkingChunk(text: string): void {
@@ -273,6 +293,12 @@ export class CLIRenderer {
     if (this.isTTY) {
       if (hadStreaming) {
         if (this.streamingNeedsNewline) process.stdout.write("\n");
+        const rows = process.stdout.rows;
+        if (rows && rows > 4) {
+          // Reset scroll region (full screen) then jump to the thinking row and
+          // clear to end — drawFooter will repaint the real 3-line footer there.
+          process.stdout.write(`\x1b[r\x1b[${rows - 2};1H\x1b[J`);
+        }
         this.drawFooter();
       } else if (this.thinkingPreview) {
         this.clearFooter();
