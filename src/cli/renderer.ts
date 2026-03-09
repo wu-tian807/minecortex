@@ -101,6 +101,7 @@ export class CLIRenderer {
   private thinkingPreview = "";
   private streamingActive = false;
   private streamingNeedsNewline = false;
+  private _redrawPending = false;
 
   constructor(rootDir: string, callbacks: RendererCallbacks) {
     this.rootDir    = rootDir;
@@ -171,6 +172,24 @@ export class CLIRenderer {
   private redrawStatusBar(): void    { this.redrawFooterRow(1, this.statusBar.render()); }
   private redrawThinkingPreview(): void { this.redrawFooterRow(2, this.renderThinkingPreview()); }
 
+  /**
+   * Batch-schedule a footer redraw via microtask.
+   * Multiple calls within the same event-loop turn collapse into one repaint,
+   * and the repaint is always deferred until the current task finishes —
+   * so the cursor is guaranteed to be on the input line when it runs.
+   */
+  private scheduleRedraw(): void {
+    if (!this.isTTY || this._redrawPending || this.streamingActive) return;
+    this._redrawPending = true;
+    queueMicrotask(() => {
+      this._redrawPending = false;
+      if (!this.streamingActive && !this.overlay) {
+        this.clearFooter();
+        this.drawFooter();
+      }
+    });
+  }
+
   private redrawInputLine(): void {
     if (!this.isTTY) return;
     clearLine();
@@ -198,15 +217,15 @@ export class CLIRenderer {
 
   private subscribeContext(brainId: string): void {
     this.statusBar.contextRing.subscribe(brainId, this.callbacks.watchContextUsage, () => {
-      this.redrawStatusBar();
+      this.scheduleRedraw();
     });
   }
 
   // ─── Thinking indicator ───
 
   private setThinking(v: boolean): void {
-    this.statusBar.setThinking(v, () => this.redrawStatusBar());
-    if (!v) this.redrawStatusBar();
+    this.statusBar.setThinking(v, () => this.scheduleRedraw());
+    this.scheduleRedraw();
   }
 
   // ─── Output ───
