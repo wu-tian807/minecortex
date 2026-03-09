@@ -1,24 +1,48 @@
 import { readFile, access } from "node:fs/promises";
-import { extname } from "node:path";
-import type { ToolDefinition, ToolOutput, ContentPart } from "../src/core/types.js";
+import { extname, join } from "node:path";
+import type { ToolDefinition, ToolOutput, ContentPart, InputModality, ToolContext } from "../src/core/types.js";
+import { getModelSpec } from "../src/llm/provider.js";
 
 const MAX_CHARS = 256_000;
 const MAX_LINE_LENGTH = 2000;
 
-const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
-const MIME_MAP: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
+/** All media types the tool can return, keyed by file extension. */
+const MEDIA_MAP: Record<string, { mime: string; modality: InputModality }> = {
+  // images
+  ".png":  { mime: "image/png",       modality: "image" },
+  ".jpg":  { mime: "image/jpeg",      modality: "image" },
+  ".jpeg": { mime: "image/jpeg",      modality: "image" },
+  ".gif":  { mime: "image/gif",       modality: "image" },
+  ".webp": { mime: "image/webp",      modality: "image" },
+  // video
+  ".mp4":  { mime: "video/mp4",       modality: "video" },
+  ".webm": { mime: "video/webm",      modality: "video" },
+  ".mov":  { mime: "video/quicktime", modality: "video" },
+  // audio
+  ".mp3":  { mime: "audio/mpeg",      modality: "audio" },
+  ".wav":  { mime: "audio/wav",       modality: "audio" },
+  ".ogg":  { mime: "audio/ogg",       modality: "audio" },
+  ".m4a":  { mime: "audio/mp4",       modality: "audio" },
 };
+
+/** Read the current brain's model name then look up its supported input modalities. */
+async function getBrainInputModalities(ctx: ToolContext): Promise<InputModality[]> {
+  try {
+    const brainDir = ctx.pathManager.brainDir(ctx.brainId);
+    const raw = await readFile(join(brainDir, "brain.json"), "utf-8");
+    const brainJson = JSON.parse(raw) as { models?: { model?: string }; model?: string };
+    const model = brainJson.models?.model ?? brainJson.model;
+    if (model) return getModelSpec(model).input;
+  } catch { /* brain.json missing or malformed — fall through */ }
+  return ["text"]; // safe default: assume text-only
+}
 
 export default {
   name: "read_file",
   description:
     "Read a file from the filesystem. You MUST read a file before editing or writing to it. " +
-    "Supports text files with optional offset/limit for large files, and images (png, jpg, gif, webp) returned as base64. " +
+    "Supports text files with optional offset/limit for large files, and media files (images, video, audio) " +
+    "returned as base64 when the active model supports that modality. " +
     "It is always better to speculatively read multiple files as a batch that are potentially useful.",
   input_schema: {
     type: "object",
@@ -55,22 +79,31 @@ export default {
     }
 
     const ext = extname(absPath).toLowerCase();
+    const mediaEntry = MEDIA_MAP[ext];
 
-    if (IMAGE_EXTS.has(ext)) {
+    if (mediaEntry) {
+      const modalities = await getBrainInputModalities(ctx);
+      if (!modalities.includes(mediaEntry.modality)) {
+        return `[${mediaEntry.modality} not returned: model does not support ${mediaEntry.modality} input]`;
+      }
       try {
         const buf = await readFile(absPath);
         const parts: ContentPart[] = [
-          { type: "image", data: buf.toString("base64"), mimeType: MIME_MAP[ext]! },
+          { type: mediaEntry.modality, data: buf.toString("base64"), mimeType: mediaEntry.mime } as ContentPart,
         ];
         return parts;
       } catch (e: any) {
-        return `Error: failed to read image — ${e.message}`;
+        return `Error: failed to read ${mediaEntry.modality} file — ${e.message}`;
       }
     }
 
     let raw: string;
     try {
-      raw = await readFile(absPath, "utf-8");
+      const buf = await readFile(absPath);
+      if (buf.includes(0)) {
+        return `Error: '${absPath}' appears to be a binary file — not readable as text`;
+      }
+      raw = buf.toString("utf-8");
     } catch (e: any) {
       return `Error: failed to read file — ${e.message}`;
     }
