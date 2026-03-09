@@ -1,12 +1,12 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+
 import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
 import type { LLMMessage } from "../src/llm/types.js";
 import { summarizeForCompaction, microCompact } from "../src/session/compaction.js";
 import { repairToolPairing } from "../src/session/history-normalizer.js";
 import { createProvider } from "../src/llm/provider.js";
 import { assembleResponse } from "../src/llm/stream.js";
-import { SessionManager } from "../src/session/session-manager.js";
 
 const SUMMARIZE_PROMPT = `You are a session compaction assistant. Your task is to create a continuation summary that allows efficient resumption of work in a new context window where the conversation history will be replaced with this summary.
 
@@ -65,10 +65,13 @@ export default {
     required: [],
   },
   async execute(args, ctx): Promise<ToolOutput> {
+    const sessionManager = ctx.sessionManager;
+    if (!sessionManager) return "Session manager unavailable.";
+
     const brainDir = ctx.pathManager.brainDir(ctx.brainId);
     const sessionJsonPath = join(brainDir, "session.json");
-    const sessionManager = new SessionManager(ctx.brainId, ctx.pathManager);
 
+    // Read session.json once to get current session ID and any extra metadata to preserve.
     let sessionData: { currentSessionId: string; [k: string]: unknown };
     try {
       sessionData = JSON.parse(await readFile(sessionJsonPath, "utf-8"));
@@ -77,12 +80,12 @@ export default {
     }
 
     const oldSessionId = sessionData.currentSessionId;
-    const snapshot = await sessionManager.loadSessionSnapshot(oldSessionId);
+    const snapshot = await sessionManager.loadSnapshot(oldSessionId);
     if (!snapshot) {
       return "Session messages file not found.";
     }
 
-    const messages = snapshot.messages;
+    const messages = snapshot.messages as LLMMessage[];
     if (messages.length < 4) {
       return "Session too short to compact (fewer than 4 messages).";
     }
@@ -110,11 +113,16 @@ export default {
     let modelName: string | undefined;
     try {
       const brainJson = JSON.parse(await readFile(join(brainDir, "brain.json"), "utf-8"));
-      modelName = brainJson.model as string | undefined;
+      modelName = (brainJson.models?.model ?? brainJson.model) as string | undefined;
       if (Array.isArray(modelName)) modelName = modelName[0];
     } catch { /* no brain.json */ }
 
     const customInstructions = args.instructions as string | undefined;
+
+    // Capture the summarize LLM call's usage so we can stamp it onto the new session's
+    // last message — giving lastUsageFrom() a compact-specific estimate instead of
+    // the stale pre-compact value from keptMessages.
+    let summarizeUsage: { inputTokens: number; outputTokens: number } | undefined;
 
     let summarizer: ((msgs: LLMMessage[]) => Promise<string>) | undefined;
     if (modelName) {
@@ -142,6 +150,9 @@ export default {
             ctx.signal,
           );
           const resp = await assembleResponse(stream);
+          if (resp.usage) {
+            summarizeUsage = { inputTokens: resp.usage.inputTokens, outputTokens: resp.usage.outputTokens };
+          }
           return typeof resp.content === "string" ? resp.content : "[summary generation failed]";
         };
       } catch { /* LLM unavailable */ }
@@ -151,16 +162,29 @@ export default {
     // Re-attach the in-flight assistant message so the real results appended after this
     // tool returns have a matching tool_use block in the new session.
     const newMessages = [summary, ...keptMessages, ...(parked ? [parked] : [])];
+
+    // Stamp the summarize usage onto the last message of the new session.
+    // This gives lastUsageFrom() a meaningful compact-time estimate so the status-bar
+    // ring shows a sensible value immediately after compact (instead of the old
+    // pre-compact value from keptMessages or null for brand-new sessions).
+    if (summarizeUsage && newMessages.length > 0) {
+      const last = newMessages[newMessages.length - 1];
+      newMessages[newMessages.length - 1] = { ...last, usage: summarizeUsage };
+    }
+
     const newSessionId = await sessionManager.newSession(newMessages);
 
-    // Preserve session.json metadata that SessionManager doesn't own, while keeping
-    // message serialization inside the session facade so media refs are rebuilt.
-    sessionData.currentSessionId = newSessionId;
-    await writeFile(sessionJsonPath, JSON.stringify(sessionData, null, 2), "utf-8");
+    // Restore any extra metadata (e.g. responseApi) that newSession doesn't carry over.
+    // currentSessionId is already correct; strip it to avoid overwriting what newSession wrote.
+    const { currentSessionId: _old, ...extraMeta } = sessionData;
+    if (Object.keys(extraMeta).length > 0) {
+      await sessionManager.updateSessionMeta(extraMeta);
+    }
 
     console.log(
       `[compact] ${oldSessionId} → ${newSessionId} | msgs: ${messages.length} → ${newMessages.length}` +
       (tokensBefore ? ` | tokens before: ${tokensBefore}` : "") +
+      (summarizeUsage ? ` | tokens after: ${summarizeUsage.inputTokens + summarizeUsage.outputTokens}` : "") +
       ` | summarizer: ${summarizer ? "LLM" : "template"}`,
     );
 

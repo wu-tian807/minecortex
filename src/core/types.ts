@@ -196,6 +196,19 @@ export type DynamicToolAPI = DynamicRegistry<ToolDefinition>;
 /** Runtime subscription registration/release, exposed as ctx.subscriptions in ToolContext. */
 export type DynamicSubscriptionAPI = DynamicRegistry<EventSource>;
 
+/**
+ * Minimal session-management surface exposed to tools.
+ * Deliberately narrow — tools should not reach into full session internals.
+ */
+export interface SessionManagerAPI {
+  /** Read messages from a specific session (with media deserialization). */
+  loadSnapshot(sid: string): Promise<{ messages: unknown[] } | null>;
+  /** Create a new session, write initial messages, and switch the pointer. */
+  newSession(initialMessages?: unknown[]): Promise<string>;
+  /** Merge arbitrary key-value pairs into session.json without overwriting unrelated fields. */
+  updateSessionMeta(updates: Record<string, unknown>): Promise<void>;
+}
+
 export interface ToolContext {
   brainId: string;
   signal: AbortSignal;
@@ -206,6 +219,8 @@ export interface ToolContext {
   subscriptions: DynamicSubscriptionAPI;
   pathManager: PathManagerAPI;
   workspace: string;
+  /** Session management — use for creating/switching sessions inside tools. */
+  sessionManager?: SessionManagerAPI;
   /** Register a background promise so the parent brain can await it on shutdown. */
   trackBackgroundTask?: (p: Promise<unknown>) => void;
   /** Logger for sub-agents to inherit real-time debug output. */
