@@ -1,6 +1,6 @@
 /** @desc Recorder subscription — pure event writer to events.jsonl + qa.md (no stdout) */
 
-import { readFile, appendFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir } from "node:fs/promises";
 import { readFileSync, watch as watchFs } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Event, EventSource, SourceContext, BrainJson } from "../src/core/types.js";
@@ -118,9 +118,29 @@ class EventRecorder {
       const newSid = sessionJson.currentSessionId;
       if (!newSid || newSid === this.currentSessionId) return;
 
+      const oldEventsPath = this.eventsPath;
       this.currentSessionId = newSid;
       this.eventsPath = join(this.brainDir, "sessions", newSid, "events.jsonl");
       await mkdir(dirname(this.eventsPath), { recursive: true });
+
+      // If the new session already has messages (e.g. after compact), carry over the
+      // old events.jsonl so the renderer can replay the full history.
+      // An empty new session starts with an empty events.jsonl — no carry-over needed.
+      if (oldEventsPath) {
+        try {
+          const messages = await readFile(
+            join(this.brainDir, "sessions", newSid, "messages.jsonl"), "utf-8"
+          );
+          if (messages.trim().length > 0) {
+            const history = await readFile(oldEventsPath, "utf-8");
+            await writeFile(this.eventsPath, history, "utf-8");
+            return;
+          }
+        } catch { /* messages.jsonl missing or unreadable — fall through */ }
+      }
+
+      // Empty new session — ensure the file exists but is empty.
+      await appendFile(this.eventsPath, "", "utf-8");
     } catch { /* ignore transient read errors */ }
   }
 
