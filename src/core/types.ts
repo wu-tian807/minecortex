@@ -80,6 +80,18 @@ export interface CapabilitySelector {
   config?: Record<string, Record<string, unknown>>;
 }
 
+export interface CapabilitySource {
+  id: string;
+  dir: string;
+}
+
+export interface CapabilityDescriptor {
+  name: string;
+  tag?: string;
+  exposedName: string;
+  path: string;
+}
+
 export interface CapabilityPathRedirects {
   tools?: string;
   slots?: string;

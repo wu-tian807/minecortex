@@ -1,5 +1,6 @@
-import { join, relative } from "node:path";
+import { relative } from "node:path";
 import type {
+  CapabilityDescriptor,
   EventSource,
   EventSourceFactory,
   SourceContext,
@@ -15,13 +16,16 @@ import type { BrainHooksAPI } from "../hooks/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
 import { runWithLogContext } from "../core/logger.js";
+import { discover, filterByCapability } from "./scanner.js";
 
 interface SubscriptionEntry {
   source: EventSource;
   name: string;
 }
 
-export class SubscriptionLoader extends BaseLoader<EventSourceFactory, SubscriptionEntry> {
+type SubscriptionModule = { default?: EventSourceFactory };
+
+export class SubscriptionLoader extends BaseLoader<SubscriptionModule, SubscriptionEntry> {
   private emitter: ((event: Event) => void) | null = null;
   private brainContext: BrainContextAPI | null = null;
 
@@ -61,18 +65,26 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
     this.brainContext = ctx;
   }
 
-  async importFactory(path: string): Promise<EventSourceFactory> {
-    const mod = await import(path);
-    return mod.default as EventSourceFactory;
+  async importFactory(path: string): Promise<SubscriptionModule> {
+    return await import(path);
   }
 
-  createInstance(factory: EventSourceFactory, ctx: LoaderContext, name: string): SubscriptionEntry {
+  validateFactory(factory: SubscriptionModule): boolean {
+    return typeof factory.default === "function";
+  }
+
+  createInstance(
+    factory: SubscriptionModule,
+    ctx: LoaderContext,
+    name: string,
+    descriptor: CapabilityDescriptor,
+  ): SubscriptionEntry {
     const sourceCtx: SourceContext = {
       brain: this.brainContext!,
-      eventConfig: ctx.selector.config?.[name] ?? undefined,
+      eventConfig: this.resolveConfig(ctx.selector, descriptor),
     };
-    const source = factory(sourceCtx);
-    return { source, name: source.name };
+    const source = factory.default!(sourceCtx);
+    return { source: { ...source, name }, name };
   }
 
   onRegister(name: string, entry: SubscriptionEntry): void {
@@ -100,32 +112,22 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
   }
 
   private lastCtx: LoaderContext | null = null;
-  private pathMap = new Map<string, string>();
-
   registerWatchPatterns(watcher: FSWatcherAPI): void {
-    const self = this;
     const handler = (event: import("../core/types.js").FSChangeEvent) => {
-      if (!self.lastCtx) return;
-      if (!self.matchesConfiguredDir(event.path)) return;
-      const name = event.path.replace(/\.ts$/, "").split("/").pop() ?? "";
-      const fullPath = self.pathMap.get(name);
-      if (fullPath) {
-        self.reload(name, fullPath, self.lastCtx)
-          .then(entry => { if (entry) console.log(`[SubscriptionLoader] hot-reloaded: ${name}`); })
-          .catch(err => console.error(`[SubscriptionLoader] hot-reload failed: ${name}`, err));
-      }
+      if (!this.lastCtx) return;
+      if (!this.matchesConfiguredDir(event.path)) return;
+      this.reloadAll()
+        .then(() => console.log(`[SubscriptionLoader] refreshed: ${event.path}`))
+        .catch(err => console.error(`[SubscriptionLoader] refresh failed: ${event.path}`, err));
     };
-    watcher.register(/subscriptions\/[^/]+\.ts$/, handler);
-    watcher.register(/brains\/[^/]+\/subscriptions\/[^/]+\.ts$/, handler);
+    watcher.register(/^subscriptions(?:\/[^/]+)?\/[^/]+\.ts$/, handler);
+    watcher.register(/^brains\/[^/]+\/subscriptions(?:\/[^/]+)?\/[^/]+\.ts$/, handler);
   }
 
   private matchesConfiguredDir(path: string): boolean {
     if (!this.lastCtx) return false;
-    const dirs = [
-      this.lastCtx.globalCapabilityDir ?? join(this.lastCtx.globalDir, "subscriptions"),
-      this.lastCtx.localCapabilityDir ?? join(this.lastCtx.brainDir, "subscriptions"),
-    ];
-    return dirs.some((dir) => {
+    return this.lastCtx.capabilitySources.some((source) => {
+      const dir = source.dir;
       const prefix = relative(this.lastCtx!.globalDir, dir).replace(/\\/g, "/");
       return prefix.length > 0 && (path === prefix || path.startsWith(`${prefix}/`));
     });
@@ -133,12 +135,9 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
 
   async load(ctx: LoaderContext): Promise<EventSource[]> {
     this.lastCtx = ctx;
-    const paths = await this.discover(
-      ctx.globalCapabilityDir ?? join(ctx.globalDir, "subscriptions"),
-      ctx.localCapabilityDir ?? join(ctx.brainDir, "subscriptions"),
-    );
-    this.pathMap = paths;
-    await this.loadAll(paths, ctx);
+    const descriptors = await discover(ctx.capabilitySources);
+    this.clearRegistry();
+    await this.loadAll(descriptors, ctx);
     return [...this.registry.values()].map((e) => e.source);
   }
 
@@ -147,8 +146,9 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
     newSelector: CapabilitySelector,
     allNames: string[],
   ): { toStart: string[]; toStop: string[] } {
-    const oldEnabled = new Set(this.filterByCapability(allNames, oldSelector));
-    const newEnabled = new Set(this.filterByCapability(allNames, newSelector));
+    const descriptors = allNames.map((name) => ({ name, exposedName: name, path: name }));
+    const oldEnabled = new Set(filterByCapability(descriptors, oldSelector).map((d) => d.exposedName));
+    const newEnabled = new Set(filterByCapability(descriptors, newSelector).map((d) => d.exposedName));
 
     const toStart = [...newEnabled].filter((n) => !oldEnabled.has(n));
     const toStop = [...oldEnabled].filter((n) => !newEnabled.has(n));
@@ -162,5 +162,12 @@ export class SubscriptionLoader extends BaseLoader<EventSourceFactory, Subscript
     }
 
     return { toStart, toStop };
+  }
+
+  private async reloadAll(): Promise<void> {
+    if (!this.lastCtx) return;
+    const descriptors = await discover(this.lastCtx.capabilitySources);
+    this.clearRegistry();
+    await this.loadAll(descriptors, this.lastCtx);
   }
 }

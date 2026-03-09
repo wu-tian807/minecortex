@@ -1,8 +1,9 @@
-import { join, relative } from "node:path";
+import { relative } from "node:path";
 import type { ContextSlot, SlotFactory, SlotContext } from "../context/types.js";
-import type { FSWatcherAPI, FSChangeEvent } from "../core/types.js";
+import type { CapabilityDescriptor, FSWatcherAPI, FSChangeEvent } from "../core/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
+import { discover } from "./scanner.js";
 
 type SlotModule = { default: SlotFactory };
 
@@ -11,7 +12,6 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
   private onSlotChange: ((slots: ContextSlot[]) => void) | null = null;
   private onSlotRemove: ((names: string[]) => void) | null = null;
   private loaderCtx: LoaderContext | null = null;
-  private slotPaths: Map<string, string> = new Map();
 
   setSlotContext(ctx: SlotContext): void {
     this.slotCtx = ctx;
@@ -29,13 +29,22 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
     return await import(path);
   }
 
-  createInstance(factory: SlotModule, ctx: LoaderContext, name: string): ContextSlot[] {
+  validateFactory(factory: SlotModule): boolean {
+    return typeof factory.default === "function";
+  }
+
+  createInstance(
+    factory: SlotModule,
+    ctx: LoaderContext,
+    _name: string,
+    descriptor: CapabilityDescriptor,
+  ): ContextSlot[] {
     if (!this.slotCtx) {
-      throw new Error(`[SlotLoader] setSlotContext must be called before loading slot "${name}"`);
+      throw new Error(`[SlotLoader] setSlotContext must be called before loading slot "${descriptor.exposedName}"`);
     }
     const slotCtx: SlotContext = {
       ...this.slotCtx,
-      config: ctx.selector.config?.[name] ?? this.slotCtx.config,
+      config: this.resolveConfig(ctx.selector, descriptor) ?? this.slotCtx.config,
     };
     const result = factory.default(slotCtx);
     return Array.isArray(result) ? result : [result];
@@ -50,10 +59,10 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
   }
 
   registerWatchPatterns(watcher: FSWatcherAPI): void {
-    watcher.register(/^slots\/[^/]+\.ts$/, (event) => {
+    watcher.register(/^slots(?:\/[^/]+)?\/[^/]+\.ts$/, (event) => {
       this.handleDirectChange(event);
     });
-    watcher.register(/^brains\/[^/]+\/slots\/[^/]+\.ts$/, (event) => {
+    watcher.register(/^brains\/[^/]+\/slots(?:\/[^/]+)?\/[^/]+\.ts$/, (event) => {
       this.handleDirectChange(event);
     });
 
@@ -78,37 +87,15 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
 
   private handleDirectChange(event: FSChangeEvent): void {
     if (!this.matchesConfiguredDir(event.path)) return;
-    const name = event.path.replace(/.*\//, "").replace(/\.ts$/, "");
-    if (event.type === "delete") {
-      const existing = this.registry.get(name);
-      if (existing) {
-        this.onUnregister(name, existing);
-        this.registry.delete(name);
-        this.slotPaths.delete(name);
-        console.log(`[SlotLoader] removed: ${name}`);
-      }
-    } else {
-      this.reloadSlot(name, event.path);
-    }
-  }
-
-  private async reloadSlot(name: string, relativePath: string): Promise<void> {
-    if (!this.loaderCtx) return;
-
-    const absolutePath = join(this.loaderCtx.globalDir, relativePath);
-    this.slotPaths.set(name, absolutePath);
-
-    await this.reload(name, absolutePath, this.loaderCtx);
-    console.log(`[SlotLoader] hot-reloaded: ${name}`);
+    this.reloadAll()
+      .then(() => console.log(`[SlotLoader] refreshed: ${event.path}`))
+      .catch(err => console.error(`[SlotLoader] refresh failed: ${event.path}`, err));
   }
 
   private matchesConfiguredDir(path: string): boolean {
     if (!this.loaderCtx) return false;
-    const dirs = [
-      this.loaderCtx.globalCapabilityDir ?? join(this.loaderCtx.globalDir, "slots"),
-      this.loaderCtx.localCapabilityDir ?? join(this.loaderCtx.brainDir, "slots"),
-    ];
-    return dirs.some((dir) => {
+    return this.loaderCtx.capabilitySources.some((source) => {
+      const dir = source.dir;
       const prefix = relative(this.loaderCtx!.globalDir, dir).replace(/\\/g, "/");
       return prefix.length > 0 && (path === prefix || path.startsWith(`${prefix}/`));
     });
@@ -129,12 +116,16 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
 
   async load(ctx: LoaderContext): Promise<ContextSlot[]> {
     this.loaderCtx = ctx;
-    const paths = await this.discover(
-      ctx.globalCapabilityDir ?? join(ctx.globalDir, "slots"),
-      ctx.localCapabilityDir ?? join(ctx.brainDir, "slots"),
-    );
-    this.slotPaths = paths;
-    await this.loadAll(paths, ctx);
+    const descriptors = await discover(ctx.capabilitySources);
+    this.clearRegistry();
+    await this.loadAll(descriptors, ctx);
     return [...this.registry.values()].flat();
+  }
+
+  private async reloadAll(): Promise<void> {
+    if (!this.loaderCtx) return;
+    const descriptors = await discover(this.loaderCtx.capabilitySources);
+    this.clearRegistry();
+    await this.loadAll(descriptors, this.loaderCtx);
   }
 }

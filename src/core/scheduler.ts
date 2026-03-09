@@ -9,6 +9,7 @@ import type {
   ModelsConfig,
   BrainInitConfig,
   CapabilitySelector,
+  CapabilitySource,
   CapabilityPathRedirects,
 } from "./types.js";
 import { EventBus } from "./event-bus.js";
@@ -191,7 +192,8 @@ export class Scheduler {
     const brainConfig = await this.loadBrainConfig(brainId);
     const brainDir = this.pathManager.brainDir(brainId);
     const baseConfig = this.createBrainInitConfig(brainId, brainConfig);
-    const capabilityDirs = this.resolveCapabilityDirs(brainDir, brainConfig.paths);
+    const toolSources = this.resolveCapabilitySources("tools", brainId, brainConfig);
+    const slotSources = this.resolveCapabilitySources("slots", brainId, brainConfig);
 
     await this.terminalManager.loadBrainEnv(brainId);
 
@@ -222,8 +224,7 @@ export class Scheduler {
       brainDir,
       globalDir: ROOT,
       selector: selectorTools,
-      globalCapabilityDir: capabilityDirs.tools.global,
-      localCapabilityDir: capabilityDirs.tools.local,
+      capabilitySources: toolSources,
     });
 
     // Setup slot registry and context engine
@@ -248,8 +249,7 @@ export class Scheduler {
       brainDir,
       globalDir: ROOT,
       selector: selectorSlots,
-      globalCapabilityDir: capabilityDirs.slots.global,
-      localCapabilityDir: capabilityDirs.slots.local,
+      capabilitySources: slotSources,
     });
 
     // Create provider
@@ -346,8 +346,7 @@ export class Scheduler {
       brainDir,
       globalDir: ROOT,
       selector: selectorSub,
-      globalCapabilityDir: this.resolveCapabilityDirs(brainDir, brainConfig.paths).subscriptions.global,
-      localCapabilityDir: this.resolveCapabilityDirs(brainDir, brainConfig.paths).subscriptions.local,
+      capabilitySources: this.resolveCapabilitySources("subscriptions", brainId, brainConfig),
     });
     return { sources, loader: subLoader };
   }
@@ -482,21 +481,20 @@ export class Scheduler {
     return `Brain '${id}' freed`;
   }
 
-  private resolveCapabilityDirs(
-    brainDir: string,
-    redirects?: CapabilityPathRedirects,
-  ): Record<"tools" | "slots" | "subscriptions", { global: string; local: string }> {
-    const resolveLocalDir = (kind: "tools" | "slots" | "subscriptions") => {
-      const redirected = redirects?.[kind];
-      if (!redirected) return join(brainDir, kind);
-      return isAbsolute(redirected) ? redirected : join(ROOT, redirected);
-    };
+  private resolveCapabilitySources(
+    kind: "tools" | "slots" | "subscriptions",
+    brainId: string,
+    brainConfig: BrainJson,
+  ): CapabilitySource[] {
+    const redirected = brainConfig.paths?.[kind];
+    const localDir = redirected
+      ? (isAbsolute(redirected) ? redirected : join(ROOT, redirected))
+      : join(this.pathManager.brainDir(brainId), kind);
 
-    return {
-      tools: { global: join(ROOT, "tools"), local: resolveLocalDir("tools") },
-      slots: { global: join(ROOT, "slots"), local: resolveLocalDir("slots") },
-      subscriptions: { global: join(ROOT, "subscriptions"), local: resolveLocalDir("subscriptions") },
-    };
+    return [
+      { id: "global", dir: join(ROOT, kind) },
+      { id: brainId, dir: localDir },
+    ];
   }
 
   /** Start a brain's run loop (fire-and-forget with error logging) */

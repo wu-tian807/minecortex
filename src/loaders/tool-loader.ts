@@ -1,7 +1,14 @@
 import { join, relative } from "node:path";
-import type { ToolDefinition, FSWatcherAPI, FSChangeEvent, DynamicToolAPI } from "../core/types.js";
+import type {
+  CapabilityDescriptor,
+  ToolDefinition,
+  FSWatcherAPI,
+  FSChangeEvent,
+  DynamicToolAPI,
+} from "../core/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
+import { discover } from "./scanner.js";
 
 type ToolFactory = { default?: ToolDefinition };
 
@@ -16,7 +23,6 @@ type ToolFactory = { default?: ToolDefinition };
  */
 export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
   private loaderCtx: LoaderContext | null = null;
-  private toolPaths: Map<string, string> = new Map();
   private onToolsChange: ((tools: ToolDefinition[]) => void) | null = null;
 
   // ─── DynamicRegistry layer ───
@@ -44,12 +50,20 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
     return await import(path);
   }
 
-  createInstance(factory: ToolFactory, _ctx: LoaderContext, _name: string): ToolDefinition | null {
+  validateFactory(factory: ToolFactory): boolean {
     const def = factory.default;
-    if (!def || typeof def.name !== "string" || typeof def.execute !== "function") {
-      return null;
-    }
-    return def;
+    return Boolean(def && typeof def.name === "string" && typeof def.execute === "function");
+  }
+
+  createInstance(
+    factory: ToolFactory,
+    _ctx: LoaderContext,
+    name: string,
+    _descriptor: CapabilityDescriptor,
+  ): ToolDefinition | null {
+    const def = factory.default;
+    if (!def) return null;
+    return { ...def, name };
   }
 
   allActive(): ToolDefinition[] {
@@ -71,38 +85,23 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
   }
 
   registerWatchPatterns(watcher: FSWatcherAPI): void {
-    watcher.register(/^tools\/[^/]+\.ts$/, (e) => this.handleChange(e));
-    watcher.register(/^brains\/[^/]+\/tools\/[^/]+\.ts$/, (e) => this.handleChange(e));
+    watcher.register(/^tools(?:\/[^/]+)?\/[^/]+\.ts$/, (e) => this.handleChange(e));
+    watcher.register(/^brains\/[^/]+\/tools(?:\/[^/]+)?\/[^/]+\.ts$/, (e) => this.handleChange(e));
   }
 
   private handleChange(event: FSChangeEvent): void {
     if (!this.loaderCtx) return;
     if (!this.matchesConfiguredDir(event.path)) return;
-    const name = event.path.replace(/.*\//, "").replace(/\.ts$/, "");
 
-    if (event.type === "delete") {
-      if (this.registry.has(name)) {
-        this.registry.delete(name);
-        this.toolPaths.delete(name);
-        this.notifyChange();
-        console.log(`[ToolLoader] removed: ${name}`);
-      }
-    } else {
-      const absolutePath = join(this.loaderCtx.globalDir, event.path);
-      this.toolPaths.set(name, absolutePath);
-      this.reload(name, absolutePath, this.loaderCtx)
-        .then(inst => { if (inst) console.log(`[ToolLoader] hot-reloaded: ${name}`); })
-        .catch(err => console.error(`[ToolLoader] reload failed: ${name}`, err));
-    }
+    this.reloadAll()
+      .then(() => console.log(`[ToolLoader] refreshed: ${event.path}`))
+      .catch(err => console.error(`[ToolLoader] refresh failed: ${event.path}`, err));
   }
 
   private matchesConfiguredDir(path: string): boolean {
     if (!this.loaderCtx) return false;
-    const dirs = [
-      this.loaderCtx.globalCapabilityDir ?? join(this.loaderCtx.globalDir, "tools"),
-      this.loaderCtx.localCapabilityDir ?? join(this.loaderCtx.brainDir, "tools"),
-    ];
-    return dirs.some((dir) => {
+    return this.loaderCtx.capabilitySources.some((source) => {
+      const dir = source.dir;
       const prefix = relative(this.loaderCtx!.globalDir, dir).replace(/\\/g, "/");
       return prefix.length > 0 && (path === prefix || path.startsWith(`${prefix}/`));
     });
@@ -110,12 +109,17 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
 
   async load(ctx: LoaderContext): Promise<ToolDefinition[]> {
     this.loaderCtx = ctx;
-    const paths = await this.discover(
-      ctx.globalCapabilityDir ?? join(ctx.globalDir, "tools"),
-      ctx.localCapabilityDir ?? join(ctx.brainDir, "tools"),
-    );
-    this.toolPaths = paths;
-    await this.loadAll(paths, ctx);
+    const descriptors = await discover(ctx.capabilitySources);
+    this.clearRegistry();
+    await this.loadAll(descriptors, ctx);
     return this.allActive();
+  }
+
+  private async reloadAll(): Promise<void> {
+    if (!this.loaderCtx) return;
+    const descriptors = await discover(this.loaderCtx.capabilitySources);
+    this.clearRegistry();
+    await this.loadAll(descriptors, this.loaderCtx);
+    this.notifyChange();
   }
 }
