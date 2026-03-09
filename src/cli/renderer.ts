@@ -701,7 +701,14 @@ export class CLIRenderer {
 
     if (trimmed.startsWith("/")) {
       const cmd = parseCommand(trimmed);
-      if (cmd && this.activeBrain) this.callbacks.onBrainCommand(this.activeBrain, cmd.toolName, cmd.args);
+      if (cmd && this.activeBrain) {
+        this.callbacks.onBrainCommand(this.activeBrain, cmd.toolName, cmd.args);
+        process.stdout.write(`${C.dim}⌘ /${cmd.toolName} 已发送给 ${this.activeBrain}${C.reset}\n`);
+      } else if (!this.activeBrain) {
+        process.stdout.write(`${C.dim}⚠ 没有激活的 brain，命令未发送${C.reset}\n`);
+      } else {
+        process.stdout.write(`${C.dim}⚠ 无法解析命令: ${trimmed}${C.reset}\n`);
+      }
       return;
     }
 
