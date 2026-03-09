@@ -49,7 +49,9 @@ async function main() {
         brain.queueCommand(toolName, args);
       }
     },
-    // Watch context usage ratio for the status bar ring indicator
+    // Watch context usage ratio for the status bar ring indicator.
+    // currentContextUsage is updated by the brain whenever the session switches or a
+    // new LLM response arrives — no session-ID validation needed here.
     watchContextUsage: (brainId, cb) => {
       let contextWindow: number | null = null;
       try {
@@ -62,12 +64,12 @@ async function main() {
         if (modelName) contextWindow = getModelSpec(modelName).contextWindow ?? null;
       } catch { /* ignore */ }
 
-      const toRatio = (value: unknown) => {
+      const toRatio = (value: unknown): number | null => {
         const tokens = typeof value === "number" && value > 0 ? value : null;
         return tokens !== null && contextWindow ? tokens / contextWindow : null;
       };
 
-      // Fire immediately with the current persisted value (watch only fires on changes)
+      // Fire immediately with the persisted value (survives restarts via brainboard.json).
       const current = scheduler.getBrainBoard().get(brainId, "currentContextUsage");
       if (current !== undefined) cb(toRatio(current));
 

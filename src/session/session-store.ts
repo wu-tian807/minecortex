@@ -1,4 +1,5 @@
 import { readFile, writeFile, appendFile, mkdir, rename } from "node:fs/promises";
+import { watch as watchFs } from "node:fs";
 import { join } from "node:path";
 import {
   isMediaContentPart,
@@ -30,6 +31,31 @@ export class SessionStore {
   private brainId: string;
   private pathManager: PathManagerAPI;
   private writeLock: Promise<unknown> = Promise.resolve();
+  /** Last known session ID — used by the fs watcher to deduplicate switch events. */
+  private _cachedSessionId: string | undefined;
+  private _sessionWatcher: ReturnType<typeof watchFs> | null = null;
+
+  // ─── Internal callbacks ───────────────────────────────────────────────────
+  //
+  // Single injection point for the owning brain to react to session lifecycle
+  // events.  Intentionally not a pub/sub bus — there is exactly one consumer
+  // (the brain that owns this session), so a plain callback object is clearer.
+  //
+  // onSessionSwitch(newSid, lastContextUsage)
+  //   Fired whenever the active session pointer changes.
+  //   `lastContextUsage` is the sum of inputTokens+outputTokens from the last
+  //   assistant message in the new session that carries usage data, or null for
+  //   a brand-new empty session.
+  //
+  // onContextUsageChange(sessionId, usage)
+  //   Fired after any write (appendMessages / replaceMessages) that includes at
+  //   least one message with usage data.  Gives the brain a live update without
+  //   having to poll or re-read the file.
+
+  callbacks: {
+    onSessionSwitch?: (newSid: string, lastContextUsage: number | null) => void;
+    onContextUsageChange?: (sessionId: string, usage: number) => void;
+  } = {};
 
   constructor(brainId: string, pathManager: PathManagerAPI) {
     this.brainId = brainId;
@@ -113,6 +139,11 @@ export class SessionStore {
       await mkdir(join(this.pathManager.brainDir(this.brainId)), { recursive: true });
       await this.writeAtomic(this.sessionJsonPath(), JSON.stringify(sessionJson, null, 2));
 
+      // Brand-new empty session — no usage yet.
+      // Update _cachedSessionId so the fs watcher doesn't re-fire when it sees
+      // the session.json we just wrote.
+      this._cachedSessionId = sid;
+      this.callbacks.onSessionSwitch?.(sid, null);
       return sid;
     });
   }
@@ -131,6 +162,7 @@ export class SessionStore {
     }
 
     const { messages, parseErrorLine } = await this.parseSessionLines(raw, id);
+
     return { sessionId: id, raw, messages, parseErrorLine };
   }
 
@@ -142,6 +174,10 @@ export class SessionStore {
       const serialized = msgs.map((msg) => this.serializeMessage(msg));
       const content = serialized.map((msg) => JSON.stringify(msg)).join("\n") + "\n";
       await appendFile(this.messagesPath(id), content, "utf-8");
+
+      // Notify after the write so the brain can update its context-usage tracker.
+      const usage = this.lastUsageFrom(msgs);
+      if (usage !== null) this.callbacks.onContextUsageChange?.(id, usage);
     });
   }
 
@@ -155,22 +191,77 @@ export class SessionStore {
       const serialized = messages.map((msg) => this.serializeMessage(msg));
       const content = serialized.map((msg) => JSON.stringify(msg)).join("\n") + "\n";
       await this.writeAtomic(this.messagesPath(sid), content);
+
+      // replaceMessages is used by compact (newSession) and repair — notify if there is usage.
+      const usage = this.lastUsageFrom(messages);
+      if (usage !== null) this.callbacks.onContextUsageChange?.(sid, usage);
     });
   }
 
-  async updateResponseApiState(lastResponseId: string, provider: string): Promise<void> {
+  /**
+   * Immediately read the current session from disk and fire onSessionSwitch with the
+   * derived lastContextUsage.  Call this once on brain startup so the status bar shows
+   * the correct value before the first LLM call arrives.
+   */
+  async forceSync(): Promise<void> {
+    const id = await this.currentSessionId();
+    if (!id) return;
+    // Use an explicit sid so the implicit-switch detection in loadSessionMessages is skipped;
+    // we then fire onSessionSwitch manually with the computed usage.
+    const loaded = await this.loadSessionMessages(id);
+    const usage = this.lastUsageFrom(loaded?.messages ?? []);
+    this._cachedSessionId = id;
+    this.callbacks.onSessionSwitch?.(id, usage);
+  }
+
+  /**
+   * Watch session.json for external changes (e.g. user switching sessions via the
+   * renderer while the brain is idle).  Fires onSessionSwitch whenever the
+   * currentSessionId actually changes — without needing an in-flight agent loop.
+   */
+  startWatch(): void {
+    if (this._sessionWatcher) return;
+    const path = this.sessionJsonPath();
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    try {
+      this._sessionWatcher = watchFs(path, { persistent: false }, () => {
+        if (debounce) clearTimeout(debounce);
+        debounce = setTimeout(() => { this.handleSessionJsonChange().catch(() => {}); }, 100);
+      });
+    } catch { /* session.json may not exist yet — non-critical */ }
+  }
+
+  private async handleSessionJsonChange(): Promise<void> {
+    const id = await this.currentSessionId();
+    // Only react when the session pointer actually changed.
+    if (!id || id === this._cachedSessionId) return;
+    await this.forceSync();
+  }
+
+  /** Extract the last inputTokens+outputTokens sum from a message list, or null. */
+  private lastUsageFrom(messages: LLMMessage[]): number | null {
+    const last = [...messages].reverse().find(m => m.usage);
+    if (!last?.usage) return null;
+    return last.usage.inputTokens + last.usage.outputTokens;
+  }
+
+  /** Merge arbitrary fields into session.json without clobbering unrelated keys. */
+  async updateSessionMeta(updates: Record<string, unknown>): Promise<void> {
     await this.withWriteLock(async () => {
-      let data: SessionJson;
+      let data: Record<string, unknown>;
       try {
-        const raw = await readFile(this.sessionJsonPath(), "utf-8");
-        data = JSON.parse(raw);
+        data = JSON.parse(await readFile(this.sessionJsonPath(), "utf-8"));
       } catch {
         const sid = await this.currentSessionId();
         data = { currentSessionId: sid ?? "" };
       }
-      data.responseApi = { lastResponseId, provider };
+      Object.assign(data, updates);
       await this.writeAtomic(this.sessionJsonPath(), JSON.stringify(data, null, 2));
     });
+  }
+
+  async updateResponseApiState(lastResponseId: string, provider: string): Promise<void> {
+    await this.updateSessionMeta({ responseApi: { lastResponseId, provider } });
   }
 
   async newSession(initialMessages?: LLMMessage[]): Promise<string> {

@@ -83,6 +83,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       subscriptions: dynamicSubscriptions,
       pathManager,
       workspace,
+      sessionManager,
       trackBackgroundTask: opts.trackBackgroundTask,
       logger,
     };
@@ -143,10 +144,9 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
 
       lastResponse = response;
 
-      if (response.usage) {
-        brainBoard.set(brainId, "currentContextUsage",
-          response.usage.inputTokens + response.usage.outputTokens);
-      }
+      // currentContextUsage is updated via SessionStore.onContextUsageChange, which fires
+      // inside appendAssistantTurn (below) whenever the assistant message carries usage data.
+      // No manual brainBoard write needed here.
 
       let content = response.content;
       const hasThinking = showThinking && response.thinking;
@@ -257,6 +257,30 @@ export class ConsciousBrain extends BaseBrain {
     this.sessionManager = config.sessionManager;
     this.modelSpec = config.modelSpec;
     this.workspace = config.workspace;
+
+    // ─── Built-in brainBoard vars ────────────────────────────────────────────
+    //
+    // Two tiers, both wired up here so the session layer stays free of any
+    // brainBoard / token-accounting knowledge:
+    //
+    //   persisted  — survive process restarts (written to brainboard.json)
+    //     • currentContextUsage: inputTokens + outputTokens for the current session
+    //
+    //   memory     — in-process only (persist: false)
+    //     • currentSessionId: lets the renderer validate its ring subscription
+
+    this.sessionManager.setCallbacks({
+      onSessionSwitch: (_newSid, lastContextUsage) => {
+        if (lastContextUsage !== null) {
+          this.brainBoard.set(this.id, "currentContextUsage", lastContextUsage);
+        } else {
+          this.brainBoard.remove(this.id, "currentContextUsage");
+        }
+      },
+      onContextUsageChange: (_sessionId, usage) => {
+        this.brainBoard.set(this.id, "currentContextUsage", usage);
+      },
+    });
   }
 
   updateTools(tools: ToolDefinition[]): void {
@@ -428,6 +452,7 @@ export class ConsciousBrain extends BaseBrain {
       subscriptions: this.dynamicSubscriptions,
       pathManager: this.pathManager,
       workspace: this.workspace,
+      sessionManager: this.sessionManager,
       trackBackgroundTask: (p) => {
         this.pendingTasks.add(p);
         p.finally(() => this.pendingTasks.delete(p));

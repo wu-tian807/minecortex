@@ -26,6 +26,26 @@ export class SessionManager implements ToolLifecycleSink {
     return this.store.currentSessionId();
   }
 
+  /**
+   * Inject internal callbacks for session lifecycle events.
+   * This is the single injection point for the owning brain — not a pub/sub bus.
+   *
+   * `onSessionSwitch` behaves like a BehaviorSubject: it fires once immediately
+   * for the current session so the caller never needs a separate startup-sync call.
+   */
+  setCallbacks(cbs: {
+    onSessionSwitch?: (newSid: string, lastContextUsage: number | null) => void;
+    onContextUsageChange?: (sessionId: string, usage: number) => void;
+  }): void {
+    Object.assign(this.store.callbacks, cbs);
+    if (cbs.onSessionSwitch) {
+      // BehaviorSubject semantics: fire immediately for current session.
+      this.store.forceSync().catch(() => {});
+      // Also watch for external switches while the brain is idle.
+      this.store.startWatch();
+    }
+  }
+
   async createSession(): Promise<string> {
     return this.store.createSession();
   }
@@ -62,6 +82,12 @@ export class SessionManager implements ToolLifecycleSink {
     return this.store.loadSessionMessages(sid);
   }
 
+  /** Narrow-typed alias for ToolContext.SessionManagerAPI — returns only messages. */
+  async loadSnapshot(sid: string): Promise<{ messages: LLMMessage[] } | null> {
+    const loaded = await this.store.loadSessionMessages(sid);
+    return loaded ? { messages: loaded.messages } : null;
+  }
+
   async loadPromptHistory(options: PromptHistoryOptions = {}, sid?: string): Promise<LLMMessage[]> {
     const messages = await this.loadSession(sid);
     return compactPromptHistory(messages, options);
@@ -89,6 +115,10 @@ export class SessionManager implements ToolLifecycleSink {
     sid?: string,
   ): Promise<void> {
     await this.appendMessage(createToolResultMessage(toolCall, result), sid);
+  }
+
+  async updateSessionMeta(updates: Record<string, unknown>): Promise<void> {
+    await this.store.updateSessionMeta(updates);
   }
 
   async updateResponseApiState(lastResponseId: string, provider: string): Promise<void> {
