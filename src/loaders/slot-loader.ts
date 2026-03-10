@@ -3,7 +3,7 @@ import type { ContextSlot, SlotFactory, SlotContext } from "../context/types.js"
 import type { CapabilityDescriptor, FSWatcherAPI, FSChangeEvent } from "../core/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
-import { AbstractContentLoader } from "./content-loader.js";
+import { registerMdPatterns } from "./scanner.js";
 
 type SlotModule = { default: SlotFactory };
 
@@ -80,14 +80,9 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
       (event) => this.invalidateBrainSlot(event, "soul"),
     );
 
-    // directives / skills — 通过 AbstractContentLoader 静态工具注册，
-    // 覆盖 global 和 local 两层，避免 src/ 反向依赖 slots/lib/
-    AbstractContentLoader.registerContentPatterns(watcher, "directives", (path) => {
-      this.invalidateBrainSlot({ path } as FSChangeEvent, "directives");
-    });
-    AbstractContentLoader.registerContentPatterns(watcher, "skills", (path) => {
-      this.invalidateBrainSlot({ path } as FSChangeEvent, "skills");
-    });
+    // directives / skills — 三层 .md watch，通过 scanner 工具函数注册
+    registerMdPatterns(watcher, "directives", (e) => this.invalidateBrainSlot(e, "directives"));
+    registerMdPatterns(watcher, "skills",     (e) => this.invalidateBrainSlot(e, "skills"));
   }
 
   // ─── 公共 API ───

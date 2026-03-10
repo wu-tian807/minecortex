@@ -74,7 +74,19 @@ export interface ModelSpec {
 // ─── Brain Config ───
 
 export interface CapabilitySelector {
+  /**
+   * Controls the global (framework) source layer (source.id === "global").
+   *   "all"  → include all framework capabilities
+   *   "none" → include none (default)
+   */
   global: "all" | "none";
+  /**
+   * Controls the bundle-shared source layer (source.id === "bundle").
+   * Shared across all brains in the bundle.
+   *   "all"  → include all bundle-shared capabilities
+   *   "none" → include none (default when absent)
+   */
+  bundle?: "all" | "none";
   enable?: string[];
   disable?: string[];
   config?: Record<string, Record<string, unknown>>;
@@ -90,6 +102,8 @@ export interface CapabilityDescriptor {
   tag?: string;
   exposedName: string;
   path: string;
+  /** Source layer id this descriptor was scanned from (e.g. "global" or brainId). */
+  sourceId?: string;
 }
 
 export interface CapabilityPathRedirects {
@@ -143,8 +157,6 @@ export interface BrainJson {
     keepMedias?: number;
   };
 
-  /** 环境变量（注入到 shell 执行环境） */
-  env?: Record<string, string>;
 
   /** 时区，默认 Asia/Shanghai */
   timezone?: string;
@@ -300,6 +312,12 @@ export interface CapabilityLayerAPI {
   subscriptionsDir(): string;
   /** 动态扩展能力（directives、skills 等），按名称取该层对应目录 */
   extraDir(name: string): string;
+  /**
+   * 按 kind 名称取该层对应的能力目录。
+   * 内置 kind（tools / slots / subscriptions）走各自专用方法；
+   * 其余 kind 走 extraDir(kind)，方便自定义 loader 无需硬编码路径。
+   */
+  capabilityDir(kind: string): string;
 }
 
 /** Global 层：根目录级，长期稳定，AI 默认只读（evolve 模式除外） */

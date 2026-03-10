@@ -12,11 +12,15 @@
  * 组合：
  *   combineScan(...fns)    — 多策略合并（用于同时扫描文件和目录的混合场景）
  *
+ * FSWatcher 辅助：
+ *   registerMdPatterns(watcher, kind, cb)  — 为指定 kind 注册三层 .md 文件 watch
+ *
  * BaseLoader 通过 protected scanFn() 虚方法让子类选择策略，无需修改 discover()。
  */
 
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import type { FSWatcherAPI, FSChangeEvent } from "../core/types.js";
 import type {
   CapabilityDescriptor,
   CapabilitySelector,
@@ -135,6 +139,7 @@ export function combineScan(...fns: ScanFn[]): ScanFn {
 
 /**
  * 扫描所有 sources（后者覆盖前者），并解决 exposedName 冲突（多 source 同名 → 追加 @tag）。
+ * 每个 descriptor 携带 sourceId，供 filterByCapability 做 bundle 层级过滤。
  * @param scan - 扫描策略函数，默认为 flatFilesAndTags(".ts")
  */
 export async function discover(
@@ -144,7 +149,7 @@ export async function discover(
   const preferred = new Map<string, CapabilityDescriptor>();
   for (const source of sources) {
     for (const entry of await scan(source)) {
-      preferred.set(`${entry.tag ?? ""}:${entry.name}`, entry);
+      preferred.set(`${entry.tag ?? ""}:${entry.name}`, { ...entry, sourceId: source.id });
     }
   }
 
@@ -159,21 +164,55 @@ export async function discover(
 
 // ─── filterByCapability ───
 
-/** Filters descriptors by a CapabilitySelector (global/enable/disable/tag tokens). */
+/**
+ * Filters descriptors by a CapabilitySelector.
+ *
+ * Three source layers with independent rules:
+ *
+ *   local  (sourceId !== "global" && sourceId !== "bundle")
+ *          → ALWAYS loaded. Brain's own directory, not gated by any field.
+ *
+ *   bundle (sourceId === "bundle")
+ *          → controlled by selector.bundle ("all"|"none", default "none").
+ *
+ *   global (sourceId === "global")
+ *          → controlled by selector.global ("all"|"none", default "none").
+ *
+ * After layer defaults, enable[] adds and disable[] removes individual items
+ * across any layer (including local).
+ *
+ * Examples:
+ *   { global:"none", bundle:"none" }  → local only          (standard default)
+ *   { global:"none", bundle:"all"  }  → local + bundle
+ *   { global:"all",  bundle:"none" }  → local + global
+ *   { global:"all",  bundle:"all"  }  → all three layers
+ *   { global:"none", bundle:"none", enable:["x"] } → local + explicitly named "x"
+ */
 export function filterByCapability(
   descriptors: CapabilityDescriptor[],
   selector: CapabilitySelector,
 ): CapabilityDescriptor[] {
   const selected = new Map<string, CapabilityDescriptor>();
 
-  if (selector.global === "all") {
-    for (const d of descriptors) selected.set(d.exposedName, d);
-  } else {
-    for (const token of selector.enable ?? []) {
-      for (const d of resolveToken(token, descriptors)) selected.set(d.exposedName, d);
+  // Step 1: layer defaults
+  for (const d of descriptors) {
+    if (d.sourceId !== "global" && d.sourceId !== "bundle") {
+      // local layer — always included
+      selected.set(d.exposedName, d);
+    } else if (d.sourceId === "bundle") {
+      if ((selector.bundle ?? "none") === "all") selected.set(d.exposedName, d);
+    } else {
+      // global layer
+      if ((selector.global ?? "none") === "all") selected.set(d.exposedName, d);
     }
   }
 
+  // Step 2: explicit enable[] — adds from any layer regardless of defaults
+  for (const token of selector.enable ?? []) {
+    for (const d of resolveToken(token, descriptors)) selected.set(d.exposedName, d);
+  }
+
+  // Step 3: explicit disable[] — removes from any layer, including local
   for (const token of selector.disable ?? []) {
     for (const d of resolveToken(token, descriptors)) selected.delete(d.exposedName);
   }
@@ -200,4 +239,25 @@ function resolveToken(token: string, descriptors: CapabilityDescriptor[]): Capab
     console.warn(`[scanner] ambiguous bare capability "${token}", use "name@tag" instead`);
   }
   return [];
+}
+
+// ─── FSWatcher 辅助 ───
+
+/**
+ * 为指定 kind 在三层目录上注册 .md 文件 watch pattern。
+ * 供实现了 scanSync 的内容型 loader（directives、skills 等）在 registerWatchers
+ * 中调用，无需各自重复写层级 regex。
+ *
+ *   global layer : {kind}/*.md
+ *   bundle layer : bundle/{kind}/*.md
+ *   local  layer : bundle/brains/{brainId}/{kind}/*.md
+ */
+export function registerMdPatterns(
+  watcher: FSWatcherAPI,
+  kind: string,
+  onChanged: (event: FSChangeEvent) => void,
+): void {
+  watcher.register(new RegExp(`^${kind}/[^/]+\\.md$`), onChanged);
+  watcher.register(new RegExp(`^bundle/${kind}/[^/]+\\.md$`), onChanged);
+  watcher.register(new RegExp(`^bundle/brains/[^/]+/${kind}/[^/]+\\.md$`), onChanged);
 }

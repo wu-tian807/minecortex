@@ -37,26 +37,18 @@ export abstract class BaseLoader<TFactory, TInstance> {
   static buildSources(
     pm: PathManagerAPI,
     brainId: string,
-    kind: "tools" | "slots" | "subscriptions",
+    kind: string,
     redirected?: string,
   ): CapabilitySource[] {
-    const g = pm.global();
-    const globalDir = kind === "tools" ? g.toolsDir()
-      : kind === "slots" ? g.slotsDir()
-      : g.subscriptionsDir();
-
-    const l = pm.local(brainId);
-    const defaultLocal = kind === "tools" ? l.toolsDir()
-      : kind === "slots" ? l.slotsDir()
-      : l.subscriptionsDir();
-
     const localDir = redirected
       ? (isAbsolute(redirected) ? redirected : redirected)
-      : defaultLocal;
+      : pm.local(brainId).capabilityDir(kind);
 
+    // Source order: later entries override earlier on name collision → local wins.
     return [
-      { id: "global", dir: globalDir },
-      { id: brainId, dir: localDir },
+      { id: "global", dir: pm.global().capabilityDir(kind) },
+      { id: "bundle", dir: pm.bundle().capabilityDir(kind) },
+      { id: brainId,  dir: localDir },
     ];
   }
 
@@ -66,8 +58,9 @@ export abstract class BaseLoader<TFactory, TInstance> {
     name: string,
   ): CapabilitySource[] {
     return [
-      { id: "global", dir: pm.global().extraDir(name) },
-      { id: brainId, dir: pm.local(brainId).extraDir(name) },
+      { id: "global", dir: pm.global().capabilityDir(name) },
+      { id: "bundle", dir: pm.bundle().capabilityDir(name) },
+      { id: brainId,  dir: pm.local(brainId).capabilityDir(name) },
     ];
   }
 
@@ -183,6 +176,18 @@ export abstract class BaseLoader<TFactory, TInstance> {
     this.logBrainId = brainId;
   }
 
+  /**
+   * Load all capabilities that pass the CapabilitySelector in ctx.selector.
+   *
+   * Selector filtering is centralised here — every subclass (ToolLoader, SlotLoader,
+   * SubscriptionLoader, and any future loader) gets it automatically by calling
+   * _loadInternal() → loadAll(). No loader needs to re-implement this logic.
+   *
+   * The selector itself is read from brain.json by the Scheduler and passed in via
+   * LoaderContext. configure_tools / configure_slots / configure_subscriptions write
+   * changes back to brain.json; the FSWatcher picks them up and calls reloadAll(),
+   * which feeds the new selector into the next loadAll() call.
+   */
   async loadAll(
     descriptors: CapabilityDescriptor[],
     ctx: LoaderContext,

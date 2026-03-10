@@ -22,6 +22,14 @@ export function getPathManager(): PathManager {
 
 // ─── Layer implementations ───────────────────────────────────────────────────
 
+// capabilityDir 是 CapabilityLayerAPI 的统一入口，避免调用方硬编码 kind 判断。
+function resolveCapabilityDir(layer: { toolsDir(): string; slotsDir(): string; subscriptionsDir(): string; extraDir(n: string): string }, kind: string): string {
+  if (kind === "tools") return layer.toolsDir();
+  if (kind === "slots") return layer.slotsDir();
+  if (kind === "subscriptions") return layer.subscriptionsDir();
+  return layer.extraDir(kind);
+}
+
 class GlobalLayer implements GlobalLayerAPI {
   constructor(private readonly r: string) {}
 
@@ -30,6 +38,7 @@ class GlobalLayer implements GlobalLayerAPI {
   slotsDir() { return join(this.r, "slots"); }
   subscriptionsDir() { return join(this.r, "subscriptions"); }
   extraDir(name: string) { return join(this.r, name); }
+  capabilityDir(kind: string) { return resolveCapabilityDir(this, kind); }
   logsDir(brainId?: string) { return brainId ? join(this.r, "logs", brainId) : join(this.r, "logs"); }
   keyDir() { return join(this.r, "key"); }
 }
@@ -42,6 +51,7 @@ class BundleLayer implements BundleLayerAPI {
   slotsDir() { return join(this.r, "slots"); }
   subscriptionsDir() { return join(this.r, "subscriptions"); }
   extraDir(name: string) { return join(this.r, name); }
+  capabilityDir(kind: string) { return resolveCapabilityDir(this, kind); }
   brainsDir() { return join(this.r, "brains"); }
   sharedDir(sub?: string) { return sub ? join(this.r, "shared", sub) : join(this.r, "shared"); }
 }
@@ -55,6 +65,7 @@ class LocalLayer implements LocalLayerAPI {
   slotsDir() { return join(this.r, "slots"); }
   subscriptionsDir() { return join(this.r, "subscriptions"); }
   extraDir(name: string) { return join(this.r, name); }
+  capabilityDir(kind: string) { return resolveCapabilityDir(this, kind); }
 }
 
 // ─── PathManager ─────────────────────────────────────────────────────────────

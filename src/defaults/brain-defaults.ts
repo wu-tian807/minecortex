@@ -2,11 +2,19 @@
 
 import type { BrainJson, CapabilitySelector } from "../core/types.js";
 
-/** Default capability selector: enable all from global */
-export const DEFAULT_SELECTOR_ALL: CapabilitySelector = { global: "all" };
+/**
+ * Load everything from all three layers.
+ */
+export const DEFAULT_SELECTOR_ALL: CapabilitySelector = { global: "all", bundle: "all" };
 
-/** Default capability selector: disable all from global */
-export const DEFAULT_SELECTOR_NONE: CapabilitySelector = { global: "none" };
+/**
+ * Load only from the brain's local layer (global and bundle both off).
+ * This is the standard default: a brain starts isolated and opts in to
+ * shared/framework capabilities explicitly via enable[] or by setting
+ * global/bundle to "all".
+ */
+export const DEFAULT_SELECTOR_LOCAL_ONLY: CapabilitySelector = { global: "none", bundle: "none" };
+
 
 /** Centralized default values for BrainJson */
 export const BRAIN_DEFAULTS = {
@@ -25,10 +33,14 @@ export const BRAIN_DEFAULTS = {
   /** 时区 */
   timezone: "Asia/Shanghai",
 
-  /** 能力选择器默认值 */
-  subscriptions: DEFAULT_SELECTOR_NONE,
-  tools: DEFAULT_SELECTOR_ALL,
-  slots: DEFAULT_SELECTOR_ALL,
+  /**
+   * Capability selector defaults — local layer always loads unconditionally.
+   * global and bundle are both "none" so a brain without an explicit selector
+   * in brain.json gets only its own local capabilities.
+   */
+  subscriptions: DEFAULT_SELECTOR_LOCAL_ONLY,
+  tools: DEFAULT_SELECTOR_LOCAL_ONLY,
+  slots: DEFAULT_SELECTOR_LOCAL_ONLY,
 } as const;
 
 /** Resolve a BrainJson field with default fallback */
