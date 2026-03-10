@@ -190,7 +190,7 @@ export class Logger {
 
   constructor(pathManager: PathManagerAPI) {
     this.pathManager = pathManager;
-    this.logsDir = pathManager.logsDir();
+    this.logsDir = pathManager.global().logsDir();
     mkdirSync(this.logsDir, { recursive: true });
     this.globalDebugPath = join(this.logsDir, "debug.log");
     this.globalDebugStream = createWriteStream(this.globalDebugPath, { flags: "a" });
@@ -249,7 +249,7 @@ export class Logger {
   private getOrCreateBrainLogger(brainId: string): BrainFileLogger {
     let bl = this.brainLoggers.get(brainId);
     if (!bl) {
-      const logDir = this.pathManager!.logsDir(brainId);
+      const logDir = this.pathManager!.global().logsDir(brainId);
       bl = new BrainFileLogger(logDir);
       this.brainLoggers.set(brainId, bl);
     }

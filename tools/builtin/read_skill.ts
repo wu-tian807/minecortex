@@ -2,29 +2,19 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { ToolDefinition } from "../src/core/types.js";
 
-const ROOT = process.cwd();
-
-function findSkillFile(name: string, brainId: string): string | null {
-  const dirs = [
-    join(ROOT, "brains", brainId, "skills"),
-    join(ROOT, "skills"),
-  ];
-
+function findSkill(name: string, dirs: string[]): string | null {
   for (const dir of dirs) {
     try {
-      const files = readdirSync(dir);
-      for (const f of files) {
-        if (!f.endsWith(".md")) continue;
-        const filePath = join(dir, f);
+      for (const file of readdirSync(dir)) {
+        if (!file.endsWith(".md")) continue;
+        const filePath = join(dir, file);
         const raw = readFileSync(filePath, "utf-8");
         const match = raw.match(/^---\n[\s\S]*?name\s*:\s*(.+)\n[\s\S]*?\n---/);
         if (match && match[1].trim().replace(/^["']|["']$/g, "") === name) {
           return filePath;
         }
       }
-    } catch {
-      // directory doesn't exist
-    }
+    } catch { /* directory doesn't exist */ }
   }
   return null;
 }
@@ -45,12 +35,14 @@ export default {
   },
   async execute(args, ctx) {
     const name = String(args.name);
-    const skillPath = findSkillFile(name, ctx.brainId);
-    if (!skillPath) {
-      return `Skill "${name}" not found.`;
-    }
+    // local 优先于 global（与 SkillsLoader 语义一致）
+    const dirs = [
+      ctx.pathManager.local(ctx.brainId).extraDir("skills"),
+      ctx.pathManager.global().extraDir("skills"),
+    ];
+    const skillPath = findSkill(name, dirs);
+    if (!skillPath) return `Skill "${name}" not found.`;
     const raw = readFileSync(skillPath, "utf-8");
-    const stripped = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
-    return stripped.trim();
+    return raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trim();
   },
 } satisfies ToolDefinition;

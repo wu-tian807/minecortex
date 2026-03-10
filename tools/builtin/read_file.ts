@@ -28,7 +28,7 @@ const MEDIA_MAP: Record<string, { mime: string; modality: InputModality }> = {
 /** Read the current brain's model name then look up its supported input modalities. */
 async function getBrainInputModalities(ctx: ToolContext): Promise<InputModality[]> {
   try {
-    const brainDir = ctx.pathManager.brainDir(ctx.brainId);
+    const brainDir = ctx.pathManager.local(ctx.brainId).root();
     const raw = await readFile(join(brainDir, "brain.json"), "utf-8");
     const brainJson = JSON.parse(raw) as { models?: { model?: string }; model?: string };
     const model = brainJson.models?.model ?? brainJson.model;

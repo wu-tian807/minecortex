@@ -70,7 +70,7 @@ export class TerminalManager implements TerminalManagerAPI {
   // ─── Path helpers ───
 
   private logDirFor(brainId: string): string {
-    return join(this.pathManager.brainDir(this.baseBrainId(brainId)), "workspace", "terminate");
+    return join(this.pathManager.local(this.baseBrainId(brainId)).root(), "workspace", "terminate");
   }
 
   private baseBrainId(brainId: string): string {
@@ -90,7 +90,7 @@ export class TerminalManager implements TerminalManagerAPI {
   async loadBrainEnv(brainId: string): Promise<void> {
     const base = this.baseBrainId(brainId);
     try {
-      const raw = await readFile(join(this.pathManager.brainDir(base), "brain.json"), "utf-8");
+      const raw = await readFile(join(this.pathManager.local(base).root(), "brain.json"), "utf-8");
       const config: BrainJson = JSON.parse(raw);
       if (config.env) this.brainEnvCache.set(base, config.env);
     } catch { /* no env to load */ }

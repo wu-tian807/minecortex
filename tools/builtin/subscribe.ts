@@ -30,7 +30,7 @@ export default {
     const name = String(args.name);
     const config = args.config as Record<string, unknown> | undefined;
 
-    const brainJsonPath = join(ctx.pathManager.brainDir(ctx.brainId), "brain.json");
+    const brainJsonPath = join(ctx.pathManager.local(ctx.brainId).root(), "brain.json");
 
     let brainConfig: BrainJson;
     try {

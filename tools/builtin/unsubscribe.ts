@@ -24,7 +24,7 @@ export default {
   async execute(args, ctx): Promise<ToolOutput> {
     const name = String(args.name);
 
-    const brainJsonPath = join(ctx.pathManager.brainDir(ctx.brainId), "brain.json");
+    const brainJsonPath = join(ctx.pathManager.local(ctx.brainId).root(), "brain.json");
 
     let brainConfig: BrainJson;
     try {

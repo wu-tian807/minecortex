@@ -274,13 +274,70 @@ export interface EventSource {
   stop(): void;
 }
 
-// ─── PathManager ───
+// ─── PathManager 分层接口 ─────────────────────────────────────────────────────
+//
+// 三层模型（优先级：local > bundle > global）：
+//   global()          — 根目录，系统公共能力，长期稳定，所有 bundle 可读
+//   bundle()          — bundle/ 层，当前活跃 bundle 的共享运行时
+//   local(brainId)    — bundle/brains/{id}/ 层，单个 brain 的私有空间
+//
+// 每层都有三种内置核心能力目录（tools/slots/subscriptions）和动态扩展目录。
+// 用法示例：
+//   pathManager.global().toolsDir()                    → tools/
+//   pathManager.global().extraDir("directives")        → directives/
+//   pathManager.bundle().brainsDir()                   → bundle/brains/
+//   pathManager.bundle().sharedDir("workspace")        → bundle/shared/workspace/
+//   pathManager.local("coder").toolsDir()              → bundle/brains/coder/tools/
+//   pathManager.local("coder").root()                  → bundle/brains/coder/
+
+/** 三层共享的能力目录访问接口 */
+export interface CapabilityLayerAPI {
+  /** 内置能力：tools */
+  toolsDir(): string;
+  /** 内置能力：slots */
+  slotsDir(): string;
+  /** 内置能力：subscriptions */
+  subscriptionsDir(): string;
+  /** 动态扩展能力（directives、skills 等），按名称取该层对应目录 */
+  extraDir(name: string): string;
+}
+
+/** Global 层：根目录级，长期稳定，AI 默认只读（evolve 模式除外） */
+export interface GlobalLayerAPI extends CapabilityLayerAPI {
+  root(): string;
+  logsDir(brainId?: string): string;
+  keyDir(): string;
+}
+
+/** Bundle 层：bundle/ 运行时，当前活跃 bundle 的可写共享空间 */
+export interface BundleLayerAPI extends CapabilityLayerAPI {
+  /** bundle/ */
+  root(): string;
+  /** bundle/brains/ */
+  brainsDir(): string;
+  /** bundle/shared/{sub?} */
+  sharedDir(sub?: string): string;
+}
+
+/** Local 层：bundle/brains/{brainId}/，单个 brain 的私有可写空间 */
+export interface LocalLayerAPI extends CapabilityLayerAPI {
+  /** bundle/brains/{brainId}/ */
+  root(): string;
+}
 
 export interface PathManagerAPI {
+  /** 项目根目录 */
   root(): string;
-  dir(name: string): string;
-  brainDir(brainId: string): string;
-  logsDir(brainId?: string): string;
+  /** Global 层（tools/ slots/ subscriptions/ 等公共能力） */
+  global(): GlobalLayerAPI;
+  /** Bundle 层（bundle/brains/ bundle/shared/ 等运行时目录） */
+  bundle(): BundleLayerAPI;
+  /** Local 层（bundle/brains/{brainId}/ 单个 brain 私有目录） */
+  local(brainId: string): LocalLayerAPI;
+  /** packs/{packId}/ */
+  packDir(packId: string): string;
+  /** backups/{backupId}/ */
+  backupDir(backupId: string): string;
   resolve(input: { path: string; brain?: string }, callerBrainId: string): string;
   checkPermission(absPath: string, op: "read" | "write", callerBrainId: string, evolve: boolean): boolean;
 }

@@ -1,22 +1,17 @@
-import { relative } from "node:path";
 import type {
   CapabilityDescriptor,
   EventSource,
   EventSourceFactory,
   SourceContext,
   CapabilitySelector,
-  FSWatcherAPI,
-  BrainBoardAPI,
-  BrainContextAPI,
-  PathManagerAPI,
-  Event,
   DynamicSubscriptionAPI,
+  Event,
+  BrainContextAPI,
 } from "../core/types.js";
-import type { BrainHooksAPI } from "../hooks/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
 import { runWithLogContext } from "../core/logger.js";
-import { discover, filterByCapability } from "./scanner.js";
+import { filterByCapability } from "./scanner.js";
 
 interface SubscriptionEntry {
   source: EventSource;
@@ -65,6 +60,8 @@ export class SubscriptionLoader extends BaseLoader<SubscriptionModule, Subscript
     this.brainContext = ctx;
   }
 
+  // ─── BaseLoader 抽象接口 ───
+
   async importFactory(path: string): Promise<SubscriptionModule> {
     return await import(path);
   }
@@ -111,36 +108,14 @@ export class SubscriptionLoader extends BaseLoader<SubscriptionModule, Subscript
     } catch { /* already stopped */ }
   }
 
-  private lastCtx: LoaderContext | null = null;
-  registerWatchPatterns(watcher: FSWatcherAPI): void {
-    const handler = (event: import("../core/types.js").FSChangeEvent) => {
-      if (!this.lastCtx) return;
-      if (!this.matchesConfiguredDir(event.path)) return;
-      this.reloadAll()
-        .then(() => console.log(`[SubscriptionLoader] refreshed: ${event.path}`))
-        .catch(err => console.error(`[SubscriptionLoader] refresh failed: ${event.path}`, err));
-    };
-    watcher.register(/^subscriptions(?:\/[^/]+)?\/[^/]+\.ts$/, handler);
-    watcher.register(/^brains\/[^/]+\/subscriptions(?:\/[^/]+)?\/[^/]+\.ts$/, handler);
-  }
-
-  private matchesConfiguredDir(path: string): boolean {
-    if (!this.lastCtx) return false;
-    return this.lastCtx.capabilitySources.some((source) => {
-      const dir = source.dir;
-      const prefix = relative(this.lastCtx!.globalDir, dir).replace(/\\/g, "/");
-      return prefix.length > 0 && (path === prefix || path.startsWith(`${prefix}/`));
-    });
-  }
+  // ─── 公共 API ───
 
   async load(ctx: LoaderContext): Promise<EventSource[]> {
-    this.lastCtx = ctx;
-    const descriptors = await discover(ctx.capabilitySources);
-    this.clearRegistry();
-    await this.loadAll(descriptors, ctx);
+    await this._loadInternal(ctx);
     return [...this.registry.values()].map((e) => e.source);
   }
 
+  /** 按 selector 变更差量启停 subscription，不走完整 reload。 */
   reconcile(
     oldSelector: CapabilitySelector,
     newSelector: CapabilitySelector,
@@ -162,12 +137,5 @@ export class SubscriptionLoader extends BaseLoader<SubscriptionModule, Subscript
     }
 
     return { toStart, toStop };
-  }
-
-  private async reloadAll(): Promise<void> {
-    if (!this.lastCtx) return;
-    const descriptors = await discover(this.lastCtx.capabilitySources);
-    this.clearRegistry();
-    await this.loadAll(descriptors, this.lastCtx);
   }
 }

@@ -9,7 +9,6 @@ import type {
   ModelsConfig,
   BrainInitConfig,
   CapabilitySelector,
-  CapabilitySource,
   CapabilityPathRedirects,
 } from "./types.js";
 import { EventBus } from "./event-bus.js";
@@ -17,12 +16,13 @@ import { BrainBoard } from "./brain-board.js";
 import { ConsciousBrain, type ConsciousBrainInitConfig } from "./brain.js";
 import { ScriptBrain } from "./script-brain.js";
 import { BaseBrain } from "./base-brain.js";
+import { BaseLoader } from "../loaders/base-loader.js";
 import { ToolLoader } from "../loaders/tool-loader.js";
 import { SubscriptionLoader } from "../loaders/subscription-loader.js";
 import { SlotLoader } from "../loaders/slot-loader.js";
 import { ContextEngine } from "../context/context-engine.js";
 import { SlotRegistry } from "../context/slot-registry.js";
-import { PathManager } from "../fs/path-manager.js";
+import { initPathManager, type PathManager } from "../fs/path-manager.js";
 import { createFSWatcher, getFSWatcher, type FSWatcher } from "../fs/watcher.js";
 import { getTerminalManager, initTerminalManager } from "../terminal/manager.js";
 import { SessionManager } from "../session/session-manager.js";
@@ -65,11 +65,11 @@ function resolveModelsConfig(
 }
 
 export class Scheduler {
-  private eventBus = new EventBus();
-  private brainBoard = new BrainBoard(join(ROOT, "brains"));
-  private pathManager = new PathManager(ROOT);
-  private terminalManager = initTerminalManager(this.pathManager);
-  private logger = new Logger(this.pathManager);
+  private readonly pathManager: PathManager;
+  private readonly brainBoard: BrainBoard;
+  private readonly terminalManager: ReturnType<typeof initTerminalManager>;
+  private readonly logger: Logger;
+  private readonly eventBus = new EventBus();
   private get fsWatcher(): FSWatcher | null { return getFSWatcher(); }
   private brains = new Map<string, BaseBrain>();
   private shuttingDown = false;
@@ -77,6 +77,10 @@ export class Scheduler {
 
   constructor() {
     _instance = this;
+    this.pathManager = initPathManager(ROOT);
+    this.brainBoard = new BrainBoard(this.pathManager.bundle().brainsDir());
+    this.terminalManager = initTerminalManager(this.pathManager);
+    this.logger = new Logger(this.pathManager);
   }
 
   /** Lightweight bootstrap — load brainBoard + FSWatcher, no brain discovery/start. */
@@ -121,7 +125,7 @@ export class Scheduler {
     const brainIds = await this.discoverBrains();
 
     if (brainIds.length === 0) {
-      this.logger.warn("scheduler", 0, "brains/ 下没有发现任何脑区");
+      this.logger.warn("scheduler", 0, "bundle/brains/ 下没有发现任何脑区");
       return;
     }
 
@@ -143,14 +147,13 @@ export class Scheduler {
   private registerHotReloadHandlers(): void {
     if (!this.fsWatcher) return;
 
-    // Brain directory deletion
-    this.fsWatcher.register(/^brains\/([^/]+)\/?$/, async (evt) => {
-      const match = evt.path.match(/^brains\/([^/]+)\/?$/);
+    // Brain directory deletion — pattern now under bundle/brains/
+    this.fsWatcher.register(/^bundle\/brains\/([^/]+)\/?$/, async (evt) => {
+      const match = evt.path.match(/^bundle\/brains\/([^/]+)\/?$/);
       if (!match) return;
       const brainId = match[1];
       if (!this.brains.has(brainId)) return;
-      const brainDir = join(ROOT, "brains", brainId);
-      if (!existsSync(brainDir)) {
+      if (!existsSync(this.pathManager.local(brainId).root())) {
         this.logger.info("scheduler", 0, `brain dir deleted, auto-removing '${brainId}'`);
         await this.removeBrain(brainId);
       }
@@ -158,7 +161,7 @@ export class Scheduler {
   }
 
   private async discoverBrains(): Promise<string[]> {
-    const brainsDir = join(ROOT, "brains");
+    const brainsDir = this.pathManager.bundle().brainsDir();
     try {
       const entries = await readdir(brainsDir);
       const ids: string[] = [];
@@ -173,13 +176,13 @@ export class Scheduler {
   }
 
   private isScriptBrain(brainId: string): boolean {
-    return existsSync(join(ROOT, "brains", brainId, "src", "index.ts"));
+    return existsSync(join(this.pathManager.local(brainId).root(), "src", "index.ts"));
   }
 
   private createBrainInitConfig(brainId: string, brainConfig: BrainJson): BrainInitConfig {
     return {
       id: brainId,
-      brainDir: this.pathManager.brainDir(brainId),
+      brainDir: this.pathManager.local(brainId).root(),
       brainJson: brainConfig,
       brainBoard: this.brainBoard,
       pathManager: this.pathManager,
@@ -190,10 +193,10 @@ export class Scheduler {
 
   private async initBrain(brainId: string, globalConfig: MinecortexConfig): Promise<void> {
     const brainConfig = await this.loadBrainConfig(brainId);
-    const brainDir = this.pathManager.brainDir(brainId);
+    const brainDir = this.pathManager.local(brainId).root();
     const baseConfig = this.createBrainInitConfig(brainId, brainConfig);
-    const toolSources = this.resolveCapabilitySources("tools", brainId, brainConfig);
-    const slotSources = this.resolveCapabilitySources("slots", brainId, brainConfig);
+    const toolSources = BaseLoader.buildSources(this.pathManager, brainId, "tools", brainConfig.paths?.tools ? (isAbsolute(brainConfig.paths.tools) ? brainConfig.paths.tools : join(ROOT, brainConfig.paths.tools)) : undefined);
+    const slotSources = BaseLoader.buildSources(this.pathManager, brainId, "slots", brainConfig.paths?.slots ? (isAbsolute(brainConfig.paths.slots) ? brainConfig.paths.slots : join(ROOT, brainConfig.paths.slots)) : undefined);
 
     await this.terminalManager.loadBrainEnv(brainId);
 
@@ -222,7 +225,7 @@ export class Scheduler {
     const tools = await toolLoader.load({
       brainId,
       brainDir,
-      globalDir: ROOT,
+      pathManager: this.pathManager,
       selector: selectorTools,
       capabilitySources: toolSources,
     });
@@ -238,6 +241,7 @@ export class Scheduler {
       brainId,
       brainDir,
       brainBoard: this.brainBoard,
+      pathManager: this.pathManager,
     });
     slotLoader.setCallbacks(
       (slots) => { for (const s of slots) slotRegistry.registerSlot(s); },
@@ -247,7 +251,7 @@ export class Scheduler {
     await slotLoader.load({
       brainId,
       brainDir,
-      globalDir: ROOT,
+      pathManager: this.pathManager,
       selector: selectorSlots,
       capabilitySources: slotSources,
     });
@@ -274,8 +278,7 @@ export class Scheduler {
 
     const modelSpec = getModelSpec(modelName);
 
-    // Create ConsciousBrain — subscriptions loaded after brain creation (hooks must be available)
-    // Pass stub dynamic APIs first; real references are wired after subLoader is ready.
+    // ConsciousBrain — workspace 指向 bundle/shared/workspace 供 AI 作为共享操作空间
     const consciousConfig: ConsciousBrainInitConfig = {
       ...baseConfig,
       model: modelName,
@@ -287,7 +290,7 @@ export class Scheduler {
       contextEngine,
       sessionManager,
       modelSpec,
-      workspace: ROOT,
+      workspace: this.pathManager.bundle().sharedDir("workspace"),
     };
 
     const brain = new ConsciousBrain(consciousConfig);
@@ -320,7 +323,6 @@ export class Scheduler {
     subLoader.setLogContext(brainId);
     subLoader.setEmitter((event) => brain.pushEvent(event));
 
-    // Build BrainContextAPI for subscriptions
     const brainContext: import("./types.js").BrainContextAPI = {
       id: brainId,
       brainDir,
@@ -341,12 +343,18 @@ export class Scheduler {
     if (this.fsWatcher) subLoader.registerWatchPatterns(this.fsWatcher);
 
     const selectorSub = brainConfig.subscriptions ?? BRAIN_DEFAULTS.subscriptions;
+    const subSources = BaseLoader.buildSources(
+      this.pathManager, brainId, "subscriptions",
+      brainConfig.paths?.subscriptions
+        ? (isAbsolute(brainConfig.paths.subscriptions) ? brainConfig.paths.subscriptions : join(ROOT, brainConfig.paths.subscriptions))
+        : undefined,
+    );
     const sources = await subLoader.load({
       brainId,
       brainDir,
-      globalDir: ROOT,
+      pathManager: this.pathManager,
       selector: selectorSub,
-      capabilitySources: this.resolveCapabilitySources("subscriptions", brainId, brainConfig),
+      capabilitySources: subSources,
     });
     return { sources, loader: subLoader };
   }
@@ -410,10 +418,10 @@ export class Scheduler {
     if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
       return `Invalid brain id '${id}'. Use only alphanumeric, dash, underscore.`;
     }
-    const brainDir = join(ROOT, "brains", id);
+    const brainDir = this.pathManager.local(id).root();
     try {
       await access(brainDir);
-      return `Brain directory already exists: brains/${id}/`;
+      return `Brain directory already exists: bundle/brains/${id}/`;
     } catch { /* doesn't exist — proceed */ }
 
     await mkdir(brainDir, { recursive: true });
@@ -434,8 +442,8 @@ export class Scheduler {
 
   private async doStart(id: string): Promise<string> {
     if (this.brains.has(id)) return `Brain '${id}' is already running`;
-    const brainDir = join(ROOT, "brains", id);
-    if (!existsSync(brainDir)) return `Brain directory not found: brains/${id}/`;
+    const brainDir = this.pathManager.local(id).root();
+    if (!existsSync(brainDir)) return `Brain directory not found: bundle/brains/${id}/`;
 
     const globalConfig = await this.loadGlobalConfig();
     await this.initBrain(id, globalConfig);
@@ -473,28 +481,12 @@ export class Scheduler {
       await brain.free();
       this.brains.delete(id);
     }
-    const brainDir = join(ROOT, "brains", id);
+    const brainDir = this.pathManager.local(id).root();
     if (existsSync(brainDir)) {
       await rm(brainDir, { recursive: true, force: true });
-      this.logger.info("scheduler", 0, `brain dir deleted: brains/${id}/`);
+      this.logger.info("scheduler", 0, `brain dir deleted: bundle/brains/${id}/`);
     }
     return `Brain '${id}' freed`;
-  }
-
-  private resolveCapabilitySources(
-    kind: "tools" | "slots" | "subscriptions",
-    brainId: string,
-    brainConfig: BrainJson,
-  ): CapabilitySource[] {
-    const redirected = brainConfig.paths?.[kind];
-    const localDir = redirected
-      ? (isAbsolute(redirected) ? redirected : join(ROOT, redirected))
-      : join(this.pathManager.brainDir(brainId), kind);
-
-    return [
-      { id: "global", dir: join(ROOT, kind) },
-      { id: brainId, dir: localDir },
-    ];
   }
 
   /** Start a brain's run loop (fire-and-forget with error logging) */
@@ -525,7 +517,6 @@ export class Scheduler {
         return;
       }
 
-      // SIGTERM → graceful full shutdown
       this.logger.info("scheduler", 0, `收到 ${sig}，正在关闭...`);
       await this.shutdownAll();
       process.exit(0);
@@ -572,10 +563,7 @@ export class Scheduler {
 
   private async loadBrainConfig(brainId: string): Promise<BrainJson> {
     try {
-      const raw = await readFile(
-        join(ROOT, "brains", brainId, "brain.json"),
-        "utf-8",
-      );
+      const raw = await readFile(join(this.pathManager.local(brainId).root(), "brain.json"), "utf-8");
       return JSON.parse(raw);
     } catch {
       return {};

@@ -3,7 +3,7 @@ import type { ContextSlot, SlotFactory, SlotContext } from "../context/types.js"
 import type { CapabilityDescriptor, FSWatcherAPI, FSChangeEvent } from "../core/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
-import { discover } from "./scanner.js";
+import { AbstractContentLoader } from "./content-loader.js";
 
 type SlotModule = { default: SlotFactory };
 
@@ -11,7 +11,6 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
   private slotCtx: SlotContext | null = null;
   private onSlotChange: ((slots: ContextSlot[]) => void) | null = null;
   private onSlotRemove: ((names: string[]) => void) | null = null;
-  private loaderCtx: LoaderContext | null = null;
 
   setSlotContext(ctx: SlotContext): void {
     this.slotCtx = ctx;
@@ -24,6 +23,8 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
     this.onSlotChange = onChange;
     this.onSlotRemove = onRemove;
   }
+
+  // ─── BaseLoader 抽象接口 ───
 
   async importFactory(path: string): Promise<SlotModule> {
     return await import(path);
@@ -58,47 +59,42 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
     this.onSlotRemove?.(slots.map((s) => s.id));
   }
 
-  registerWatchPatterns(watcher: FSWatcherAPI): void {
-    watcher.register(/^slots(?:\/[^/]+)?\/[^/]+\.ts$/, (event) => {
-      this.handleDirectChange(event);
-    });
-    watcher.register(/^brains\/[^/]+\/slots(?:\/[^/]+)?\/[^/]+\.ts$/, (event) => {
-      this.handleDirectChange(event);
-    });
+  // ─── 扩展 watch：.md 内容文件额外模式 ───
 
-    watcher.register(/^directives\/.*\.md$/, (event) => {
-      this.invalidateBrainSlot(event, "directives");
-    });
-    watcher.register(/^brains\/[^/]+\/directives\/.*\.md$/, (event) => {
-      this.invalidateBrainSlot(event, "directives");
-    });
+  /**
+   * 除 .ts slot 文件（由 super 从 capabilitySources 自动推导）外，
+   * 还需 watch directives / skills / soul.md 的变更。
+   * soul.md 用 ctx 的 brainId 精确定位；directives / skills 用层级静态工具。
+   */
+  protected override registerWatchers(watcher: FSWatcherAPI, ctx: LoaderContext): void {
+    super.registerWatchers(watcher, ctx); // .ts slot 文件（全三层自动推导）
 
-    watcher.register(/^skills\/.*\.md$/, (event) => {
-      this.invalidateBrainSlot(event, "skills");
-    });
-    watcher.register(/^brains\/[^/]+\/skills\/.*\.md$/, (event) => {
-      this.invalidateBrainSlot(event, "skills");
-    });
+    // soul.md：定位到具体 brain 的 local root
+    const localRoot = relative(
+      ctx.pathManager.root(),
+      ctx.pathManager.local(ctx.brainId).root(),
+    ).replace(/\\/g, "/");
+    const soulEscaped = localRoot.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    watcher.register(
+      new RegExp(`^${soulEscaped}/soul\\.md$`),
+      (event) => this.invalidateBrainSlot(event, "soul"),
+    );
 
-    watcher.register(/^brains\/[^/]+\/soul\.md$/, (event) => {
-      this.invalidateBrainSlot(event, "soul");
+    // directives / skills — 通过 AbstractContentLoader 静态工具注册，
+    // 覆盖 global 和 local 两层，避免 src/ 反向依赖 slots/lib/
+    AbstractContentLoader.registerContentPatterns(watcher, "directives", (path) => {
+      this.invalidateBrainSlot({ path } as FSChangeEvent, "directives");
+    });
+    AbstractContentLoader.registerContentPatterns(watcher, "skills", (path) => {
+      this.invalidateBrainSlot({ path } as FSChangeEvent, "skills");
     });
   }
 
-  private handleDirectChange(event: FSChangeEvent): void {
-    if (!this.matchesConfiguredDir(event.path)) return;
-    this.reloadAll()
-      .then(() => console.log(`[SlotLoader] refreshed: ${event.path}`))
-      .catch(err => console.error(`[SlotLoader] refresh failed: ${event.path}`, err));
-  }
+  // ─── 公共 API ───
 
-  private matchesConfiguredDir(path: string): boolean {
-    if (!this.loaderCtx) return false;
-    return this.loaderCtx.capabilitySources.some((source) => {
-      const dir = source.dir;
-      const prefix = relative(this.loaderCtx!.globalDir, dir).replace(/\\/g, "/");
-      return prefix.length > 0 && (path === prefix || path.startsWith(`${prefix}/`));
-    });
+  async load(ctx: LoaderContext): Promise<ContextSlot[]> {
+    await this._loadInternal(ctx);
+    return [...this.registry.values()].flat();
   }
 
   invalidateSlot(name: string, reason?: string): void {
@@ -112,20 +108,5 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
 
   invalidateBrainSlot(event: FSChangeEvent, name: string): void {
     this.invalidateSlot(name, event.path);
-  }
-
-  async load(ctx: LoaderContext): Promise<ContextSlot[]> {
-    this.loaderCtx = ctx;
-    const descriptors = await discover(ctx.capabilitySources);
-    this.clearRegistry();
-    await this.loadAll(descriptors, ctx);
-    return [...this.registry.values()].flat();
-  }
-
-  private async reloadAll(): Promise<void> {
-    if (!this.loaderCtx) return;
-    const descriptors = await discover(this.loaderCtx.capabilitySources);
-    this.clearRegistry();
-    await this.loadAll(descriptors, this.loaderCtx);
   }
 }

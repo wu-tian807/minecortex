@@ -63,11 +63,11 @@ export class SessionStore {
   }
 
   private sessionJsonPath(): string {
-    return join(this.pathManager.brainDir(this.brainId), "session.json");
+    return join(this.pathManager.local(this.brainId).root(), "session.json");
   }
 
   private sessionDir(sid: string): string {
-    return join(this.pathManager.brainDir(this.brainId), "sessions", sid);
+    return join(this.pathManager.local(this.brainId).root(), "sessions", sid);
   }
 
   private messagesPath(sid: string): string {
@@ -136,7 +136,7 @@ export class SessionStore {
       await this.writeAtomic(this.messagesPath(sid), "");
 
       const sessionJson: SessionJson = { currentSessionId: sid };
-      await mkdir(join(this.pathManager.brainDir(this.brainId)), { recursive: true });
+      await mkdir(this.pathManager.local(this.brainId).root(), { recursive: true });
       await this.writeAtomic(this.sessionJsonPath(), JSON.stringify(sessionJson, null, 2));
 
       // Brand-new empty session — no usage yet.
@@ -292,7 +292,7 @@ export class SessionStore {
       await mkdir(dir, { recursive: true });
       await this.writeAtomic(this.messagesPath(id), "");
       const sessionJson: SessionJson = { currentSessionId: id };
-      await mkdir(join(this.pathManager.brainDir(this.brainId)), { recursive: true });
+      await mkdir(this.pathManager.local(this.brainId).root(), { recursive: true });
       await this.writeAtomic(this.sessionJsonPath(), JSON.stringify(sessionJson, null, 2));
     }
     return id;

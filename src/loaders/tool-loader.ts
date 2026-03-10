@@ -1,14 +1,11 @@
-import { join, relative } from "node:path";
 import type {
   CapabilityDescriptor,
   ToolDefinition,
   FSWatcherAPI,
-  FSChangeEvent,
   DynamicToolAPI,
 } from "../core/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
-import { discover } from "./scanner.js";
 
 type ToolFactory = { default?: ToolDefinition };
 
@@ -22,7 +19,6 @@ type ToolFactory = { default?: ToolDefinition };
  * to clearly indicate they are not tools.
  */
 export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
-  private loaderCtx: LoaderContext | null = null;
   private onToolsChange: ((tools: ToolDefinition[]) => void) | null = null;
 
   // ─── DynamicRegistry layer ───
@@ -46,6 +42,8 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
     this.onToolsChange = onChange;
   }
 
+  // ─── BaseLoader 抽象接口 ───
+
   async importFactory(path: string): Promise<ToolFactory> {
     return await import(path);
   }
@@ -66,16 +64,6 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
     return { ...def, name };
   }
 
-  allActive(): ToolDefinition[] {
-    const staticTools = [...this.registry.values()].filter((t): t is ToolDefinition => t !== null);
-    const dynamicTools = [...this.dynamicMap.values()];
-    return [...staticTools, ...dynamicTools];
-  }
-
-  private notifyChange(): void {
-    this.onToolsChange?.(this.allActive());
-  }
-
   onRegister(_name: string, _instance: ToolDefinition | null): void {
     this.notifyChange();
   }
@@ -84,42 +72,26 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
     this.notifyChange();
   }
 
-  registerWatchPatterns(watcher: FSWatcherAPI): void {
-    watcher.register(/^tools(?:\/[^/]+)?\/[^/]+\.ts$/, (e) => this.handleChange(e));
-    watcher.register(/^brains\/[^/]+\/tools(?:\/[^/]+)?\/[^/]+\.ts$/, (e) => this.handleChange(e));
-  }
+  // ─── 公共 API ───
 
-  private handleChange(event: FSChangeEvent): void {
-    if (!this.loaderCtx) return;
-    if (!this.matchesConfiguredDir(event.path)) return;
-
-    this.reloadAll()
-      .then(() => console.log(`[ToolLoader] refreshed: ${event.path}`))
-      .catch(err => console.error(`[ToolLoader] refresh failed: ${event.path}`, err));
-  }
-
-  private matchesConfiguredDir(path: string): boolean {
-    if (!this.loaderCtx) return false;
-    return this.loaderCtx.capabilitySources.some((source) => {
-      const dir = source.dir;
-      const prefix = relative(this.loaderCtx!.globalDir, dir).replace(/\\/g, "/");
-      return prefix.length > 0 && (path === prefix || path.startsWith(`${prefix}/`));
-    });
+  allActive(): ToolDefinition[] {
+    const staticTools = [...this.registry.values()].filter((t): t is ToolDefinition => t !== null);
+    const dynamicTools = [...this.dynamicMap.values()];
+    return [...staticTools, ...dynamicTools];
   }
 
   async load(ctx: LoaderContext): Promise<ToolDefinition[]> {
-    this.loaderCtx = ctx;
-    const descriptors = await discover(ctx.capabilitySources);
-    this.clearRegistry();
-    await this.loadAll(descriptors, ctx);
+    await this._loadInternal(ctx);
     return this.allActive();
   }
 
-  private async reloadAll(): Promise<void> {
-    if (!this.loaderCtx) return;
-    const descriptors = await discover(this.loaderCtx.capabilitySources);
-    this.clearRegistry();
-    await this.loadAll(descriptors, this.loaderCtx);
+  /** 注册 watch 后 reload 时额外通知 tool registry 变更。 */
+  protected override async reloadAll(): Promise<void> {
+    await super.reloadAll();
     this.notifyChange();
+  }
+
+  private notifyChange(): void {
+    this.onToolsChange?.(this.allActive());
   }
 }

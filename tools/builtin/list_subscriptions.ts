@@ -31,7 +31,7 @@ export default {
     properties: {},
   },
   async execute(_args, ctx): Promise<ToolOutput> {
-    const brainDir = ctx.pathManager.brainDir(ctx.brainId);
+    const brainDir = ctx.pathManager.local(ctx.brainId).root();
     const brainJsonPath = join(brainDir, "brain.json");
 
     let brainConfig: BrainJson;
@@ -46,7 +46,7 @@ export default {
     const disableSet = new Set(subs.disable ?? []);
     const globalDefault = subs.global ?? "none";
 
-    const globalDir = join(ctx.pathManager.root(), "subscriptions");
+    const globalDir = ctx.pathManager.global().subscriptionsDir();
     const brainSubsDir = join(brainDir, "subscriptions");
 
     const [globalNames, brainNames] = await Promise.all([

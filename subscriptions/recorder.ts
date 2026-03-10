@@ -269,8 +269,8 @@ class EventRecorder {
 
 export default function create(ctx: SourceContext): EventSource {
   const unsubs: (() => void)[] = [];
-  const logsDir = ctx.brain.pathManager.logsDir(ctx.brain.id);
-  const brainDir = ctx.brain.pathManager.brainDir(ctx.brain.id);
+  const logsDir = ctx.brain.pathManager.global().logsDir(ctx.brain.id);
+  const brainDir = ctx.brain.pathManager.local(ctx.brain.id).root();
   const recorder = new EventRecorder(logsDir, ctx.brain.id);
   const showThinking = getShowThinking(ctx);
 

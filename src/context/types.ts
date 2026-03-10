@@ -16,6 +16,7 @@ export interface SlotContext {
   brainDir: string;
   config?: Record<string, unknown>;
   brainBoard: BrainBoardAPI;
+  pathManager: import('../core/types.js').PathManagerAPI;
 }
 
 export interface ThoughtType {

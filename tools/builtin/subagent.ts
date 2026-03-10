@@ -129,7 +129,7 @@ async function loadParentBrainConfig(
   ctx: ToolContext,
 ): Promise<BrainJson> {
   try {
-    const raw = await readFile(join(ctx.pathManager.brainDir(ctx.brainId), "brain.json"), "utf-8");
+    const raw = await readFile(join(ctx.pathManager.local(ctx.brainId).root(), "brain.json"), "utf-8");
     return JSON.parse(raw) as BrainJson;
   } catch {
     return {};
@@ -502,7 +502,7 @@ async function injectPlanTool(
   parentBrainId: string,
   defaultPlanName: string,
 ): Promise<void> {
-  const toolsDir = join(ctx.pathManager.brainDir(subagentId), "tools");
+  const toolsDir = join(ctx.pathManager.local(subagentId).root(), "tools");
   await mkdir(toolsDir, { recursive: true });
   await writeFile(
     join(toolsDir, "write_plan.ts"),

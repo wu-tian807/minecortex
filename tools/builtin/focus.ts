@@ -26,7 +26,7 @@ export default {
     const rawPath = args.path as string | undefined;
     const targetPath = rawPath
       ? resolve(ROOT, rawPath)
-      : ctx.pathManager.brainDir(ctx.brainId);
+      : ctx.pathManager.local(ctx.brainId).root();
 
     try {
       const st = statSync(targetPath);

@@ -53,7 +53,7 @@ export default {
     const sessionManager = ctx.sessionManager;
     if (!sessionManager) return "Session manager unavailable.";
 
-    const brainDir = ctx.pathManager.brainDir(ctx.brainId);
+    const brainDir = ctx.pathManager.local(ctx.brainId).root();
     const sessionJsonPath = join(brainDir, "session.json");
 
     // Read session.json once to get current session ID and any extra metadata to preserve.
