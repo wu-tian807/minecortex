@@ -10,7 +10,7 @@ import {
   clearScreen,
   calcDisplayWidth,
 } from "./ansi.js";
-import { FooterRenderer } from "./footer-renderer.js";
+import { FooterRenderer, type FooterCursorPos } from "./footer-renderer.js";
 import { type RendererEvent, type InputSegment, formatEvent, parseRendererEvent } from "./events.js";
 import { renderMarkdown } from "./markdown.js";
 import { SelectOverlay } from "./select-overlay.js";
@@ -41,7 +41,9 @@ interface StreamingState {
   thinking: string;
 }
 
-const PROMPT = `${C.cyan}›${C.reset} `;
+const PROMPT      = `${C.cyan}›${C.reset} `;
+/** Continuation-line indent — same visual width as PROMPT (2 columns). */
+const PROMPT_CONT = "  ";
 
 function makeStreamingState(): StreamingState {
   return { active: false, thinking: "" };
@@ -122,6 +124,9 @@ export class CLIRenderer implements OverlayHost {
     this.unsubscribeLiveBus();
     if (this.isTTY) {
       this.footer.resetScrollRegion();
+      // Reset keyboard protocols back to defaults.
+      try { process.stdout.write("\x1b[=0u"); }  catch { /* ignore */ } // kitty
+      try { process.stdout.write("\x1b[>4;0m"); } catch { /* ignore */ } // modifyOtherKeys
       try { process.stdin.setRawMode(false); } catch { /* ignore */ }
     }
   }
@@ -181,16 +186,39 @@ export class CLIRenderer implements OverlayHost {
     return `${C.dim}💭 ${clipped}${C.reset}`;
   }
 
+  /** Build the input display string for FooterContent.inputLine(). Multiline inputs
+   *  are joined with "\n"; the footer renderer splits them back into rows. */
+  private buildInputLine(): string {
+    const lines = this.input.buildDisplayLines();
+    return lines.map((l, i) => (i === 0 ? PROMPT : PROMPT_CONT) + l).join("\n");
+  }
+
   private footerContent() {
     return {
       thinkingPreview: () => this.renderThinkingPreview(),
       statusBarLine:   () => this.statusBar.render(),
-      inputLine:       () => PROMPT + this.input.buildDisplay(),
+      inputLine:       () => this.buildInputLine(),
     };
   }
 
+  private inputCursorPos(): FooterCursorPos {
+    const { lineIdx, colWidth } = this.input.cursorDisplayPos();
+    // Both PROMPT and PROMPT_CONT have display width 2; cursor col is 1-indexed.
+    const prefixWidth = calcDisplayWidth(PROMPT);
+    return { lineIdx, col: prefixWidth + colWidth + 1 };
+  }
+
+  /** Tracks the input line count so we know when to resize the scroll region. */
+  private lastInputLineCount = 1;
+
   private drawFooter(): void {
-    this.footer.draw(this.footerContent());
+    // During streaming or while an overlay is open, restore cursor to its saved
+    // position so ongoing output / overlay rendering is undisturbed.
+    // Otherwise, leave the cursor inside the input area so the user can type.
+    const cursor = (!this.streaming.active && !this.overlay)
+      ? this.inputCursorPos()
+      : undefined;
+    this.footer.draw(this.footerContent(), cursor);
   }
 
   private refreshFooter(): void {
@@ -217,9 +245,21 @@ export class CLIRenderer implements OverlayHost {
     });
   }
 
-  /** Redraw only the input line (row N). Safe to call any time. */
-  private redrawInputLine(): void {
-    this.footer.updateInputLine(PROMPT + this.input.buildDisplay());
+  /**
+   * Redraw the input area and position the terminal cursor correctly.
+   * When the number of input lines changes the scroll region is resized and a
+   * full footer redraw is triggered; otherwise only the input rows are updated.
+   */
+  private redrawInput(): void {
+    const line     = this.buildInputLine();
+    const newCount = line.split("\n").length;
+    if (newCount !== this.lastInputLineCount) {
+      this.lastInputLineCount = newCount;
+      this.footer.setupScrollRegion(newCount);
+      this.drawFooter();
+      return;
+    }
+    this.footer.updateInputLine(line, this.inputCursorPos());
   }
 
   /** Erase footer rows (used before clearScreen so they don't flicker). */
@@ -458,6 +498,18 @@ export class CLIRenderer implements OverlayHost {
     process.stdin.setRawMode(true);
     process.stdin.setEncoding("utf8");
     process.stdin.resume();
+    // Ask the terminal to distinguish modified keys so Shift+Enter sends a
+    // unique sequence instead of plain \r.
+    //
+    // \x1b[=1u  — kitty progressive keyboard protocol (kitty, WezTerm, foot…)
+    //             Shift+Enter → \x1b[13;2u
+    // \x1b[>4;2m — XTerm modifyOtherKeys mode 2 (xterm, VTE-based, most SSH)
+    //             Shift+Enter → \x1b[27;2;13~
+    //
+    // Alt+Enter (\x1b\r) is handled as a universal fallback regardless of
+    // which protocol fires, since any terminal passes ESC+CR in raw mode.
+    process.stdout.write("\x1b[=1u");
+    process.stdout.write("\x1b[>4;2m");
     this.drawFooter();
 
     process.stdin.on("data", (chunk: string) => {
@@ -468,7 +520,7 @@ export class CLIRenderer implements OverlayHost {
       if (chunk.length > 1 && hasNL && chunk.charCodeAt(0) !== 27) {
         const normalized = chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n$/, "");
         this.input.appendPaste(normalized);
-        this.redrawInputLine();
+        this.redrawInput();
         return;
       }
 
@@ -483,6 +535,11 @@ export class CLIRenderer implements OverlayHost {
             while (i < chunk.length && !/[A-Za-z~]/.test(chunk[i])) seq += chunk[i++];
             if (i < chunk.length) seq += chunk[i++];
             this.handleEscapeSeq(seq);
+          } else if (i + 1 < chunk.length && (chunk[i + 1] === "\r" || chunk[i + 1] === "\n")) {
+            // Alt+Enter (\x1b\r or \x1b\n) — universal Shift+Enter fallback.
+            // Works in any terminal regardless of keyboard protocol support.
+            i += 2;
+            if (!this.overlay) { this.input.insertNewline(); this.redrawInput(); }
           } else {
             if (this.overlay) this.closeOverlay();
             i++;
@@ -505,10 +562,24 @@ export class CLIRenderer implements OverlayHost {
     }
     if (seq === "\x1b[A") {
       this.input.set(this.input.navigate(1));
-      this.redrawInputLine();
+      this.redrawInput();
     } else if (seq === "\x1b[B") {
       this.input.set(this.input.navigate(-1));
-      this.redrawInputLine();
+      this.redrawInput();
+    } else if (seq === "\x1b[C") {          // right arrow
+      this.input.moveRight();
+      this.redrawInput();
+    } else if (seq === "\x1b[D") {          // left arrow
+      this.input.moveLeft();
+      this.redrawInput();
+    } else if (
+      seq === "\x1b[13;2u"   ||  // Shift+Enter        (kitty protocol)
+      seq === "\x1b[27;2;13~" || // Shift+Enter        (XTerm modifyOtherKeys)
+      seq === "\x1b[13;5u"   ||  // Ctrl+Enter         (kitty)
+      seq === "\x1b[13;6u"       // Ctrl+Shift+Enter   (kitty)
+    ) {
+      this.input.insertNewline();
+      this.redrawInput();
     }
   }
 
@@ -523,20 +594,26 @@ export class CLIRenderer implements OverlayHost {
 
     if (code === 3)  { process.kill(process.pid, "SIGINT"); return; }
     if (code === 4)  { if (!this.input.content) process.kill(process.pid, "SIGINT"); return; }
-    if (code === 21) { this.input.clear(); this.redrawInputLine(); return; } // Ctrl+U
+    if (code === 21) { this.input.clear(); this.redrawInput(); return; } // Ctrl+U
 
     if (code === 127 || code === 8) { // Backspace
       this.input.backspace();
-      this.redrawInputLine();
+      this.redrawInput();
       return;
     }
 
-    if (code === 13 || code === 10) { // Enter
+    if (code === 10) { // Ctrl+J — insert newline (soft line break)
+      this.input.insertNewline();
+      this.redrawInput();
+      return;
+    }
+
+    if (code === 13) { // Enter — submit
       const text     = this.input.content.trim();
       const segments = this.input.snapshot;
       this.input.clear();
-      // Redraw the now-empty input line immediately (shows › with no text).
-      this.redrawInputLine();
+      // Redraw the now-empty input area immediately (shows › with no text).
+      this.redrawInput();
       if (text) {
         this.input.pushHistory(text);
         this.handleLine(text, segments);
@@ -546,7 +623,7 @@ export class CLIRenderer implements OverlayHost {
 
     if (code >= 32) { // Printable
       this.input.appendChar(ch);
-      this.redrawInputLine();
+      this.redrawInput();
     }
   }
 
