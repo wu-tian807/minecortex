@@ -71,6 +71,8 @@ export abstract class BaseLoader<TFactory, TInstance> {
   protected lastCtx?: LoaderContext;
   private storedWatcher?: FSWatcherAPI;
   private watchersRegistered = false;
+  /** Monotonically incremented on each _loadInternal call to detect stale concurrent loads. */
+  private _loadGeneration = 0;
 
   // ─── 抽象接口（子类必须实现）───
 
@@ -107,13 +109,20 @@ export abstract class BaseLoader<TFactory, TInstance> {
   /**
    * 内部加载流程：discover(scanFn) → clearRegistry → loadAll。
    * 首次加载后自动将 FSWatcher 绑定到所有 capabilitySources（三层覆盖）。
+   *
+   * Generation guard: each _loadInternal call increments _loadGeneration.
+   * If a newer call starts while this one is awaiting importFactory, the stale
+   * load is aborted before it can register any instances — preventing hook leaks
+   * that would otherwise cause duplicate event handlers (e.g. 4× streaming output).
    */
   protected async _loadInternal(ctx: LoaderContext): Promise<void> {
     const firstLoad = !this.lastCtx;
     this.lastCtx = ctx;
+    const gen = ++this._loadGeneration;
     const descriptors = await discover(ctx.capabilitySources, this.scanFn());
+    if (gen !== this._loadGeneration) return; // superseded by a newer load
     this.clearRegistry();
-    await this.loadAll(descriptors, ctx);
+    await this.loadAll(descriptors, ctx, gen);
 
     if (firstLoad && this.storedWatcher && !this.watchersRegistered) {
       this.registerWatchers(this.storedWatcher, ctx);
@@ -191,11 +200,15 @@ export abstract class BaseLoader<TFactory, TInstance> {
   async loadAll(
     descriptors: CapabilityDescriptor[],
     ctx: LoaderContext,
+    gen?: number,
   ): Promise<Map<string, TInstance>> {
     for (const descriptor of filterByCapability(descriptors, ctx.selector)) {
       try {
         await runWithLogContext({ brainId: this.logBrainId, turn: 0 }, async () => {
           const factory = await this.importFactory(`${descriptor.path}?t=${Date.now()}`);
+          // If a newer _loadInternal has started, discard this result to prevent
+          // stale start() calls from leaking hook registrations.
+          if (gen !== undefined && gen !== this._loadGeneration) return;
           if (!this.validateFactory(factory)) return;
           const instance = this.createInstance(factory, ctx, descriptor.exposedName, descriptor);
           this.registry.set(descriptor.exposedName, instance);
