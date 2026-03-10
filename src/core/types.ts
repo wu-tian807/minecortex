@@ -391,11 +391,18 @@ export interface ExecOpts {
 }
 
 export interface TerminalManagerAPI {
+  /** 幂等初始化：下载独立 Python/Node、检测 unshare 可用性。多次调用复用同一 Promise。 */
+  init(): Promise<void>;
+  /** 同步查询初始化是否已完成。 */
+  isReady(): boolean;
+  /** 异步等待初始化完成（init() 尚未调用时直接 resolve）。 */
+  ensureReady(): Promise<void>;
   exec(command: string, opts: ExecOpts): Promise<ExecResult>;
   get(id: string): TerminalInstance | undefined;
   list(filter?: { brainId?: string; status?: string }): TerminalInstance[];
   kill(id: string): boolean;
   cleanup(maxAge?: number): void;
+  loadBrainEnv(brainId: string): Promise<void>;
 }
 
 export interface ExecResult {

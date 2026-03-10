@@ -1,15 +1,19 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, exec as execCb, type ChildProcess } from "node:child_process";
 import { writeFile, appendFile, readFile, mkdir, unlink } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import type {
   TerminalManagerAPI,
   TerminalInstance,
   ExecOpts,
   ExecResult,
   PathManagerAPI,
-  BrainJson,
 } from "../core/types.js";
+import { buildBrainShellEnv } from "./env-builder.js";
+import { ensureBundleEnvironment } from "../bundle/env-init.js";
+
+const execAsync = promisify(execCb);
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_STDOUT_CAPTURE = 512_000;
@@ -63,9 +67,45 @@ export class TerminalManager implements TerminalManagerAPI {
   private sessions     = new Map<string, ShellSession>();
   private terminalCounter = 0;
   private sessionCounter  = 0;
-  private brainEnvCache   = new Map<string, Record<string, string>>();
+  /** 预构建好的完整 shell env，key = baseBrainId */
+  private brainEnvCache   = new Map<string, NodeJS.ProcessEnv>();
+
+  /** 幂等 init Promise — 第一次 init() 后复用 */
+  private initPromise: Promise<void> | null = null;
+  private _ready = false;
+  /** 是否检测到宿主机支持 unshare --user --mount */
+  unshareAvailable = false;
 
   constructor(private pathManager: PathManagerAPI) {}
+
+  // ─── Lifecycle (init / isReady / ensureReady) ───
+
+  isReady(): boolean { return this._ready; }
+
+  async ensureReady(): Promise<void> {
+    if (this._ready) return;
+    if (this.initPromise) { await this.initPromise; return; }
+    // init() 尚未调用（如 shell 工具被调用时 Scheduler 尚未 init），直接 resolve
+  }
+
+  async init(): Promise<void> {
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = this._doInit().finally(() => { this._ready = true; });
+    return this.initPromise;
+  }
+
+  private async _doInit(): Promise<void> {
+    await ensureBundleEnvironment(
+      this.pathManager.bundle().root(),
+      (msg) => console.log(msg),
+    );
+    try {
+      await execAsync("unshare --user --mount true");
+      this.unshareAvailable = true;
+    } catch {
+      // namespace 不可用（如非特权容器），降级为普通 spawn
+    }
+  }
 
   // ─── Path helpers ───
 
@@ -87,13 +127,21 @@ export class TerminalManager implements TerminalManagerAPI {
 
   // ─── Brain env ───
 
+  /**
+   * 预构建 brain 的完整 shell env 并缓存。
+   *
+   * 读取顺序（低→高优先级）：
+   *   宿主机安全子集 < bundle/shared/env/base.env < brain .env
+   *
+   * useNamespace：namespace 沙箱启用时将 HOME 重映射到 BRAIN_DIR，
+   * 并将 PYTHON_HOME/NODE_HOME/bin 注入 PATH。
+   *
+   * 调用方：Scheduler.initBrain()
+   */
   async loadBrainEnv(brainId: string): Promise<void> {
     const base = this.baseBrainId(brainId);
-    try {
-      const raw = await readFile(join(this.pathManager.local(base).root(), "brain.json"), "utf-8");
-      const config: BrainJson = JSON.parse(raw);
-      if (config.env) this.brainEnvCache.set(base, config.env);
-    } catch { /* no env to load */ }
+    const fullEnv = await buildBrainShellEnv(base, this.pathManager, this.unshareAvailable);
+    this.brainEnvCache.set(base, fullEnv);
   }
 
   // ─── Shell session management ───
@@ -121,15 +169,24 @@ export class TerminalManager implements TerminalManagerAPI {
   }
 
   private createSession(baseBrainId: string, initialCwd?: string, initScript?: string): ShellSession {
-    const brainEnv  = this.brainEnvCache.get(baseBrainId) ?? {};
-    const shellPath = this.resolveShellPath(brainEnv);
+    // brainEnvCache 已由 loadBrainEnv() 预构建好完整 env（含 PYTHON_HOME/NODE_HOME PATH、brain .env 等）
+    const builtEnv   = this.brainEnvCache.get(baseBrainId) ?? {};
+    const shellPath  = this.resolveShellPath(builtEnv as Record<string, string>);
     const sessionCwd = this.resolveSessionCwd(initialCwd);
+    const brainRoot  = this.pathManager.local(baseBrainId).root();
 
-    const child = spawn(shellPath, ["--norc", "--noprofile"], {
-      cwd: sessionCwd,
-      env: { ...process.env, ...brainEnv, PS1: "", PS2: "" },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    // 若 unshare 可用，用 namespace 沙箱启动 shell，否则降级为普通 spawn
+    const child = this.unshareAvailable
+      ? spawn(
+          "unshare",
+          ["--mount", "--user", "--map-root-user", shellPath, "--norc", "--noprofile"],
+          { cwd: sessionCwd, env: { ...builtEnv, PS1: "", PS2: "" }, stdio: ["pipe", "pipe", "pipe"] },
+        )
+      : spawn(shellPath, ["--norc", "--noprofile"], {
+          cwd: sessionCwd,
+          env: { ...builtEnv, PS1: "", PS2: "" },
+          stdio: ["pipe", "pipe", "pipe"],
+        });
 
     const session: ShellSession = {
       id: `s${++this.sessionCounter}-${Date.now()}`,
@@ -170,6 +227,10 @@ export class TerminalManager implements TerminalManagerAPI {
     });
     child.on("exit", () => this.cleanupSession(baseBrainId, session));
 
+    // namespace 内初始化挂载（/tmp 私有化、.ssh bind、/usr/local 持久 overlay）
+    if (this.unshareAvailable) {
+      try { child.stdin?.write(this.buildNsSetup(brainRoot) + "\n"); } catch { /* ignore */ }
+    }
     // Restore prior cwd when creating a replacement session
     if (initScript) {
       try { child.stdin?.write(initScript + "\n"); } catch { /* ignore */ }
@@ -177,6 +238,45 @@ export class TerminalManager implements TerminalManagerAPI {
 
     this.sessions.set(session.id, session);
     return session;
+  }
+
+  /**
+   * 生成在 namespace 内执行的 bash setup 脚本（通过 stdin 注入）。
+   *
+   * 挂载策略：
+   *   /tmp         → bind mount 到 <brainRoot>/.tmp（完全私有，不共享宿主 /tmp）
+   *   ~/.ssh       → bind mount 到 <brainRoot>/.home/.ssh（git/ssh 可用，但写入隔离）
+   *   /usr/local   → overlayfs（lower=宿主机，upper=<brainRoot>/.overlay/usr_local）
+   *                  模型 sudo make install / apt 安装到此处，不污染宿主机
+   *
+   * 注意：upper layer 子目录须提前创建，user namespace overlayfs 不支持隐式 copy-up。
+   */
+  private buildNsSetup(brainRoot: string): string {
+    const realHome = process.env.HOME ?? "";
+    const olUpper  = `${brainRoot}/.overlay/usr_local`;
+    const olWork   = `${brainRoot}/.overlay/usr_local_work`;
+
+    const lines = [
+      // /tmp 私有化
+      `mkdir -p '${brainRoot}/.tmp'`,
+      `mount --bind '${brainRoot}/.tmp' /tmp`,
+    ];
+
+    // .ssh bind（让 git/ssh 凭证可用，写入落在 brain 私有目录）
+    if (realHome) {
+      lines.push(
+        `mkdir -p '${brainRoot}/.home/.ssh'`,
+        `mount --bind '${brainRoot}/.home/.ssh' '${realHome}/.ssh' 2>/dev/null || true`,
+      );
+    }
+
+    // /usr/local 持久 overlay（upper 子目录必须预先创建）
+    lines.push(
+      `mkdir -p '${olUpper}/bin' '${olUpper}/lib' '${olUpper}/lib64' '${olUpper}/include' '${olUpper}/share' '${olWork}'`,
+      `mount -t overlay overlay -o lowerdir=/usr/local,upperdir='${olUpper}',workdir='${olWork}' /usr/local`,
+    );
+
+    return lines.join("\n");
   }
 
   /** Remove a session from the shared pool without killing it.

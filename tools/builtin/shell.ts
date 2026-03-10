@@ -46,6 +46,19 @@ export default {
     const extraEnv = args.env as Record<string, string> | undefined;
     const terminalManager = getTerminalManager();
 
+    // 若 bundle 环境尚未初始化（首次运行下载 Python/Node），通知模型和 CLI
+    if (!terminalManager.isReady()) {
+      ctx.eventBus.emit({
+        source: "tool:shell",
+        type: "system_message",
+        to: ctx.brainId,
+        handoff: "silent",
+        payload: { content: "bundle 环境正在初始化（首次运行：下载独立 Python / Node.js，请稍候...）" },
+        ts: Date.now(),
+      });
+      await terminalManager.ensureReady();
+    }
+
     const description = args.description ? String(args.description) : undefined;
     const result = await terminalManager.exec(command, {
       cwd,

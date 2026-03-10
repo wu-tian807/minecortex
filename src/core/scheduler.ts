@@ -126,6 +126,9 @@ export class Scheduler {
       this.logger.warn("scheduler", 0, "FSWatcher creation failed — hot-reload disabled");
     }
 
+    // 确保 bundle 环境就绪（独立 Python/Node 下载、base.env 生成、unshare 检测）
+    await this.terminalManager.init();
+
     const globalConfig = await this.loadGlobalConfig();
     const brainIds = await this.discoverBrains();
 
