@@ -33,6 +33,8 @@ async function main() {
   await scheduler.start();
 
   const renderer = new CLIRenderer(process.cwd(), {
+    // Expose eventBus.observe so the renderer can receive in-process live streaming events.
+    observeEvents: (handler) => scheduler.observeEvents(handler),
     // Route user text through EventBus — brain receives it via its registered queue
     onUserInput: (_brainId, text) => {
       scheduler.emit({

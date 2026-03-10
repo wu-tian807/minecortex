@@ -3,7 +3,7 @@
 import { readFile, writeFile, appendFile, mkdir } from "node:fs/promises";
 import { readFileSync, watch as watchFs } from "node:fs";
 import { join, dirname } from "node:path";
-import type { Event, EventSource, SourceContext, BrainJson } from "../src/core/types.js";
+import type { Event, EventSource, SourceContext, BrainJson, EventBusAPI } from "../src/core/types.js";
 import type { LLMMessage } from "../src/llm/types.js";
 import { HookEvent } from "../src/hooks/types.js";
 
@@ -62,6 +62,7 @@ class EventRecorder {
   private dirCreated = false;
   private closed = false;
   private brainId: string;
+  private eventBus: EventBusAPI | null = null;
 
   constructor(logDir: string, brainId: string) {
     this.qaPath = join(logDir, "qa.md");
@@ -203,15 +204,25 @@ class EventRecorder {
     }).catch(() => {});
   }
 
+  setEventBus(bus: EventBusAPI): void {
+    this.eventBus = bus;
+  }
+
   recordAssistantChunk(kind: "text" | "thinking", text: string): void {
     if (!text) return;
-    this.appendEvent({
-      k: "assistant_chunk",
-      brain: this.brainId,
-      kind,
-      text,
-      ts: Date.now(),
-    }).catch(() => {});
+    this.eventBus?.emit({ source: this.brainId, type: "live_chunk", to: "cli",
+      payload: { brain: this.brainId, kind, text }, ts: Date.now() });
+  }
+
+  recordTurnStart(): void {
+    this.eventBus?.emit({ source: this.brainId, type: "live_turn_start", to: "cli",
+      payload: { brain: this.brainId }, ts: Date.now() });
+    this.appendEvent({ k: "turn_start", ts: Date.now() }).catch(() => {});
+  }
+
+  recordError(text: string): void {
+    this.appendEvent({ k: "error_event", text, ts: Date.now() }).catch(() => {});
+    this.writeQA(`> ⚠ ${text}\n\n`).catch(() => {});
   }
 
   recordToolCall(name: string, args: Record<string, unknown>): void {
@@ -279,6 +290,7 @@ export default function create(ctx: SourceContext): EventSource {
 
     start(_emit: (event: Event) => void) {
       recorder.init(brainDir).catch(() => {});
+      recorder.setEventBus(ctx.brain.eventBus);
 
       // User input + inter-brain messages
       unsubs.push(
@@ -333,11 +345,17 @@ export default function create(ctx: SourceContext): EventSource {
         )
       );
 
-      unsubs.push(ctx.brain.hooks.on(HookEvent.TurnStart, () =>
-        recorder.appendEvent({ k: "turn_start", ts: Date.now() }).catch(() => {})
-      ));
+      unsubs.push(ctx.brain.hooks.on(HookEvent.TurnStart, () => {
+        // recordTurnStart emits live_turn_start via eventBus THEN writes to events.jsonl.
+        // The live event arrives synchronously before any chunks, ensuring the renderer
+        // resets streaming state before the first chunk appears.
+        recorder.recordTurnStart();
+      }));
 
-      unsubs.push(ctx.brain.hooks.on(HookEvent.TurnEnd, () => recorder.recordTurnEnd()));
+      unsubs.push(ctx.brain.hooks.on(HookEvent.TurnEnd, ({ error }) => {
+        recorder.recordTurnEnd();
+        if (error) recorder.recordError(error);
+      }));
 
       // Messages addressed to "cli" (user) — observed globally since they don't enter any brain queue
       unsubs.push(

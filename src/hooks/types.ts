@@ -32,6 +32,8 @@ export interface HookPayloadMap {
   [HookEvent.TurnEnd]: {
     turn: number;
     aborted: boolean;
+    /** Set when the turn ended due to an unhandled LLM/tool error. */
+    error?: string;
   };
   [HookEvent.ToolCall]: {
     name: string;

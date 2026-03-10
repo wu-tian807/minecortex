@@ -32,6 +32,8 @@ export interface LLMResponse {
   textSignature?: string;
   toolCalls?: LLMToolCall[];
   usage?: { inputTokens: number; outputTokens: number; thinkingTokens?: number };
+  /** True when the response was cut short by an AbortSignal mid-stream. */
+  truncated?: boolean;
 }
 
 export type StreamChunk =

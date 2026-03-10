@@ -54,7 +54,9 @@ export async function assembleResponse(
   };
 }
 
-/** Collect stream with per-chunk callback for streaming hooks. */
+/** Collect stream with per-chunk callback for streaming hooks.
+ *  If the stream is aborted mid-flight, returns whatever was accumulated so far
+ *  with `truncated: true` instead of throwing, so callers can persist partial output. */
 export async function assembleResponseWithCallback(
   stream: AsyncIterable<StreamChunk>,
   onChunk?: (chunk: StreamChunk) => void,
@@ -66,49 +68,60 @@ export async function assembleResponseWithCallback(
   const toolCalls: LLMToolCall[] = [];
   let usage: { inputTokens: number; outputTokens: number; thinkingTokens?: number } | undefined;
 
-  for await (const chunk of stream) {
-    onChunk?.(chunk);
-
-    switch (chunk.type) {
-      case "text":
-        text += chunk.text;
-        if (chunk.thoughtSignature) textSignature = chunk.thoughtSignature;
-        break;
-      case "thinking":
-        thinking += chunk.text;
-        if (chunk.thoughtSignature) thinkingSignature = chunk.thoughtSignature;
-        break;
-      case "tool_call": {
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(chunk.arguments);
-        } catch {}
-        toolCalls.push({
-          id: chunk.id,
-          name: chunk.name,
-          arguments: args,
-          thoughtSignature: chunk.thoughtSignature,
-        });
-        break;
-      }
-      case "usage":
-        usage = {
-          inputTokens: chunk.inputTokens,
-          outputTokens: chunk.outputTokens,
-          thinkingTokens: chunk.thinkingTokens,
-        };
-        break;
-    }
-  }
-
-  return {
+  const buildResponse = (truncated?: boolean): LLMResponse => ({
     content: text,
     thinking: thinking || undefined,
     thinkingSignature,
     textSignature,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     usage,
-  };
+    ...(truncated ? { truncated: true } : {}),
+  });
+
+  try {
+    for await (const chunk of stream) {
+      onChunk?.(chunk);
+
+      switch (chunk.type) {
+        case "text":
+          text += chunk.text;
+          if (chunk.thoughtSignature) textSignature = chunk.thoughtSignature;
+          break;
+        case "thinking":
+          thinking += chunk.text;
+          if (chunk.thoughtSignature) thinkingSignature = chunk.thoughtSignature;
+          break;
+        case "tool_call": {
+          let args: Record<string, unknown> = {};
+          try {
+            args = JSON.parse(chunk.arguments);
+          } catch {}
+          toolCalls.push({
+            id: chunk.id,
+            name: chunk.name,
+            arguments: args,
+            thoughtSignature: chunk.thoughtSignature,
+          });
+          break;
+        }
+        case "usage":
+          usage = {
+            inputTokens: chunk.inputTokens,
+            outputTokens: chunk.outputTokens,
+            thinkingTokens: chunk.thinkingTokens,
+          };
+          break;
+      }
+    }
+  } catch (err: any) {
+    // AbortError: return whatever we managed to collect rather than discarding it.
+    if (err?.name === "AbortError" || err?.code === "ERR_ABORTED" || err?.message === "aborted") {
+      return buildResponse(true);
+    }
+    throw err;
+  }
+
+  return buildResponse();
 }
 
 // ── <think> tag state-machine parser: NORMAL → IN_THINK → NORMAL ──
