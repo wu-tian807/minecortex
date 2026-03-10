@@ -1,6 +1,7 @@
 /** @desc RendererEvent shapes and formatting for CLIRenderer */
 
 import { C } from "./ansi.js";
+import { renderMarkdown } from "./markdown.js";
 
 // ─── Event shapes stored in events.jsonl ───
 
@@ -21,7 +22,9 @@ export type RendererEvent =
   | { k: "todo_update";  todos: Array<{ id: string; content: string; status: string }>; ts: number }
   // Transient turn boundaries — used for the thinking indicator, not displayed as content
   | { k: "turn_start"; ts: number }
-  | { k: "turn_end";   ts: number };
+  | { k: "turn_end";   ts: number }
+  /** Persisted when a turn ends with an LLM or tool error. */
+  | { k: "error_event"; text: string; ts: number };
 
 // ─── Icons ───
 
@@ -89,14 +92,18 @@ export function formatEvent(ev: RendererEvent): string | null {
       return `${C.yellow}📨 ${ev.source}:${C.reset} ${ev.text.slice(0, 200)}\n\n`;
 
     case "assistant": {
-      const text    = ev.text ? stripThinking(ev.text) : "";
+      const text     = ev.text ? stripThinking(ev.text) : "";
       const thinking = ev.thinking?.trim();
-      const tag = ev.brain ? `${C.cyan}[${ev.brain}]${C.reset} ` : "";
+      const tag      = ev.brain ? `${C.cyan}[${ev.brain}]${C.reset}` : "";
       let out = "";
       if (thinking) {
-        out += `${C.dim}💭 ${tag}${thinking.slice(0, 300)}${thinking.length > 300 ? "…" : ""}${C.reset}\n`;
+        const thinkingLines = thinking.split("\n").map(l => `${C.dim}  ${l}${C.reset}`).join("\n");
+        out += `${C.dim}💭 thinking${tag ? " " + tag : ""}${C.reset}\n${thinkingLines}\n${C.dim}─────${C.reset}\n`;
       }
-      if (text) out += `${tag}${text}\n`;
+      if (text) {
+        const rendered = renderMarkdown(text);
+        out += tag ? `${tag}\n${rendered}\n` : `${rendered}\n`;
+      }
       return out ? out + "\n" : null;
     }
 
@@ -149,6 +156,9 @@ export function formatEvent(ev: RendererEvent): string | null {
     case "turn_start":
     case "turn_end":
       return null; // handled by renderer state, not displayed as content
+
+    case "error_event":
+      return `${C.red}⚠ ${ev.text}${C.reset}\n\n`;
 
     default:
       return null;
