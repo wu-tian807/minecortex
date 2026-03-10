@@ -105,7 +105,10 @@ export class CLIRenderer implements OverlayHost {
     this.footer.setupScrollRegion();
     // Redraw footer on terminal resize so absolute rows stay correct.
     process.stdout.on("resize", () => {
-      this.footer.setupScrollRegion();
+      const line = this.buildInputLine();
+      const count = this.countInputRows(line);
+      this.lastInputLineCount = count;
+      this.footer.setupScrollRegion(count);
       this.drawFooter();
     });
     this.startStdin();
@@ -245,6 +248,14 @@ export class CLIRenderer implements OverlayHost {
     });
   }
 
+  /** Count how many terminal rows the input line occupies, accounting for terminal-width wrapping. */
+  private countInputRows(line: string): number {
+    const cols = Math.max(1, process.stdout.columns ?? 80);
+    return line.split("\n").reduce((sum, part) => {
+      return sum + Math.max(1, Math.ceil(calcDisplayWidth(part) / cols));
+    }, 0);
+  }
+
   /**
    * Redraw the input area and position the terminal cursor correctly.
    * When the number of input lines changes the scroll region is resized and a
@@ -252,7 +263,7 @@ export class CLIRenderer implements OverlayHost {
    */
   private redrawInput(): void {
     const line     = this.buildInputLine();
-    const newCount = line.split("\n").length;
+    const newCount = this.countInputRows(line);
     if (newCount !== this.lastInputLineCount) {
       this.lastInputLineCount = newCount;
       this.footer.setupScrollRegion(newCount);

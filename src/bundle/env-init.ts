@@ -79,6 +79,8 @@ async function ensurePython(
     if (!existsSync(extractedPython)) {
       throw new Error(`解压后未找到 python/ 目录，内容: ${await listDir(tmpDir)}`);
     }
+    // 清理可能存在的残留目录（上次安装中途中断留下的半成品）
+    await rm(pythonHome, { recursive: true, force: true });
     await rename(extractedPython, pythonHome);
     log(`[bundle] Python 就绪: ${pythonHome}`);
   } finally {
@@ -118,6 +120,8 @@ async function ensureNode(
     if (!existsSync(extractedNode)) {
       throw new Error(`解压后未找到 ${NODE_DIR}/ 目录，内容: ${await listDir(tmpDir)}`);
     }
+    // 清理可能存在的残留目录（上次安装中途中断留下的半成品）
+    await rm(nodeHome, { recursive: true, force: true });
     await rename(extractedNode, nodeHome);
     log(`[bundle] Node.js 就绪: ${nodeHome}`);
   } finally {

@@ -68,10 +68,11 @@ export class FooterRenderer {
    */
   draw(content: FooterContent, cursor?: FooterCursorPos): void {
     if (!this.isTTY) return;
-    const rows       = this.rows();
-    const inputLines = content.inputLine().split("\n");
-    const nInput     = Math.max(1, inputLines.length);
-    this.inputLineCount = nInput;
+    const rows      = this.rows();
+    const inputLine = content.inputLine();
+    // inputLineCount is set by setupScrollRegion to the correct visual row count
+    // (accounting for terminal-width wrapping). Do not override it here.
+    const nInput    = this.inputLineCount;
 
     process.stdout.write("\x1b[s");
 
@@ -80,10 +81,13 @@ export class FooterRenderer {
     process.stdout.write(content.thinkingPreview());
     process.stdout.write(`\x1b[${statusRow};1H`);     clearLine();
     process.stdout.write(content.statusBarLine());
+    // Clear all reserved input rows first, then write content at the first row
+    // and let the terminal wrap naturally into the cleared area.
     for (let i = 0; i < nInput; i++) {
       process.stdout.write(`\x1b[${statusRow + 1 + i};1H`); clearLine();
-      process.stdout.write(inputLines[i] ?? "");
     }
+    process.stdout.write(`\x1b[${statusRow + 1};1H`);
+    process.stdout.write(inputLine.split("\n").join("\r\n"));
 
     if (cursor) {
       process.stdout.write(`\x1b[${statusRow + 1 + cursor.lineIdx};${cursor.col}H`);
@@ -112,15 +116,18 @@ export class FooterRenderer {
    */
   updateInputLine(line: string, cursor?: FooterCursorPos): void {
     if (!this.isTTY) return;
-    const rows       = this.rows();
-    const inputLines = line.split("\n");
-    const statusRow  = rows - this.inputLineCount;
+    const rows      = this.rows();
+    const statusRow = rows - this.inputLineCount;
 
     process.stdout.write("\x1b[s");
+    // Clear all reserved rows first, then write content at the first row and let
+    // the terminal wrap naturally — same approach as draw() to avoid clearing
+    // wrapped content that overflowed from the previous row.
     for (let i = 0; i < this.inputLineCount; i++) {
       process.stdout.write(`\x1b[${statusRow + 1 + i};1H`); clearLine();
-      process.stdout.write(inputLines[i] ?? "");
     }
+    process.stdout.write(`\x1b[${statusRow + 1};1H`);
+    process.stdout.write(line.split("\n").join("\r\n"));
 
     if (cursor) {
       process.stdout.write(`\x1b[${statusRow + 1 + cursor.lineIdx};${cursor.col}H`);
