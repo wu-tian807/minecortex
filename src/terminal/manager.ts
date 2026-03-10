@@ -84,8 +84,8 @@ export class TerminalManager implements TerminalManagerAPI {
 
   async ensureReady(): Promise<void> {
     if (this._ready) return;
-    if (this.initPromise) { await this.initPromise; return; }
-    // init() 尚未调用（如 shell 工具被调用时 Scheduler 尚未 init），直接 resolve
+    // 无论 init() 是否已被调用，都通过 init() 确保初始化触发且等待完成
+    await this.init();
   }
 
   async init(): Promise<void> {
