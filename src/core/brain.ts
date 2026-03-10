@@ -56,6 +56,7 @@ export interface AgentLoopOpts {
   showThinking?: boolean;
   trackBackgroundTask?: (p: Promise<unknown>) => void;
   shouldYieldInnerLoop?: () => boolean;
+  timezone?: string;
 }
 
 export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | null> {
@@ -94,15 +95,13 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
 
       const sessionHistory = await sessionManager.loadPromptHistory({ keepToolResults, keepMedias });
 
-      const boardEntries = brainBoard.getAll(brainId);
+      const tz = opts.timezone ?? "Asia/Shanghai";
+      brainBoard.set(brainId, "CURRENT_TIME", new Date().toLocaleString("zh-CN", { timeZone: tz }), { persist: false });
+
       const vars: Record<string, string> = {};
-      for (const [k, v] of Object.entries(boardEntries)) {
+      for (const [k, v] of Object.entries(brainBoard.getAll(brainId))) {
         vars[k] = typeof v === "string" ? v : JSON.stringify(v);
       }
-      vars.BRAIN_ID = brainId;
-      vars.BRAIN_DIR = pathManager.resolve({ path: "." }, brainId);
-      const tz = (brainBoard.get(brainId, "timezone") as string) ?? "Asia/Shanghai";
-      vars.CURRENT_TIME = new Date().toLocaleString("zh-CN", { timeZone: tz });
       const messages = contextEngine.assemblePrompt(
         sessionHistory,
         modelSpec,
@@ -260,14 +259,16 @@ export class ConsciousBrain extends BaseBrain {
 
     // ─── Built-in brainBoard vars ────────────────────────────────────────────
     //
-    // Two tiers, both wired up here so the session layer stays free of any
-    // brainBoard / token-accounting knowledge:
-    //
     //   persisted  — survive process restarts (written to brainboard.json)
     //     • currentContextUsage: inputTokens + outputTokens for the current session
     //
-    //   memory     — in-process only (persist: false)
-    //     • currentSessionId: lets the renderer validate its ring subscription
+    //   memory (persist: false) — in-process only, injected into every prompt turn
+    //     • BRAIN_ID:    identity of this brain
+    //     • BRAIN_DIR:   absolute path to this brain's directory
+    //     • CURRENT_TIME: wall-clock time, refreshed at the start of each agent loop iteration
+
+    this.brainBoard.set(this.id, "BRAIN_ID", this.id, { persist: false });
+    this.brainBoard.set(this.id, "BRAIN_DIR", config.brainDir, { persist: false });
 
     this.sessionManager.setCallbacks({
       onSessionSwitch: (_newSid, lastContextUsage) => {
@@ -405,6 +406,7 @@ export class ConsciousBrain extends BaseBrain {
           p.finally(() => this.pendingTasks.delete(p));
         },
         shouldYieldInnerLoop: () => this.queue.hasHandoff("innerLoop"),
+        timezone: this.brainJson.timezone,
       });
     } catch (err: any) {
       aborted = signal.aborted;
