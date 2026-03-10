@@ -1,4 +1,4 @@
-import type { BrainJson } from "../../src/core/types.js";
+import type { BrainJson } from "../../../src/core/types.js";
 import type { SubagentEffort, SubagentMode, SubagentType } from "./types.js";
 
 export interface SubagentDefaults {

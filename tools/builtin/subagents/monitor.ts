@@ -1,5 +1,5 @@
-import type { SessionManager } from "../../src/session/session-manager.js";
-import type { LLMMessage } from "../../src/llm/types.js";
+import type { SessionManager } from "../../../src/session/session-manager.js";
+import type { LLMMessage } from "../../../src/llm/types.js";
 import { SUBAGENT_QUESTION_MARKER } from "./types.js";
 import { serializeContent } from "./context.js";
 

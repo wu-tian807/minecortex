@@ -7,9 +7,9 @@ import type {
   ToolContext,
   ToolDefinition,
   ToolOutput,
-} from "../src/core/types.js";
-import { getScheduler } from "../src/core/scheduler.js";
-import { SessionManager } from "../src/session/session-manager.js";
+} from "../../src/core/types.js";
+import { getScheduler } from "../../src/core/scheduler.js";
+import { SessionManager } from "../../src/session/session-manager.js";
 import {
   buildToolsSelector,
   isSubagentEffort,

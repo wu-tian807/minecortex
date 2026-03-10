@@ -1,5 +1,5 @@
-import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
-import { getTerminalManager } from "../src/terminal/manager.js";
+import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
+import { getTerminalManager } from "../../src/terminal/manager.js";
 
 const DEFAULT_TIMEOUT = 30_000;
 

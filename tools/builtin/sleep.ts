@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
+import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
 
 const MIN_SEC = 0.1;
 const MAX_SEC = 300;

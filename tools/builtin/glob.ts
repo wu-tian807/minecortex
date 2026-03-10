@@ -1,6 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
-import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
+import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
 
 function matchGlob(pattern: string, path: string): boolean {
   const regex = globToRegex(pattern);

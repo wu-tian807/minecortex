@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "../src/core/types.js";
+import type { ToolDefinition } from "../../src/core/types.js";
 
 const DEFAULT_MAX_LENGTH = 80_000;
 

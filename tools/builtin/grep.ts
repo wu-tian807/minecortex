@@ -1,6 +1,6 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
-import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
+import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
 
 const BINARY_EXTS = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico",

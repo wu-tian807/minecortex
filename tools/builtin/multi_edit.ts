@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
-import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
+import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
 
 interface EditOp {
   old_string: string;

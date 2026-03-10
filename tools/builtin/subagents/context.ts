@@ -1,6 +1,6 @@
-import type { ToolContext } from "../../src/core/types.js";
-import type { LLMMessage } from "../../src/llm/types.js";
-import { SessionManager } from "../../src/session/session-manager.js";
+import type { ToolContext } from "../../../src/core/types.js";
+import type { LLMMessage } from "../../../src/llm/types.js";
+import { SessionManager } from "../../../src/session/session-manager.js";
 import type { ContextMode } from "./types.js";
 
 export async function buildInitialPrompt(

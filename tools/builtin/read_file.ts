@@ -1,7 +1,7 @@
 import { readFile, access } from "node:fs/promises";
 import { extname, join } from "node:path";
-import type { ToolDefinition, ToolOutput, ContentPart, InputModality, ToolContext } from "../src/core/types.js";
-import { getModelSpec } from "../src/llm/provider.js";
+import type { ToolDefinition, ToolOutput, ContentPart, InputModality, ToolContext } from "../../src/core/types.js";
+import { getModelSpec } from "../../src/llm/provider.js";
 
 const MAX_CHARS = 256_000;
 const MAX_LINE_LENGTH = 2000;

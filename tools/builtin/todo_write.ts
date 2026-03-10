@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
+import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
 
 type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
 

@@ -1,6 +1,6 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
+import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
 
 export default {
   name: "write_file",
@@ -15,7 +15,7 @@ export default {
     properties: {
       path: {
         type: "string",
-        description: "File path (absolute, project-relative, or brain-local)",
+        description: "File path. Relative paths resolve to this brain's local workspace/. Absolute paths must be under bundle/ (e.g. bundle/shared/docs/) — writing outside bundle/ will be denied.",
       },
       contents: {
         type: "string",

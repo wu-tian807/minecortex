@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
+import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
 
 export default {
   name: "send_message",

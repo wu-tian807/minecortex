@@ -1,12 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
-import type { LLMMessage } from "../src/llm/types.js";
-import { summarizeForCompaction, microCompact } from "../src/session/compaction.js";
-import { repairToolPairing } from "../src/session/history-normalizer.js";
-import { createProvider } from "../src/llm/provider.js";
-import { assembleResponse } from "../src/llm/stream.js";
+import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
+import type { LLMMessage } from "../../src/llm/types.js";
+import { summarizeForCompaction, microCompact } from "../../src/session/compaction.js";
+import { repairToolPairing } from "../../src/session/history-normalizer.js";
+import { createProvider } from "../../src/llm/provider.js";
+import { assembleResponse } from "../../src/llm/stream.js";
 
 const SUMMARIZE_PROMPT = `You are a session compaction assistant. Create a concise continuation summary so work can resume immediately in a new context window.
 

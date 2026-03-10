@@ -1,6 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { ToolDefinition, ToolOutput, BrainJson, CapabilitySelector } from "../src/core/types.js";
+import type { ToolDefinition, ToolOutput, BrainJson, CapabilitySelector } from "../../src/core/types.js";
 
 interface SubEntry {
   name: string;

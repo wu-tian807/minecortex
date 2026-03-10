@@ -4,7 +4,7 @@ import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { JSONRPCEndpoint } from "ts-lsp-client/build/src/jsonRpcEndpoint.js";
 import { LspClient } from "ts-lsp-client/build/src/lspClient.js";
-import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
+import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
 
 const ROOT = process.cwd();
 

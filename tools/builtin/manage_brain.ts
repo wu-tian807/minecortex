@@ -1,5 +1,5 @@
-import type { ToolDefinition, ToolOutput } from "../src/core/types.js";
-import { getScheduler } from "../src/core/scheduler.js";
+import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
+import { getScheduler } from "../../src/core/scheduler.js";
 
 export default {
   name: "manage_brain",

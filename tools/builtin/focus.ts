@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import { resolve, relative } from "node:path";
-import type { ToolDefinition } from "../src/core/types.js";
+import type { ToolDefinition } from "../../src/core/types.js";
 
 const ROOT = process.cwd();
 

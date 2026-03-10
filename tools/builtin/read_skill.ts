@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import type { ToolDefinition } from "../src/core/types.js";
+import type { ToolDefinition } from "../../src/core/types.js";
 
 function findSkill(name: string, dirs: string[]): string | null {
   for (const dir of dirs) {
