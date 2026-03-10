@@ -1,5 +1,8 @@
 /** @desc ConsciousBrain — streaming agent loop with handoff-aware scheduling */
 
+import { watch as fsWatch } from "node:fs";
+import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import type {
   BrainInitConfig,
   BrainJson,
@@ -13,6 +16,8 @@ import type {
   ModelSpec,
 } from "./types.js";
 import type { LLMProvider, LLMMessage, LLMToolCall, LLMResponse } from "../llm/types.js";
+import { createFallbackProvider, getModelSpec, mergeModelsConfig } from "../llm/provider.js";
+import type { ModelsConfig } from "./types.js";
 import type { ContextEngine } from "../context/context-engine.js";
 import type { SlotRegistry } from "../context/slot-registry.js";
 import type { SessionManager } from "../session/session-manager.js";
@@ -112,10 +117,17 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       logger?.debug(brainId, turn,
         `LLM call: ${messages.length} msgs, ${tools.length} tools, session=${sessionHistory.length}`);
 
+      // Track partial text/thinking via onChunk so that on non-abort errors we
+      // can still emit a truncated AssistantMessage before surfacing the error.
+      let partialText = "";
+      let partialThinking = "";
+
       let response: LLMResponse;
       try {
         const stream = provider.chatStream(messages, tools, signal);
         response = await assembleResponseWithCallback(stream, (chunk) => {
+          if (chunk.type === "text") partialText += chunk.text;
+          if (chunk.type === "thinking") partialThinking += chunk.text;
           hooks?.emit(HookEvent.StreamChunk, { chunk, turn });
         });
       } catch (err: any) {
@@ -124,17 +136,37 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
           break;
         }
         logger?.error(brainId, turn, `LLM call failed: ${err.message}`);
+        // If partial output was generated before the error, persist and surface it.
+        if (partialText.trim() || partialThinking.trim()) {
+          const partialMsg: LLMMessage = {
+            role: "assistant",
+            content: partialText,
+            thinking: partialThinking || undefined,
+            truncated: true,
+            ts: Date.now(),
+          };
+          await lifecycle.appendAssistantTurn(partialMsg);
+          hooks?.emit(HookEvent.AssistantMessage, { msg: partialMsg, turn });
+        }
+        // Re-throw so process() can capture the error and include it in TurnEnd.
+        throw err;
+      }
 
-        const errorText = `[LLM error: ${err.message?.slice(0, 200) ?? "unknown"}]`;
-        await lifecycle.appendAssistantTurn({
-          role: "assistant",
-          content: errorText,
-          ts: Date.now(),
-        });
-        hooks?.emit(HookEvent.AssistantMessage, {
-          msg: { role: "assistant", content: errorText },
-          turn,
-        });
+      // assembleResponseWithCallback returns truncated:true when abort fires mid-stream.
+      if (response.truncated) {
+        logger?.warn(brainId, turn, "LLM stream aborted mid-flight; saving partial response");
+        const raw = typeof response.content === "string" ? response.content : "";
+        if (raw.trim() || response.thinking?.trim()) {
+          const partialMsg: LLMMessage = {
+            role: "assistant",
+            content: raw,
+            thinking: response.thinking,
+            truncated: true,
+            ts: Date.now(),
+          };
+          await lifecycle.appendAssistantTurn(partialMsg);
+          hooks?.emit(HookEvent.AssistantMessage, { msg: partialMsg, turn });
+        }
         break;
       }
 
@@ -170,8 +202,11 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       };
 
       if (signal.aborted) {
+        // Stream completed but signal was aborted before we could process tool calls.
+        // Persist and emit the partial message so it's visible in the UI.
         assistantMsg.truncated = true;
         await lifecycle.appendAssistantTurn(assistantMsg);
+        hooks?.emit(HookEvent.AssistantMessage, { msg: assistantMsg, turn });
         break;
       }
 
@@ -216,45 +251,56 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
 // ─── ConsciousBrain-specific init config ───
 
 export interface ConsciousBrainInitConfig extends BrainInitConfig {
-  model: string;
-  provider: LLMProvider;
   tools: ToolDefinition[];
   dynamicTools: DynamicToolAPI;
   dynamicSubscriptions: DynamicSubscriptionAPI;
   slotRegistry: SlotRegistry;
   contextEngine: ContextEngine;
   sessionManager: SessionManager;
-  modelSpec: ModelSpec;
   workspace: string;
+  /** Global model defaults from minecortex.json — brain.json.models overrides these at call time. */
+  globalModels: ModelsConfig;
 }
 
 // ─── ConsciousBrain ───
 
 export class ConsciousBrain extends BaseBrain {
-  private provider: LLMProvider;
+  private readonly provider: LLMProvider;
   private tools: ToolDefinition[];
   private dynamicTools: DynamicToolAPI;
   private dynamicSubscriptions: DynamicSubscriptionAPI;
   private slotRegistry: SlotRegistry;
   private contextEngine: ContextEngine;
   private sessionManager: SessionManager;
-  private modelSpec: ModelSpec;
   private workspace: string;
   private currentTurn = 0;
   private turnAbort: AbortController | null = null;
   private pendingTasks = new Set<Promise<unknown>>();
   private commandQueue: Array<{ toolName: string; args: Record<string, string>; reason?: string }> = [];
+  private readonly globalModels: ModelsConfig;
 
   constructor(config: ConsciousBrainInitConfig) {
     super(config);
-    this.provider = config.provider;
+    this.globalModels = config.globalModels;
+
+    // Stateless provider — reads fresh ModelsConfig on every chatStream call.
+    this.provider = createFallbackProvider(() => mergeModelsConfig(this.globalModels, this.brainJson.models ?? {}));
+
+    // Hot-reload brain.json via fs.watch (no per-turn disk read needed).
+    const brainJsonPath = join(this.brainDir, "brain.json");
+    const watcher = fsWatch(brainJsonPath, () => {
+      readFile(brainJsonPath, "utf-8")
+        .then(raw => { this.brainJson = JSON.parse(raw) as BrainJson; })
+        .catch(() => {});
+    });
+    this.abortController.signal.addEventListener("abort", () => watcher.close(), { once: true });
+
     this.tools = config.tools;
     this.dynamicTools = config.dynamicTools;
     this.dynamicSubscriptions = config.dynamicSubscriptions;
     this.slotRegistry = config.slotRegistry;
     this.contextEngine = config.contextEngine;
     this.sessionManager = config.sessionManager;
-    this.modelSpec = config.modelSpec;
     this.workspace = config.workspace;
 
     // ─── Built-in brainBoard vars ────────────────────────────────────────────
@@ -377,8 +423,11 @@ export class ConsciousBrain extends BaseBrain {
 
     this.hooks.emit(HookEvent.TurnStart, { turn: this.currentTurn, eventCount: events.length });
     let aborted = false;
+    let turnError: string | undefined;
 
     try {
+      const mc = mergeModelsConfig(this.globalModels, this.brainJson.models ?? {});
+      const currentModel = Array.isArray(mc.model) ? mc.model[0] : (mc.model ?? "");
       await runAgentLoop({
         brainId: this.id,
         provider: this.provider,
@@ -386,7 +435,7 @@ export class ConsciousBrain extends BaseBrain {
         dynamicTools: this.dynamicTools,
         dynamicSubscriptions: this.dynamicSubscriptions,
         contextEngine: this.contextEngine,
-        modelSpec: this.modelSpec,
+        modelSpec: getModelSpec(currentModel),
         maxIterations: this.brainJson.maxIterations ?? BRAIN_DEFAULTS.maxIterations,
         signal,
         brainBoard: this.brainBoard,
@@ -411,10 +460,11 @@ export class ConsciousBrain extends BaseBrain {
     } catch (err: any) {
       aborted = signal.aborted;
       if (!aborted) {
-        this.logger.error(this.id, this.currentTurn, `process failed: ${err?.message ?? err}`);
+        turnError = err?.message ?? String(err);
+        this.logger.error(this.id, this.currentTurn, `process failed: ${turnError}`);
       }
     } finally {
-      this.hooks.emit(HookEvent.TurnEnd, { turn: this.currentTurn, aborted });
+      this.hooks.emit(HookEvent.TurnEnd, { turn: this.currentTurn, aborted, error: turnError });
     }
   }
 
@@ -495,13 +545,6 @@ export class ConsciousBrain extends BaseBrain {
     } else {
       this.eventBus.nudge(this.id);
     }
-  }
-
-  /** Hot-swap provider/model when brain.json changes. Takes effect on next turn. */
-  updateConfig(opts: { provider: LLMProvider; modelSpec: ModelSpec; brainConfig: BrainJson }) {
-    this.provider = opts.provider;
-    this.modelSpec = opts.modelSpec;
-    this.brainJson = opts.brainConfig;
   }
 
   // ─── Lifecycle: 3 levels ───

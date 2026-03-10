@@ -27,7 +27,6 @@ import { createFSWatcher, getFSWatcher, type FSWatcher } from "../fs/watcher.js"
 import { getTerminalManager, initTerminalManager } from "../terminal/manager.js";
 import { SessionManager } from "../session/session-manager.js";
 import { Logger } from "./logger.js";
-import { createFallbackProvider, getModelSpec } from "../llm/provider.js";
 import { DEFAULT_BRAIN_JSON } from "../defaults/templates.js";
 import { BRAIN_DEFAULTS } from "../defaults/brain-defaults.js";
 
@@ -97,6 +96,12 @@ export class Scheduler {
   /** Access the shared BrainBoard instance. */
   getBrainBoard(): BrainBoard {
     return this.brainBoard;
+  }
+
+  /** Subscribe to all EventBus events — for external observers like the CLI renderer.
+   *  Returns an unsubscribe function. */
+  observeEvents(handler: (e: import("./types.js").Event) => void): () => void {
+    return this.eventBus.observe(handler);
   }
 
   /** Access a brain by id. */
@@ -256,19 +261,6 @@ export class Scheduler {
       capabilitySources: slotSources,
     });
 
-    // Create provider
-    const modelRaw = modelsConfig.model!;
-    const models = Array.isArray(modelRaw) ? modelRaw : [modelRaw];
-    const modelName = models[0];
-    const provider = createFallbackProvider(models, modelsConfig, {
-      onRetry: (model, info) => {
-        this.logger.warn(brainId, 0, `[${model}] 重试 ${info.attempt}/${info.maxRetries}: ${info.error.message}`);
-      },
-      onFallback: (from, to, err) => {
-        this.logger.warn(brainId, 0, `Fallback ${from} → ${to}: ${err.message}`);
-      },
-    });
-
     // Session manager
     const sessionManager = new SessionManager(brainId, this.pathManager);
     const existingSid = await sessionManager.currentSessionId();
@@ -276,21 +268,17 @@ export class Scheduler {
       await sessionManager.createSession();
     }
 
-    const modelSpec = getModelSpec(modelName);
-
     // ConsciousBrain — workspace 指向 bundle/shared/workspace 供 AI 作为共享操作空间
     const consciousConfig: ConsciousBrainInitConfig = {
       ...baseConfig,
-      model: modelName,
-      provider,
       tools,
       dynamicTools: toolLoader.dynamic,
       dynamicSubscriptions: { register: () => {}, release: () => {}, get: () => undefined, list: () => [] },
       slotRegistry,
       contextEngine,
       sessionManager,
-      modelSpec,
       workspace: this.pathManager.bundle().sharedDir("workspace"),
+      globalModels: globalConfig.models ?? {},
     };
 
     const brain = new ConsciousBrain(consciousConfig);
@@ -307,7 +295,7 @@ export class Scheduler {
 
     this.logger.info(
       "scheduler", 0,
-      `脑区 '${brainId}' 就绪 (model: ${modelName}, tools: [${tools.map(t => t.name).join(",")}])`,
+      `脑区 '${brainId}' 就绪 (model: ${modelsConfig.model}, tools: [${tools.map(t => t.name).join(",")}])`,
     );
   }
 

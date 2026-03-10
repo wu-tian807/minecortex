@@ -164,6 +164,18 @@ function resolveSection(model: string): { sectionName: string; entry: KeyEntry }
 // ── Public API ───────────────────────────────────────────────────
 
 /**
+ * Merge two ModelsConfig objects, with override fields taking precedence.
+ * Undefined values in override are ignored (base value is kept).
+ */
+export function mergeModelsConfig(base: ModelsConfig, override: ModelsConfig): ModelsConfig {
+  const result = { ...base };
+  for (const [k, v] of Object.entries(override) as [keyof ModelsConfig, unknown][]) {
+    if (v !== undefined) (result as Record<string, unknown>)[k] = v;
+  }
+  return result;
+}
+
+/**
  * 创建单个模型的 Provider
  * @param modelSpec 模型名称（可带 @keySection 后缀）
  * @param modelsConfig 模型配置
@@ -212,93 +224,33 @@ export function createProvider(
 }
 
 export interface FallbackProviderOptions {
-  /** 重试配置（会被 modelsConfig 中的配置覆盖） */
   retry?: RetryOptions;
-  /** 重试回调（用于日志） */
   onRetry?: (model: string, info: RetryInfo) => void;
-  /** 模型切换回调 */
   onFallback?: (from: string, to: string, error: Error) => void;
-  /** LLM 调用超时（毫秒），-1 = 永不超时 */
-  timeout?: number;
 }
 
 /**
- * 创建带重试和 fallback 的 provider
+ * 创建无状态的 fallback provider。
  *
- * 流程：
- * 1. 对每个模型，先通过 withRetry 重试
- * 2. 重试耗尽后，fallback 到下一个模型
- * 3. 流开始后（chunksYielded=true）不重试，直接抛出
+ * 每次 chatStream 调用时从 getModelsConfig() 读取最新配置（模型列表、重试策略、
+ * temperature 等），因此 brain.json 的修改无需重建 provider 即可生效。
  *
- * @param models 模型名称列表
- * @param modelsConfig 模型配置
- * @param options fallback 选项
+ * 流程：对每个模型先 withRetry 重试；重试耗尽后 fallback 到下一个；
+ * 流开始后（已 yield chunk）不 fallback，直接抛出。
  */
 export function createFallbackProvider(
-  models: string[],
-  modelsConfig?: ModelsConfig,
+  getModelsConfig: () => ModelsConfig,
   options?: FallbackProviderOptions,
 ): LLMProvider {
-  if (models.length === 0) throw new Error("No models specified for fallback chain");
-
-  // 从 modelsConfig 构建重试选项，与传入的 options.retry 合并
-  const configRetryOpts = buildRetryOptions(modelsConfig);
-  const retryOpts: RetryOptions = { ...options?.retry, ...configRetryOpts };
   const { onRetry, onFallback } = options ?? {};
 
-  // 单模型：只需重试，无 fallback
-  if (models.length === 1) {
-    const provider = createProvider(models[0], modelsConfig);
-    return {
-      async *chatStream(messages, tools, signal) {
-        const modelName = models[0];
-
-        // 由于 chatStream 返回 AsyncGenerator，需要在外层包装重试
-        // 这里采用"首次调用时重试"策略：获取第一个 chunk 前重试
-        let chunksYielded = false;
-
-        const createStream = () => provider.chatStream(messages, tools, signal);
-
-        // 使用 withRetry 包装首次 chunk 获取
-        const stream = await withRetry(
-          async () => {
-            const iterable = createStream();
-            const iterator = iterable[Symbol.asyncIterator]();
-            const first = await iterator.next();
-            return { iterator, first };
-          },
-          {
-            ...retryOpts,
-            signal,
-            onRetry: (info) => onRetry?.(modelName, info),
-          },
-        );
-
-        // 处理首个 chunk
-        if (!stream.first.done) {
-          chunksYielded = true;
-          yield stream.first.value;
-        }
-
-        // 流式处理剩余内容（不重试）
-        try {
-          let result = await stream.iterator.next();
-          while (!result.done) {
-            yield result.value;
-            result = await stream.iterator.next();
-          }
-        } catch (err) {
-          // 流中断：直接抛出，由上层处理
-          const classified = classifyLLMError(err);
-          throw classified.error;
-        }
-      },
-    };
-  }
-
-  // 多模型：重试 + fallback
   return {
     async *chatStream(messages, tools, signal) {
+      const mc = getModelsConfig();
+      const models = Array.isArray(mc.model) ? mc.model : [mc.model ?? ""];
+      if (!models[0]) throw new Error("No model specified in ModelsConfig");
+
+      const retryOpts: RetryOptions = { ...options?.retry, ...buildRetryOptions(mc) };
       let lastError: Error | undefined;
 
       for (let i = 0; i < models.length; i++) {
@@ -306,52 +258,26 @@ export function createFallbackProvider(
         let chunksYielded = false;
 
         try {
-          const provider = createProvider(modelName, modelsConfig);
-          const createStream = () => provider.chatStream(messages, tools, signal);
-
-          // 使用 withRetry 包装首次 chunk 获取
+          const provider = createProvider(modelName, mc);
           const stream = await withRetry(
             async () => {
-              const iterable = createStream();
-              const iterator = iterable[Symbol.asyncIterator]();
-              const first = await iterator.next();
-              return { iterator, first };
+              const it = provider.chatStream(messages, tools, signal)[Symbol.asyncIterator]();
+              return { it, first: await it.next() };
             },
-            {
-              ...retryOpts,
-              signal,
-              onRetry: (info) => onRetry?.(modelName, info),
-            },
+            { ...retryOpts, signal, onRetry: (info) => onRetry?.(modelName, info) },
           );
 
-          // 处理首个 chunk
-          if (!stream.first.done) {
-            chunksYielded = true;
-            yield stream.first.value;
-          }
+          if (!stream.first.done) { chunksYielded = true; yield stream.first.value; }
 
-          // 流式处理剩余内容
-          let result = await stream.iterator.next();
-          while (!result.done) {
-            yield result.value;
-            result = await stream.iterator.next();
+          for (let r = await stream.it.next(); !r.done; r = await stream.it.next()) {
+            yield r.value;
           }
-
-          return; // 成功完成
+          return;
         } catch (err: unknown) {
           const classified = classifyLLMError(err);
-
-          // 流已开始：不 fallback，直接抛出
-          if (chunksYielded) {
-            throw classified.error;
-          }
-
+          if (chunksYielded) throw classified.error;
           lastError = classified.error;
-
-          // 通知 fallback（如果还有下一个模型）
-          if (i < models.length - 1) {
-            onFallback?.(modelName, models[i + 1], classified.error);
-          }
+          if (i < models.length - 1) onFallback?.(modelName, models[i + 1], classified.error);
         }
       }
 
