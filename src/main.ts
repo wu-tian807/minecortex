@@ -3,6 +3,7 @@
 import { createWriteStream, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { installConsoleBridge } from "./core/logger.js";
+import { getPathManager } from "./fs/index.js";
 
 // Redirect stderr (logger output) to debug.log — keeps terminal clean for the renderer
 const _debugLog = createWriteStream(join(process.cwd(), "debug.log"), { flags: "a" });
@@ -55,7 +56,7 @@ async function main() {
     watchContextUsage: (brainId, cb) => {
       let contextWindow: number | null = null;
       try {
-        const brainJson = JSON.parse(readFileSync(join(process.cwd(), "bundle", "brains", brainId, "brain.json"), "utf-8")) as {
+        const brainJson = JSON.parse(readFileSync(join(getPathManager().local(brainId).root(), "brain.json"), "utf-8")) as {
           model?: string | string[];
           models?: { model?: string | string[] };
         };

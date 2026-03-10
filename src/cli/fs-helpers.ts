@@ -3,10 +3,11 @@
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { getPathManager } from "../fs/index.js";
 
-export async function listBrainIds(rootDir: string): Promise<string[]> {
+export async function listBrainIds(): Promise<string[]> {
   try {
-    const brainsDir = join(rootDir, "bundle", "brains");
+    const brainsDir = getPathManager().bundle().brainsDir();
     const entries = await readdir(brainsDir, { withFileTypes: true });
     return entries
       .filter(e => e.isDirectory() && existsSync(join(brainsDir, e.name, "brain.json")))
@@ -16,9 +17,9 @@ export async function listBrainIds(rootDir: string): Promise<string[]> {
   }
 }
 
-export async function listSessionIds(rootDir: string, brainId: string): Promise<string[]> {
+export async function listSessionIds(brainId: string): Promise<string[]> {
   try {
-    const sessionsDir = join(rootDir, "bundle", "brains", brainId, "sessions");
+    const sessionsDir = getPathManager().local(brainId).sessionsDir();
     const entries = await readdir(sessionsDir, { withFileTypes: true });
     return entries
       .filter(e => e.isDirectory())

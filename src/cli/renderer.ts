@@ -11,7 +11,7 @@ import { listBrainIds, listSessionIds } from "./fs-helpers.js";
 import { SelectOverlay } from "./select-overlay.js";
 import { StatusBar } from "./status-bar.js";
 import { parseCommand } from "../core/command-parser.js";
-import { PathManager } from "../fs/path-manager.js";
+import { getPathManager } from "../fs/index.js";
 import { SessionManager } from "../session/session-manager.js";
 
 // ─── Public types ───
@@ -383,7 +383,7 @@ export class CLIRenderer {
 
   /** Write currentSessionId to a brain's session.json (single source of truth for active session). */
   private async writeSessionJson(brainId: string, sessionId: string): Promise<void> {
-    const sessionJsonPath = join(this.rootDir, "bundle", "brains", brainId, "session.json");
+    const sessionJsonPath = join(getPathManager().local(brainId).root(), "session.json");
     try {
       let data: Record<string, unknown> = {};
       try { data = JSON.parse(readFileSync(sessionJsonPath, "utf-8")); } catch { /* fresh */ }
@@ -395,7 +395,7 @@ export class CLIRenderer {
   /** Read currentSessionId from a brain's session.json. */
   private readSessionJson(brainId: string): string {
     try {
-      const sessionJsonPath = join(this.rootDir, "bundle", "brains", brainId, "session.json");
+      const sessionJsonPath = join(getPathManager().local(brainId).root(), "session.json");
       const data = JSON.parse(readFileSync(sessionJsonPath, "utf-8")) as { currentSessionId?: string };
       return data.currentSessionId ?? "";
     } catch { return ""; }
@@ -406,7 +406,7 @@ export class CLIRenderer {
   private async resolveActive(): Promise<boolean> {
     const cfg      = this.readConfig();
     const brain    = cfg.renderer?.activeBrain ?? "";
-    const brainIds = await listBrainIds(this.rootDir);
+    const brainIds = await listBrainIds();
 
     // No saved brain, or it no longer exists on disk — show the selection overlay
     if (!brain || !brainIds.includes(brain)) {
@@ -418,7 +418,7 @@ export class CLIRenderer {
 
     // session.json is the single source of truth for which session is current
     const session = this.readSessionJson(brain);
-    const sessions = await listSessionIds(this.rootDir, brain);
+    const sessions = await listSessionIds(brain);
     this.activeBrain   = brain;
     this.activeSession = (session && sessions.includes(session)) ? session : (sessions[0] ?? "");
     this.statusBar.setContext(this.activeBrain, this.activeSession);
@@ -426,7 +426,7 @@ export class CLIRenderer {
   }
 
   private eventsPath(): string {
-    return join(this.rootDir, "bundle", "brains", this.activeBrain, "sessions", this.activeSession, "events.jsonl");
+    return join(getPathManager().local(this.activeBrain).sessionsDir(), this.activeSession, "events.jsonl");
   }
 
   // ─── Replay + tail ───
@@ -470,7 +470,7 @@ export class CLIRenderer {
   private watchSessionJson(): void {
     this.sessionWatcher?.close();
     if (!this.activeBrain) return;
-    const sessionJsonPath = join(this.rootDir, "bundle", "brains", this.activeBrain, "session.json");
+    const sessionJsonPath = join(getPathManager().local(this.activeBrain).root(), "session.json");
     if (!existsSync(sessionJsonPath)) return;
 
     let debounce: ReturnType<typeof setTimeout> | null = null;
@@ -483,7 +483,7 @@ export class CLIRenderer {
   private onSessionJsonChange(): void {
     if (!this.activeBrain) return;
     try {
-      const sessionJsonPath = join(this.rootDir, "bundle", "brains", this.activeBrain, "session.json");
+      const sessionJsonPath = join(getPathManager().local(this.activeBrain).root(), "session.json");
       const data = JSON.parse(readFileSync(sessionJsonPath, "utf-8")) as { currentSessionId?: string };
       const newSid = data.currentSessionId;
       if (!newSid || newSid === this.activeSession) return;
@@ -664,7 +664,7 @@ export class CLIRenderer {
   // ─── Overlay helpers ───
 
   private async showBrainsOverlay(): Promise<void> {
-    const ids = await listBrainIds(this.rootDir);
+    const ids = await listBrainIds();
     if (!ids.length) { this.print(`${C.dim}没有可用的 brain${C.reset}\n`); return; }
     const items = ids.map(id => ({
       label: id,
@@ -679,7 +679,7 @@ export class CLIRenderer {
   private async showSessionsOverlay(brainId?: string): Promise<void> {
     const targetBrain = brainId ?? this.activeBrain;
     if (!targetBrain) { this.print(`${C.dim}未指定 brain${C.reset}\n`); return; }
-    const sessions = await listSessionIds(this.rootDir, targetBrain);
+    const sessions = await listSessionIds(targetBrain);
 
     const items = sessions.map(sid => ({
       label: sid,
@@ -692,8 +692,7 @@ export class CLIRenderer {
       new SelectOverlay(`${targetBrain} sessions`, items, Math.max(0, activeIdx)),
       async (idx) => {
         if (idx === sessions.length) {
-          const pm = new PathManager(this.rootDir);
-          const sm = new SessionManager(targetBrain, pm);
+          const sm = new SessionManager(targetBrain, getPathManager());
           const newSid = await sm.createSession();
           this.print(`${C.dim}新建 session: ${targetBrain} / ${newSid}${C.reset}\n`);
           await this.switchTo(targetBrain, newSid);

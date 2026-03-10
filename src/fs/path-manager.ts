@@ -50,6 +50,7 @@ class LocalLayer implements LocalLayerAPI {
   constructor(private readonly r: string) {}
 
   root() { return this.r; }
+  sessionsDir() { return join(this.r, "sessions"); }
   toolsDir() { return join(this.r, "tools"); }
   slotsDir() { return join(this.r, "slots"); }
   subscriptionsDir() { return join(this.r, "subscriptions"); }

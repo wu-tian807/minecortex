@@ -323,6 +323,8 @@ export interface BundleLayerAPI extends CapabilityLayerAPI {
 export interface LocalLayerAPI extends CapabilityLayerAPI {
   /** bundle/brains/{brainId}/ */
   root(): string;
+  /** bundle/brains/{brainId}/sessions/ */
+  sessionsDir(): string;
 }
 
 export interface PathManagerAPI {
