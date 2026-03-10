@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 export async function listBrainIds(rootDir: string): Promise<string[]> {
   try {
-    const brainsDir = join(rootDir, "brains");
+    const brainsDir = join(rootDir, "bundle", "brains");
     const entries = await readdir(brainsDir, { withFileTypes: true });
     return entries
       .filter(e => e.isDirectory() && existsSync(join(brainsDir, e.name, "brain.json")))
@@ -18,7 +18,7 @@ export async function listBrainIds(rootDir: string): Promise<string[]> {
 
 export async function listSessionIds(rootDir: string, brainId: string): Promise<string[]> {
   try {
-    const sessionsDir = join(rootDir, "brains", brainId, "sessions");
+    const sessionsDir = join(rootDir, "bundle", "brains", brainId, "sessions");
     const entries = await readdir(sessionsDir, { withFileTypes: true });
     return entries
       .filter(e => e.isDirectory())

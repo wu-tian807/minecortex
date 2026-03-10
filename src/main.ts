@@ -55,7 +55,7 @@ async function main() {
     watchContextUsage: (brainId, cb) => {
       let contextWindow: number | null = null;
       try {
-        const brainJson = JSON.parse(readFileSync(join(process.cwd(), "brains", brainId, "brain.json"), "utf-8")) as {
+        const brainJson = JSON.parse(readFileSync(join(process.cwd(), "bundle", "brains", brainId, "brain.json"), "utf-8")) as {
           model?: string | string[];
           models?: { model?: string | string[] };
         };

@@ -35,7 +35,7 @@ async function ensureDir(path: string): Promise<void> {
  */
 export async function ensureDefaultConfigs(root: string): Promise<void> {
   await ensureDir(join(root, "key"));
-  await ensureDir(join(root, "brains"));
+  await ensureDir(join(root, "bundle", "brains"));
 
   if (await ensureFile(join(root, "minecortex.json"), DEFAULT_MINECORTEX_JSON)) {
     console.log("Created default minecortex.json");

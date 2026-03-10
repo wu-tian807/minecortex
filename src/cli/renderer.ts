@@ -383,7 +383,7 @@ export class CLIRenderer {
 
   /** Write currentSessionId to a brain's session.json (single source of truth for active session). */
   private async writeSessionJson(brainId: string, sessionId: string): Promise<void> {
-    const sessionJsonPath = join(this.rootDir, "brains", brainId, "session.json");
+    const sessionJsonPath = join(this.rootDir, "bundle", "brains", brainId, "session.json");
     try {
       let data: Record<string, unknown> = {};
       try { data = JSON.parse(readFileSync(sessionJsonPath, "utf-8")); } catch { /* fresh */ }
@@ -395,7 +395,7 @@ export class CLIRenderer {
   /** Read currentSessionId from a brain's session.json. */
   private readSessionJson(brainId: string): string {
     try {
-      const sessionJsonPath = join(this.rootDir, "brains", brainId, "session.json");
+      const sessionJsonPath = join(this.rootDir, "bundle", "brains", brainId, "session.json");
       const data = JSON.parse(readFileSync(sessionJsonPath, "utf-8")) as { currentSessionId?: string };
       return data.currentSessionId ?? "";
     } catch { return ""; }
@@ -426,7 +426,7 @@ export class CLIRenderer {
   }
 
   private eventsPath(): string {
-    return join(this.rootDir, "brains", this.activeBrain, "sessions", this.activeSession, "events.jsonl");
+    return join(this.rootDir, "bundle", "brains", this.activeBrain, "sessions", this.activeSession, "events.jsonl");
   }
 
   // ─── Replay + tail ───
@@ -470,7 +470,7 @@ export class CLIRenderer {
   private watchSessionJson(): void {
     this.sessionWatcher?.close();
     if (!this.activeBrain) return;
-    const sessionJsonPath = join(this.rootDir, "brains", this.activeBrain, "session.json");
+    const sessionJsonPath = join(this.rootDir, "bundle", "brains", this.activeBrain, "session.json");
     if (!existsSync(sessionJsonPath)) return;
 
     let debounce: ReturnType<typeof setTimeout> | null = null;
@@ -483,7 +483,7 @@ export class CLIRenderer {
   private onSessionJsonChange(): void {
     if (!this.activeBrain) return;
     try {
-      const sessionJsonPath = join(this.rootDir, "brains", this.activeBrain, "session.json");
+      const sessionJsonPath = join(this.rootDir, "bundle", "brains", this.activeBrain, "session.json");
       const data = JSON.parse(readFileSync(sessionJsonPath, "utf-8")) as { currentSessionId?: string };
       const newSid = data.currentSessionId;
       if (!newSid || newSid === this.activeSession) return;
