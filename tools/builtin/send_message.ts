@@ -5,14 +5,14 @@ export default {
   description:
     "Send a natural language message to another brain or to the user. " +
     "Messages are delivered to the recipient's next tick. " +
-    "Use '*' to broadcast to all brains, or 'cli' to send directly to the user's terminal. " +
+    "Use '*' to broadcast to all brains, or 'user' to send directly to the user's terminal. " +
     "After sending, output a brief confirmation and end your turn — do not wait for a reply.",
   input_schema: {
     type: "object",
     properties: {
       to: {
         type: "string",
-        description: "Target brain ID (e.g. 'talker'), '*' for broadcast, or 'cli' for the user's terminal",
+        description: "Target brain ID (e.g. 'talker'), '*' for broadcast, or 'user' for the user's terminal",
       },
       content: {
         type: "string",
@@ -36,27 +36,31 @@ export default {
     required: ["to", "content"],
   },
   async execute(args, ctx): Promise<ToolOutput> {
-    const to = String(args.to).trim();
+    const rawTo = String(args.to).trim();
     const content = String(args.content).trim();
     const summary = String(args.summary ?? "").trim() || content.slice(0, 50);
     const priority = Number(args.priority ?? 1);
     const handoff = args.handoff == null ? "turn" : String(args.handoff).trim();
 
-    if (!to || !content) return '"to" and "content" are required';
+    if (!rawTo || !content) return '"to" and "content" are required';
     if (!["silent", "turn", "innerLoop", "steer"].includes(handoff)) {
       return `"handoff" must be one of: silent, turn, innerLoop, steer`;
     }
 
+    // "user" (and legacy "cli") → user_message with no `to`: observer-only, no brain routing.
+    // This avoids treating "user"/"cli" as brain IDs in the routing table.
+    const isUserTarget = rawTo === "user" || rawTo === "cli";
     ctx.eventBus.emit({
       source: `brain:${ctx.brainId}`,
-      type: "message",
-      to,
+      type: isUserTarget ? "user_message" : "message",
+      ...(isUserTarget ? {} : { to: rawTo }),
       payload: { content, summary },
       ts: Date.now(),
       priority,
       handoff: handoff as "silent" | "turn" | "innerLoop" | "steer",
     });
 
-    return `Message sent to '${to}': ${summary}`;
+    const displayTo = rawTo === "cli" ? "user" : rawTo;
+    return `Message sent to '${displayTo}': ${summary}`;
   },
 } satisfies ToolDefinition;

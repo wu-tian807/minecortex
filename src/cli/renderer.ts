@@ -134,7 +134,7 @@ export class CLIRenderer implements OverlayHost {
   private subscribeLiveBus(): void {
     this.unsubscribeLiveBus();
     this.liveUnsub = this.callbacks.observeEvents((e) => {
-      if (e.to !== "cli") return;
+      if (e.type !== "live_turn_start" && e.type !== "live_chunk") return;
       const p = e.payload as Record<string, unknown>;
       const brain = String(p.brain ?? e.source);
       if (brain !== this.activeBrain) return;

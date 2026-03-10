@@ -17,7 +17,7 @@ export default {
     properties: {
       name: {
         type: "string",
-        description: "Name of the subscription source to enable (e.g. 'heartbeat', 'cli')",
+        description: "Name of the subscription source to enable (e.g. 'heartbeat', 'recorder')",
       },
       config: {
         type: "object",

@@ -210,12 +210,15 @@ class EventRecorder {
 
   recordAssistantChunk(kind: "text" | "thinking", text: string): void {
     if (!text) return;
-    this.eventBus?.emit({ source: this.brainId, type: "live_chunk", to: "cli",
+    // source="subscription:recorder": this subscription is emitting on behalf of the brain.
+    // payload.brain identifies which brain's stream this belongs to (renderer filters by activeBrain).
+    // No `to` — observer-only; renderer filters by type.
+    this.eventBus?.emit({ source: "subscription:recorder", type: "live_chunk",
       payload: { brain: this.brainId, kind, text }, ts: Date.now() });
   }
 
   recordTurnStart(): void {
-    this.eventBus?.emit({ source: this.brainId, type: "live_turn_start", to: "cli",
+    this.eventBus?.emit({ source: "subscription:recorder", type: "live_turn_start",
       payload: { brain: this.brainId }, ts: Date.now() });
     this.appendEvent({ k: "turn_start", ts: Date.now() }).catch(() => {});
   }
@@ -357,10 +360,12 @@ export default function create(ctx: SourceContext): EventSource {
         if (error) recorder.recordError(error);
       }));
 
-      // Messages addressed to "cli" (user) — observed globally since they don't enter any brain queue
+      // User-facing messages (type="user_message"): emitted without `to`, observer-only.
+      // send_message { to: "user" } → type: "user_message", no brain routing.
+      // system_message (e.g. from tools like shell during init) follows the same pattern.
       unsubs.push(
         ctx.brain.eventBus.observe((e) => {
-          if (e.type === "message" && e.to === "cli") {
+          if (e.type === "user_message" || e.type === "system_message") {
             const payload = e.payload as { content?: string; summary?: string } | undefined;
             const text = payload?.content ?? JSON.stringify(e.payload);
             recorder.recordCliMessage(e.source, text);
