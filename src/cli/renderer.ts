@@ -206,9 +206,27 @@ export class CLIRenderer implements OverlayHost {
 
   private inputCursorPos(): FooterCursorPos {
     const { lineIdx, colWidth } = this.input.cursorDisplayPos();
-    // Both PROMPT and PROMPT_CONT have display width 2; cursor col is 1-indexed.
+    const cols        = Math.max(1, process.stdout.columns ?? 80);
+    // PROMPT and PROMPT_CONT both have display width 2.
     const prefixWidth = calcDisplayWidth(PROMPT);
-    return { lineIdx, col: prefixWidth + colWidth + 1 };
+
+    // Convert logical (lineIdx, colWidth) → visual (row, col) by accounting for
+    // terminal-width auto-wrapping of all lines before and including the cursor line.
+    const displayLines = this.input.buildDisplayLines();
+
+    // Count visual rows contributed by each logical line before the cursor.
+    let visualRow = 0;
+    for (let i = 0; i < lineIdx; i++) {
+      const w = prefixWidth + calcDisplayWidth(displayLines[i] ?? "");
+      visualRow += Math.max(1, Math.ceil(w / cols));
+    }
+
+    // Add visual-row offset within the cursor's own logical line.
+    const curW = prefixWidth + colWidth;
+    visualRow += Math.floor(curW / cols);
+    const visualCol = (curW % cols) + 1; // 1-indexed terminal column
+
+    return { lineIdx: visualRow, col: visualCol };
   }
 
   /** Tracks the input line count so we know when to resize the scroll region. */
