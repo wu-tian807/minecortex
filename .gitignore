@@ -2,7 +2,7 @@ node_modules/
 dist/
 key/llm_key.json
 logs/
-bundle/
+/bundle/
 backups/
 *.tsbuildinfo
 debug.log
