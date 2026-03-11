@@ -11,15 +11,15 @@ export class SlotRegistry implements DynamicSlotAPI {
 
   // ─── Static layer (SlotLoader callbacks) ───
 
-  registerSlot(slot: ContextSlot): void {
+  registerStatic(slot: ContextSlot): void {
     this.staticSlots.set(slot.id, slot);
   }
 
-  removeSlot(id: string): void {
+  releaseStatic(id: string): void {
     this.staticSlots.delete(id);
   }
 
-  getSlot(id: string): ContextSlot | undefined {
+  getStatic(id: string): ContextSlot | undefined {
     return this.staticSlots.get(id);
   }
 

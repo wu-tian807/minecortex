@@ -4,7 +4,6 @@ import type {
   EventSourceFactory,
   SourceContext,
   CapabilitySelector,
-  DynamicSubscriptionAPI,
   Event,
   BrainContextAPI,
 } from "../core/types.js";
@@ -22,34 +21,7 @@ type SubscriptionModule = { default?: EventSourceFactory };
 export class SubscriptionLoader extends BaseLoader<SubscriptionModule, SubscriptionEntry> {
   private emitter: ((event: Event) => void) | null = null;
   private brainContext: BrainContextAPI | null = null;
-
-  // ─── DynamicRegistry layer ───
-
-  private dynamicMap = new Map<string, EventSource>();
-
-  readonly dynamic: DynamicSubscriptionAPI = {
-    register: (key: string, source: EventSource) => {
-      this.dynamicMap.set(key, source);
-      if (this.emitter) {
-        try {
-          runWithLogContext({ brainId: this.logBrainId, turn: 0 }, () => {
-            source.start(this.emitter!);
-          });
-        } catch (err) {
-          console.error(`[SubscriptionLoader.dynamic] start failed for "${key}"`, err);
-        }
-      }
-    },
-    release: (key: string) => {
-      const source = this.dynamicMap.get(key);
-      if (source) {
-        try { source.stop(); } catch { /* already stopped */ }
-        this.dynamicMap.delete(key);
-      }
-    },
-    get: (key: string) => this.dynamicMap.get(key),
-    list: () => [...this.dynamicMap.values()],
-  };
+  private onSourcesChange: ((sources: EventSource[]) => void) | null = null;
 
   setEmitter(emit: (event: Event) => void): void {
     this.emitter = emit;
@@ -57,6 +29,10 @@ export class SubscriptionLoader extends BaseLoader<SubscriptionModule, Subscript
 
   setBrainContext(ctx: BrainContextAPI): void {
     this.brainContext = ctx;
+  }
+
+  setCallback(onChange: (sources: EventSource[]) => void): void {
+    this.onSourcesChange = onChange;
   }
 
   // ─── BaseLoader 抽象接口 ───
@@ -84,34 +60,37 @@ export class SubscriptionLoader extends BaseLoader<SubscriptionModule, Subscript
   }
 
   onRegister(name: string, entry: SubscriptionEntry): void {
-    if (!this.emitter) return;
-    try {
-      runWithLogContext({ brainId: this.logBrainId, turn: 0 }, () => {
-        entry.source.start(this.emitter!);
-      });
-    } catch (err) {
-      console.error(`[SubscriptionLoader] subscription_error for "${name}"`, err);
-      this.emitter({
-        source: `subscription:${name}`,
-        type: "subscription_error",
-        payload: { error: String(err) },
-        ts: Date.now(),
-        handoff: "silent",
-      });
+    if (this.emitter) {
+      try {
+        runWithLogContext({ brainId: this.logBrainId, turn: 0 }, () => {
+          entry.source.start(this.emitter!);
+        });
+      } catch (err) {
+        console.error(`[SubscriptionLoader] subscription_error for "${name}"`, err);
+        this.emitter({
+          source: `subscription:${name}`,
+          type: "subscription_error",
+          payload: { error: String(err) },
+          ts: Date.now(),
+          handoff: "silent",
+        });
+      }
     }
+    this.notifyChange();
   }
 
   onUnregister(_name: string, entry: SubscriptionEntry): void {
     try {
       entry.source.stop();
     } catch { /* already stopped */ }
+    this.notifyChange();
   }
 
   // ─── 公共 API ───
 
   async load(ctx: LoaderContext): Promise<EventSource[]> {
     await this._loadInternal(ctx);
-    return [...this.registry.values()].map((e) => e.source);
+    return this.allStatic();
   }
 
   /** 按 selector 变更差量启停 subscription，不走完整 reload。 */
@@ -136,5 +115,13 @@ export class SubscriptionLoader extends BaseLoader<SubscriptionModule, Subscript
     }
 
     return { toStart, toStop };
+  }
+
+  allStatic(): EventSource[] {
+    return [...this.registry.values()].map((entry) => entry.source);
+  }
+
+  private notifyChange(): void {
+    this.onSourcesChange?.(this.allStatic());
   }
 }

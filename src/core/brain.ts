@@ -1,7 +1,7 @@
 /** @desc ConsciousBrain — streaming agent loop with handoff-aware scheduling */
 
 import { watch as fsWatch } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { readFile } from "node:fs/promises";
 import type {
   BrainInitConfig,
@@ -18,9 +18,9 @@ import type {
 import type { LLMProvider, LLMMessage, LLMToolCall, LLMResponse } from "../llm/types.js";
 import { createFallbackProvider, getModelSpec, mergeModelsConfig } from "../llm/provider.js";
 import type { ModelsConfig } from "./types.js";
-import type { ContextEngine } from "../context/context-engine.js";
-import type { SlotRegistry } from "../context/slot-registry.js";
-import type { SessionManager } from "../session/session-manager.js";
+import { ContextEngine } from "../context/context-engine.js";
+import { SlotRegistry } from "../context/slot-registry.js";
+import { SessionManager } from "../session/session-manager.js";
 import { assembleResponseWithCallback } from "../llm/stream.js";
 import { renderEventDisplay } from "../context/event-router.js";
 import { HookEvent } from "../hooks/types.js";
@@ -28,6 +28,12 @@ import { runToolBatch } from "./tool-batch-runner.js";
 import { BaseBrain } from "./base-brain.js";
 import { runWithLogContext } from "./logger.js";
 import { BRAIN_DEFAULTS } from "../defaults/brain-defaults.js";
+import { ToolRegistry } from "../context/tool-registry.js";
+import { ToolLoader } from "../loaders/tool-loader.js";
+import { SlotLoader } from "../loaders/slot-loader.js";
+import { SubscriptionLoader } from "../loaders/subscription-loader.js";
+import { BaseLoader } from "../loaders/base-loader.js";
+import { SubscriptionRegistry } from "./subscription-registry.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -38,7 +44,7 @@ function sleep(ms: number): Promise<void> {
 export interface AgentLoopOpts {
   brainId: string;
   provider: LLMProvider;
-  tools: ToolDefinition[];
+  getTools: () => ToolDefinition[];
   dynamicTools: DynamicToolAPI;
   dynamicSubscriptions: DynamicSubscriptionAPI;
   contextEngine: ContextEngine;
@@ -67,7 +73,7 @@ export interface AgentLoopOpts {
 export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | null> {
   return await runWithLogContext({ brainId: opts.brainId, turn: opts.turn ?? 0 }, async () => {
     const {
-      brainId, provider, tools, dynamicTools, dynamicSubscriptions, contextEngine,
+      brainId, provider, getTools, dynamicTools, dynamicSubscriptions, contextEngine,
       modelSpec, maxIterations, signal, brainBoard, slotRegistry,
       pathManager, workspace, eventBus, logger,
       sessionManager, turn = 0, onAssistantMessage, hooks,
@@ -113,6 +119,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
         undefined,
         vars,
       );
+      const tools = getTools();
 
       logger?.debug(brainId, turn,
         `LLM call: ${messages.length} msgs, ${tools.length} tools, session=${sessionHistory.length}`);
@@ -251,12 +258,6 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
 // ─── ConsciousBrain-specific init config ───
 
 export interface ConsciousBrainInitConfig extends BrainInitConfig {
-  tools: ToolDefinition[];
-  dynamicTools: DynamicToolAPI;
-  dynamicSubscriptions: DynamicSubscriptionAPI;
-  slotRegistry: SlotRegistry;
-  contextEngine: ContextEngine;
-  sessionManager: SessionManager;
   workspace: string;
   /** Global model defaults from minecortex.json — brain.json.models overrides these at call time. */
   globalModels: ModelsConfig;
@@ -266,13 +267,16 @@ export interface ConsciousBrainInitConfig extends BrainInitConfig {
 
 export class ConsciousBrain extends BaseBrain {
   private readonly provider: LLMProvider;
-  private tools: ToolDefinition[];
-  private dynamicTools: DynamicToolAPI;
-  private dynamicSubscriptions: DynamicSubscriptionAPI;
-  private slotRegistry: SlotRegistry;
-  private contextEngine: ContextEngine;
-  private sessionManager: SessionManager;
-  private workspace: string;
+  private tools: ToolDefinition[] = [];
+  private readonly toolRegistry: ToolRegistry;
+  private readonly subscriptionRegistry: SubscriptionRegistry;
+  private readonly slotRegistry: SlotRegistry;
+  private readonly contextEngine: ContextEngine;
+  private readonly sessionManager: SessionManager;
+  private readonly workspace: string;
+  private readonly toolLoader: ToolLoader;
+  private readonly slotLoader: SlotLoader;
+  private readonly subscriptionLoader: SubscriptionLoader;
   private currentTurn = 0;
   private turnAbort: AbortController | null = null;
   private pendingTasks = new Set<Promise<unknown>>();
@@ -295,13 +299,45 @@ export class ConsciousBrain extends BaseBrain {
     });
     this.abortController.signal.addEventListener("abort", () => watcher.close(), { once: true });
 
-    this.tools = config.tools;
-    this.dynamicTools = config.dynamicTools;
-    this.dynamicSubscriptions = config.dynamicSubscriptions;
-    this.slotRegistry = config.slotRegistry;
-    this.contextEngine = config.contextEngine;
-    this.sessionManager = config.sessionManager;
+    this.toolRegistry = new ToolRegistry();
+    this.subscriptionRegistry = new SubscriptionRegistry();
+    this.slotRegistry = new SlotRegistry();
+    this.contextEngine = new ContextEngine(this.slotRegistry);
+    this.sessionManager = new SessionManager(this.id, this.pathManager);
     this.workspace = config.workspace;
+    this.toolLoader = new ToolLoader();
+    this.slotLoader = new SlotLoader();
+    this.subscriptionLoader = new SubscriptionLoader();
+
+    this.toolLoader.setLogContext(this.id);
+    this.toolLoader.setCallback((tools) => this.toolRegistry.replaceStatic(tools));
+    this.toolRegistry.setOnChange((tools) => this.updateTools(tools));
+
+    this.slotLoader.setLogContext(this.id);
+    this.slotLoader.setSlotContext({
+      brainId: this.id,
+      brainDir: this.brainDir,
+      brainBoard: this.brainBoard,
+      pathManager: this.pathManager,
+    });
+    this.slotLoader.setCallbacks(
+      (slots) => { for (const slot of slots) this.slotRegistry.registerStatic(slot); },
+      (names) => { for (const name of names) this.slotRegistry.releaseStatic(name); },
+    );
+
+    this.subscriptionLoader.setLogContext(this.id);
+    this.subscriptionLoader.setEmitter((event) => this.pushEvent(event));
+    this.subscriptionLoader.setBrainContext({
+      id: this.id,
+      brainDir: this.brainDir,
+      hooks: this.hooks,
+      brainBoard: this.brainBoard,
+      pathManager: this.pathManager,
+      eventBus: this.boundEventBus,
+      queueCommand: (toolName, args, reason) => this.queueCommand(toolName, args, reason),
+    });
+    this.subscriptionLoader.setCallback((sources) => this.subscriptionRegistry.replaceStatic(sources));
+    this.subscriptionRegistry.setEmitter((event) => this.pushEvent(event));
 
     // ─── Built-in brainBoard vars ────────────────────────────────────────────
     //
@@ -330,13 +366,59 @@ export class ConsciousBrain extends BaseBrain {
     });
   }
 
+  async initCapabilities(): Promise<void> {
+    const existingSid = await this.sessionManager.currentSessionId();
+    if (!existingSid) {
+      await this.sessionManager.createSession();
+    }
+
+    if (this.fsWatcher) {
+      this.toolLoader.registerWatchPatterns(this.fsWatcher, this.id);
+      this.slotLoader.registerWatchPatterns(this.fsWatcher, this.id);
+      this.subscriptionLoader.registerWatchPatterns(this.fsWatcher, this.id);
+    }
+
+    await this.toolLoader.load({
+      brainId: this.id,
+      brainDir: this.brainDir,
+      pathManager: this.pathManager,
+      selector: this.brainJson.tools ?? BRAIN_DEFAULTS.tools,
+      capabilitySources: BaseLoader.buildSources(
+        this.pathManager,
+        this.id,
+        "tools",
+        this.resolveRedirectPath(this.brainJson.paths?.tools),
+      ),
+    });
+    await this.slotLoader.load({
+      brainId: this.id,
+      brainDir: this.brainDir,
+      pathManager: this.pathManager,
+      selector: this.brainJson.slots ?? BRAIN_DEFAULTS.slots,
+      capabilitySources: BaseLoader.buildSources(
+        this.pathManager,
+        this.id,
+        "slots",
+        this.resolveRedirectPath(this.brainJson.paths?.slots),
+      ),
+    });
+    await this.subscriptionLoader.load({
+      brainId: this.id,
+      brainDir: this.brainDir,
+      pathManager: this.pathManager,
+      selector: this.brainJson.subscriptions ?? BRAIN_DEFAULTS.subscriptions,
+      capabilitySources: BaseLoader.buildSources(
+        this.pathManager,
+        this.id,
+        "subscriptions",
+        this.resolveRedirectPath(this.brainJson.paths?.subscriptions),
+      ),
+    });
+  }
+
   updateTools(tools: ToolDefinition[]): void {
     this.tools = tools;
     this.logger.info(this.id, 0, `tools reloaded: ${tools.length} total`);
-  }
-
-  setDynamicSubscriptions(api: DynamicSubscriptionAPI): void {
-    this.dynamicSubscriptions = api;
   }
 
   protected async runMain(_signal: AbortSignal): Promise<void> {
@@ -431,9 +513,9 @@ export class ConsciousBrain extends BaseBrain {
       await runAgentLoop({
         brainId: this.id,
         provider: this.provider,
-        tools: this.tools,
-        dynamicTools: this.dynamicTools,
-        dynamicSubscriptions: this.dynamicSubscriptions,
+        getTools: () => this.tools,
+        dynamicTools: this.toolRegistry,
+        dynamicSubscriptions: this.subscriptionRegistry,
         contextEngine: this.contextEngine,
         modelSpec: getModelSpec(currentModel),
         maxIterations: this.brainJson.maxIterations ?? BRAIN_DEFAULTS.maxIterations,
@@ -500,8 +582,8 @@ export class ConsciousBrain extends BaseBrain {
       eventBus: this.boundEventBus,
       brainBoard: this.brainBoard,
       slot: this.slotRegistry,
-      tools: this.dynamicTools,
-      subscriptions: this.dynamicSubscriptions,
+      tools: this.toolRegistry,
+      subscriptions: this.subscriptionRegistry,
       pathManager: this.pathManager,
       workspace: this.workspace,
       sessionManager: this.sessionManager,
@@ -566,9 +648,16 @@ export class ConsciousBrain extends BaseBrain {
     }
 
     await super.shutdown();
+    this.toolRegistry.clear();
+    this.subscriptionRegistry.clear();
     this.slotRegistry.clear();
 
     this.logger.info(this.id, this.currentTurn, "shutdown() complete");
+  }
+
+  private resolveRedirectPath(redirected?: string): string | undefined {
+    if (!redirected) return undefined;
+    return isAbsolute(redirected) ? redirected : join(this.pathManager.root(), redirected);
   }
 }
 

@@ -201,153 +201,61 @@ export class Scheduler {
 
   private async initBrain(brainId: string, globalConfig: MinecortexConfig): Promise<void> {
     const brainConfig = await this.loadBrainConfig(brainId);
-    const brainDir = this.pathManager.local(brainId).root();
     const baseConfig = this.createBrainInitConfig(brainId, brainConfig);
-    const toolSources = BaseLoader.buildSources(this.pathManager, brainId, "tools", brainConfig.paths?.tools ? (isAbsolute(brainConfig.paths.tools) ? brainConfig.paths.tools : join(ROOT, brainConfig.paths.tools)) : undefined);
-    const slotSources = BaseLoader.buildSources(this.pathManager, brainId, "slots", brainConfig.paths?.slots ? (isAbsolute(brainConfig.paths.slots) ? brainConfig.paths.slots : join(ROOT, brainConfig.paths.slots)) : undefined);
+    let brain: BaseBrain | null = null;
 
     await this.terminalManager.loadBrainEnv(brainId);
 
-    // ScriptBrain path
-    if (this.isScriptBrain(brainId)) {
-      const brain = new ScriptBrain(baseConfig);
-      const { sources } = await this.loadSubscriptions(brainId, brainDir, brainConfig, brain);
-      brain.setSources(sources);
-      this.brains.set(brainId, brain);
-      this.logger.info("scheduler", 0, `ScriptBrain '${brainId}' 就绪`);
-      return;
-    }
+    try {
+      // ScriptBrain path
+      if (this.isScriptBrain(brainId)) {
+        const scriptBrain = new ScriptBrain(baseConfig);
+        brain = scriptBrain;
+        await scriptBrain.initCapabilities();
+        this.brains.set(brainId, scriptBrain);
+        this.logger.info("scheduler", 0, `ScriptBrain '${brainId}' 就绪`);
+        return;
+      }
 
-    // ConsciousBrain path
-    const modelsConfig = resolveModelsConfig(brainConfig, globalConfig);
-    if (!modelsConfig.model) {
-      this.logger.warn("scheduler", 0, `脑区 '${brainId}' 无 model，跳过`);
-      return;
-    }
+      // ConsciousBrain path
+      const modelsConfig = resolveModelsConfig(brainConfig, globalConfig);
+      if (!modelsConfig.model) {
+        this.logger.warn("scheduler", 0, `脑区 '${brainId}' 无 model，跳过`);
+        return;
+      }
 
-    // Load tools
-    const selectorTools = brainConfig.tools ?? BRAIN_DEFAULTS.tools;
-    const toolLoader = new ToolLoader();
-    toolLoader.setLogContext(brainId);
-    if (this.fsWatcher) toolLoader.registerWatchPatterns(this.fsWatcher, brainId);
-    const tools = await toolLoader.load({
-      brainId,
-      brainDir,
-      pathManager: this.pathManager,
-      selector: selectorTools,
-      capabilitySources: toolSources,
-    });
+      // ConsciousBrain — workspace 指向 bundle/shared/workspace 供 AI 作为共享操作空间
+      const consciousConfig: ConsciousBrainInitConfig = {
+        ...baseConfig,
+        workspace: this.pathManager.bundle().sharedWorkspace(),
+        globalModels: globalConfig.models ?? {},
+      };
 
-    // Setup slot registry and context engine
-    const slotRegistry = new SlotRegistry();
-    const contextEngine = new ContextEngine(slotRegistry);
+      const consciousBrain = new ConsciousBrain(consciousConfig);
+      brain = consciousBrain;
+      await consciousBrain.initCapabilities();
 
-    const selectorSlots = brainConfig.slots ?? BRAIN_DEFAULTS.slots;
-    const slotLoader = new SlotLoader();
-    slotLoader.setLogContext(brainId);
-    slotLoader.setSlotContext({
-      brainId,
-      brainDir,
-      brainBoard: this.brainBoard,
-      pathManager: this.pathManager,
-    });
-    slotLoader.setCallbacks(
-      (slots) => { for (const s of slots) slotRegistry.registerSlot(s); },
-      (names) => { for (const n of names) slotRegistry.removeSlot(n); },
-    );
-    if (this.fsWatcher) slotLoader.registerWatchPatterns(this.fsWatcher, brainId);
-    await slotLoader.load({
-      brainId,
-      brainDir,
-      pathManager: this.pathManager,
-      selector: selectorSlots,
-      capabilitySources: slotSources,
-    });
+      this.brains.set(brainId, consciousBrain);
 
-    // Session manager
-    const sessionManager = new SessionManager(brainId, this.pathManager);
-    const existingSid = await sessionManager.currentSessionId();
-    if (!existingSid) {
-      await sessionManager.createSession();
-    }
-
-    // ConsciousBrain — workspace 指向 bundle/shared/workspace 供 AI 作为共享操作空间
-    const consciousConfig: ConsciousBrainInitConfig = {
-      ...baseConfig,
-      tools,
-      dynamicTools: toolLoader.dynamic,
-      dynamicSubscriptions: { register: () => {}, release: () => {}, get: () => undefined, list: () => [] },
-      slotRegistry,
-      contextEngine,
-      sessionManager,
-      workspace: this.pathManager.bundle().sharedWorkspace(),
-      globalModels: globalConfig.models ?? {},
-    };
-
-    const brain = new ConsciousBrain(consciousConfig);
-
-    // Load subscriptions AFTER brain creation (so hooks is available)
-    const { sources, loader: subLoader } = await this.loadSubscriptions(brainId, brainDir, brainConfig, brain);
-    brain.setSources(sources);
-    brain.setDynamicSubscriptions(subLoader.dynamic);
-
-    this.brains.set(brainId, brain);
-
-    // Tool hot-reload callback
-    toolLoader.setCallback((updatedTools) => brain.updateTools(updatedTools));
-
-    this.logger.info(
-      "scheduler", 0,
-      `脑区 '${brainId}' 就绪 (model: ${modelsConfig.model}, tools: [${tools.map(t => t.name).join(",")}])`,
-    );
-  }
-
-  // ─── Private helper: load subscriptions with brain's hooks ───
-
-  private async loadSubscriptions(
-    brainId: string,
-    brainDir: string,
-    brainConfig: BrainJson,
-    brain: BaseBrain,
-  ): Promise<{ sources: import("./types.js").EventSource[]; loader: SubscriptionLoader }> {
-    const subLoader = new SubscriptionLoader();
-    subLoader.setLogContext(brainId);
-    subLoader.setEmitter((event) => brain.pushEvent(event));
-
-    const brainContext: import("./types.js").BrainContextAPI = {
-      id: brainId,
-      brainDir,
-      hooks: brain.hooks,
-      brainBoard: this.brainBoard,
-      pathManager: this.pathManager,
-      eventBus: brain.boundEventBus,
-      queueCommand: (toolName, args, reason) => {
-        if (brain instanceof ConsciousBrain) {
-          brain.queueCommand(toolName, args, reason);
-        } else {
-          this.logger.warn("scheduler", 0, `queueCommand on non-ConsciousBrain: ${brainId}`);
+      this.logger.info(
+        "scheduler", 0,
+        `脑区 '${brainId}' 就绪 (model: ${modelsConfig.model})`,
+      );
+    } catch (err) {
+      if (brain) {
+        try {
+          await brain.shutdown();
+        } catch (shutdownErr) {
+          this.logger.error(
+            "scheduler",
+            0,
+            `brain '${brainId}' rollback failed`,
+            shutdownErr instanceof Error ? shutdownErr : new Error(String(shutdownErr)),
+          );
         }
-      },
-    };
-    subLoader.setBrainContext(brainContext);
-
-    if (this.fsWatcher) subLoader.registerWatchPatterns(this.fsWatcher, brainId);
-
-    const selectorSub = brainConfig.subscriptions ?? BRAIN_DEFAULTS.subscriptions;
-    const subSources = BaseLoader.buildSources(
-      this.pathManager, brainId, "subscriptions",
-      brainConfig.paths?.subscriptions
-        ? (isAbsolute(brainConfig.paths.subscriptions) ? brainConfig.paths.subscriptions : join(ROOT, brainConfig.paths.subscriptions))
-        : undefined,
-    );
-    const sources = await subLoader.load({
-      brainId,
-      brainDir,
-      pathManager: this.pathManager,
-      selector: selectorSub,
-      capabilitySources: subSources,
-    });
-    return { sources, loader: subLoader };
+      }
+      throw err;
+    }
   }
 
   // ─── Private helper: remove brain from memory ───

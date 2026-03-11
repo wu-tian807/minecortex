@@ -1,8 +1,6 @@
 import type {
   CapabilityDescriptor,
   ToolDefinition,
-  FSWatcherAPI,
-  DynamicToolAPI,
 } from "../core/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
@@ -20,23 +18,6 @@ type ToolFactory = { default?: ToolDefinition };
  */
 export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
   private onToolsChange: ((tools: ToolDefinition[]) => void) | null = null;
-
-  // ─── DynamicRegistry layer ───
-
-  private dynamicMap = new Map<string, ToolDefinition>();
-
-  readonly dynamic: DynamicToolAPI = {
-    register: (key: string, tool: ToolDefinition) => {
-      this.dynamicMap.set(key, tool);
-      this.notifyChange();
-    },
-    release: (key: string) => {
-      this.dynamicMap.delete(key);
-      this.notifyChange();
-    },
-    get: (key: string) => this.dynamicMap.get(key),
-    list: () => [...this.dynamicMap.values()],
-  };
 
   setCallback(onChange: (tools: ToolDefinition[]) => void): void {
     this.onToolsChange = onChange;
@@ -74,15 +55,13 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
 
   // ─── 公共 API ───
 
-  allActive(): ToolDefinition[] {
-    const staticTools = [...this.registry.values()].filter((t): t is ToolDefinition => t !== null);
-    const dynamicTools = [...this.dynamicMap.values()];
-    return [...staticTools, ...dynamicTools];
+  allStatic(): ToolDefinition[] {
+    return [...this.registry.values()].filter((tool): tool is ToolDefinition => tool !== null);
   }
 
   async load(ctx: LoaderContext): Promise<ToolDefinition[]> {
     await this._loadInternal(ctx);
-    return this.allActive();
+    return this.allStatic();
   }
 
   /** 注册 watch 后 reload 时额外通知 tool registry 变更。 */
@@ -92,6 +71,6 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
   }
 
   private notifyChange(): void {
-    this.onToolsChange?.(this.allActive());
+    this.onToolsChange?.(this.allStatic());
   }
 }
