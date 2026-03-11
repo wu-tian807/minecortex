@@ -364,9 +364,13 @@ export class CLIRenderer implements OverlayHost {
     const buf = Buffer.from(raw, "utf-8");
     const stopAt = untilOffset !== undefined ? Math.min(untilOffset, buf.length) : buf.length;
 
-    // Reset scroll region to full screen so replay content fills from the top.
+    // Clear the full screen first (needs full-screen scroll region so clearScreen
+    // erases the footer rows too), then immediately constrain to the content area
+    // before the replay loop.  This keeps all replayed output within rows 1..N-3
+    // so that subsequent drawFooter() cannot overwrite the last content lines.
     this.footer.resetScrollRegion();
     clearScreen();
+    this.footer.setupScrollRegion();
 
     this.replaying = true;
     let pos = 0;
@@ -383,8 +387,6 @@ export class CLIRenderer implements OverlayHost {
 
     this.tailer.offset = stopAt; // signal readNewLines to resume from here
 
-    // Re-establish scroll region and redraw footer.
-    this.footer.setupScrollRegion();
     this.drawFooter();
   }
 
