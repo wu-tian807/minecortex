@@ -22,12 +22,32 @@ import { CLIRenderer } from "./cli/renderer.js";
 import { ensureDefaultConfigs } from "./defaults/index.js";
 import { getModelSpec } from "./llm/provider.js";
 
+import { BundleManager } from "./bundle/manager.js";
+import { initPathManager } from "./fs/index.js";
+
 async function main() {
   process.stdout.write("╔════════════════════════════════╗\n");
   process.stdout.write("║        MineClaw v0.2.0         ║\n");
   process.stdout.write("╚════════════════════════════════╝\n\n");
 
   await ensureDefaultConfigs(process.cwd());
+  
+  // 初始化全局 PathManager
+  initPathManager(process.cwd());
+
+  // 初始化终端管理器和 bundle 环境
+  const bundleManager = BundleManager.getInstance();
+  try {
+    await bundleManager.init();
+  } catch (e: any) {
+    if (e.message.includes("No bundle manifest found")) {
+      // 触发 UI 让用户选择 Pack 或 Backup
+      console.error("\n" + e.message);
+      console.log("TODO: Please run a CLI setup command or select a bundle visually. For now, exiting.");
+      process.exit(1);
+    }
+    throw e;
+  }
 
   const scheduler = new Scheduler();
   await scheduler.start();
@@ -62,7 +82,17 @@ async function main() {
           model?: string | string[];
           models?: { model?: string | string[] };
         };
-        const rawModel  = brainJson.models?.model ?? brainJson.model;
+        // Brain.json may omit the model field, inheriting from the global minecortex.json.
+        // Fall back to the global model so contextWindow is always resolved.
+        let rawModel: string | string[] | undefined = brainJson.models?.model ?? brainJson.model;
+        if (!rawModel) {
+          try {
+            const globalJson = JSON.parse(readFileSync(getPathManager().global().minecortexConfig(), "utf-8")) as {
+              models?: { model?: string | string[] };
+            };
+            rawModel = globalJson.models?.model;
+          } catch { /* ignore */ }
+        }
         const modelName = Array.isArray(rawModel) ? rawModel[0] : rawModel;
         if (modelName) contextWindow = getModelSpec(modelName).contextWindow ?? null;
       } catch { /* ignore */ }

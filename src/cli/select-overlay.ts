@@ -1,7 +1,7 @@
 /**
- * @desc SelectOverlay — inline arrow-key selection rendered below the input line.
+ * @desc SelectOverlay — inline arrow-key selection rendered at an absolute terminal row.
  *
- * Layout (rendered below the sticky footer):
+ * Layout (rendered at startRow within the content area):
  *
  *   ╭─ title ──────────────────────────────╮
  *   │ ● item A  (hint)                     │   ← highlighted
@@ -10,15 +10,16 @@
  *   ╰── ↑↓ 移动  Enter 确认  Esc 取消 ────╯
  *
  * Cursor management:
- *   - show()    : writes "\n" to move past input line, then renders. lineCount tracks lines written.
- *   - moveUp/Down: clears overlay area and re-renders in place (differential-style).
- *   - clear()   : erases overlay area, moves cursor back to input line row.
+ *   - show(startRow): renders at absolute terminal rows startRow..startRow+rowCount()-1.
+ *   - moveUp/Down   : re-renders in place at the same absolute rows.
+ *   - clear()       : erases all rows with absolute positioning.
  *
- * The caller (CLIRenderer) is responsible for redrawing the input line after clear().
+ * All rendering uses absolute cursor positioning (\x1b[row;1H) to work correctly
+ * regardless of the scroll region or whether the cursor is at the terminal bottom.
  */
 
 import * as readline from "node:readline";
-import { C, cursorUp, cursorToCol0, clearToEnd } from "./ansi.js";
+import { C, clearToEnd } from "./ansi.js";
 
 export interface SelectItem {
   label: string;
@@ -29,8 +30,8 @@ export class SelectOverlay {
   private items: SelectItem[];
   private idx: number;
   private title: string;
-  /** Number of lines written during the last renderLines() call. */
-  private lineCount = 0;
+  /** Absolute terminal row (1-indexed) where the overlay starts. Set by show(). */
+  private startRow = 1;
 
   constructor(title: string, items: SelectItem[], activeIdx = 0) {
     this.title = title;
@@ -41,6 +42,12 @@ export class SelectOverlay {
   get selected(): SelectItem | null { return this.items[this.idx] ?? null; }
   get selectedIndex(): number { return this.idx; }
   get isEmpty(): boolean { return this.items.length === 0; }
+
+  /**
+   * Number of terminal rows this overlay occupies: 2 borders + one row per item.
+   * Use this to compute the startRow before calling show().
+   */
+  rowCount(): number { return this.items.length + 2; }
 
   // ─── Navigation ───
 
@@ -54,23 +61,21 @@ export class SelectOverlay {
 
   // ─── Lifecycle ───
 
-  /** Render overlay below the current line (call while cursor is on the input line). */
-  show(): void {
-    process.stdout.write("\n");   // advance past input line
-    this.lineCount = 0;
+  /**
+   * Render overlay at absolute terminal row `startRow`.
+   * Uses absolute cursor positioning so it works regardless of scroll region.
+   */
+  show(startRow: number): void {
+    this.startRow = startRow;
     this.renderLines();
   }
 
-  /** Erase the overlay and leave cursor on the input line (call before redrawInputLine). */
+  /** Erase all overlay rows using absolute positioning. */
   clear(): void {
-    if (this.lineCount > 0) {
-      cursorUp(this.lineCount);
-      cursorToCol0();
-      clearToEnd();
-      this.lineCount = 0;
-    }
-    // Move back to the input line (one row above where show() started writing)
-    cursorUp(1);
+    process.stdout.write("\x1b[s");
+    process.stdout.write(`\x1b[${this.startRow};1H`);
+    clearToEnd();
+    process.stdout.write("\x1b[u");
   }
 
   // ─── Private rendering ───
@@ -110,19 +115,17 @@ export class SelectOverlay {
     }
     lines.push(bottomBorder);
 
-    process.stdout.write(
-      lines.map(l => `${C.dim}${l}${C.reset}`).join("\n") + "\n",
-    );
-    // Note: top/bottom border already wrapped in dim above, but dim on inner rows are fine too.
-    // We overwrite the dim on the bold label via reset inside labelFmt.
-    this.lineCount = lines.length;
+    // Render each line at its absolute row position.
+    process.stdout.write("\x1b[s");
+    for (let i = 0; i < lines.length; i++) {
+      process.stdout.write(`\x1b[${this.startRow + i};1H`);
+      readline.clearLine(process.stdout, 0);
+      process.stdout.write(`${C.dim}${lines[i]}${C.reset}`);
+    }
+    process.stdout.write("\x1b[u");
   }
 
   private redraw(): void {
-    cursorUp(this.lineCount);
-    cursorToCol0();
-    clearToEnd();
-    this.lineCount = 0;
     this.renderLines();
   }
 }

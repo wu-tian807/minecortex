@@ -87,7 +87,7 @@ export class CLIRenderer implements OverlayHost {
   constructor(rootDir: string, callbacks: RendererCallbacks) {
     this.callbacks = callbacks;
     this.footer    = new FooterRenderer(this.isTTY);
-    this.config    = new RendererConfig(join(rootDir, "minecortex.json"));
+    this.config    = new RendererConfig();
     this.tailer    = new EventTailer(
       () => this.eventsPath(),
       () => this.activeBrain,
@@ -453,7 +453,11 @@ export class CLIRenderer implements OverlayHost {
     this.overlayOnConfirm = onConfirm;
     this.input.clear();
     this.refreshFooter();
-    ov.show();
+    // Render the overlay within the scroll region (content area), using absolute positioning.
+    // startRow is chosen so the overlay box fits just above the footer.
+    const contentBot = this.footer.contentBottom();
+    const startRow   = Math.max(1, contentBot - ov.rowCount() + 1);
+    ov.show(startRow);
   }
 
   private closeOverlay(): void {
