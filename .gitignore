@@ -2,8 +2,8 @@ node_modules/
 dist/
 key/llm_key.json
 logs/
-brains/
-task-board.md
+bundle/
+backups/
 *.tsbuildinfo
 debug.log
 workspace/

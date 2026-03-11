@@ -7,6 +7,7 @@
   },
   "scripts": {
     "start": "tsx src/main.ts",
+    "bundle": "tsx src/cli/bundle.ts",
     "dev": "tsx watch --ignore brains --ignore workspace --ignore debug.log src/main.ts"
   },
   "dependencies": {

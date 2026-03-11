@@ -23,7 +23,7 @@ import { SlotLoader } from "../loaders/slot-loader.js";
 import { ContextEngine } from "../context/context-engine.js";
 import { SlotRegistry } from "../context/slot-registry.js";
 import { initPathManager, type PathManager } from "../fs/path-manager.js";
-import { createFSWatcher, getFSWatcher, type FSWatcher } from "../fs/watcher.js";
+import { createOrGetFSWatcher, getFSWatcher, type FSWatcher } from "../fs/watcher.js";
 import { getTerminalManager, initTerminalManager } from "../terminal/manager.js";
 import { SessionManager } from "../session/session-manager.js";
 import { Logger } from "./logger.js";
@@ -86,8 +86,8 @@ export class Scheduler {
   async init(): Promise<void> {
     this.brainBoard.loadFromDisk();
     try {
-      createFSWatcher(ROOT);
-      this.brainBoard.registerFSWatcher(this.fsWatcher!);
+      const watcher = createOrGetFSWatcher(ROOT);
+      this.brainBoard.registerFSWatcher(watcher);
     } catch {
       this.logger.warn("scheduler", 0, "FSWatcher creation failed — hot-reload disabled");
     }
@@ -115,19 +115,17 @@ export class Scheduler {
   }
 
   async start(): Promise<void> {
+    this.shuttingDown = false;
     this.logger.info("scheduler", 0, "启动中...");
 
     this.brainBoard.loadFromDisk();
 
     try {
-      createFSWatcher(ROOT);
-      this.brainBoard.registerFSWatcher(this.fsWatcher!);
+      const watcher = createOrGetFSWatcher(ROOT);
+      this.brainBoard.registerFSWatcher(watcher);
     } catch {
       this.logger.warn("scheduler", 0, "FSWatcher creation failed — hot-reload disabled");
     }
-
-    // 确保 bundle 环境就绪（独立 Python/Node 下载、base.env 生成、unshare 检测）
-    await this.terminalManager.init();
 
     const globalConfig = await this.loadGlobalConfig();
     const brainIds = await this.discoverBrains();
@@ -280,7 +278,7 @@ export class Scheduler {
       slotRegistry,
       contextEngine,
       sessionManager,
-      workspace: this.pathManager.bundle().sharedDir("workspace"),
+      workspace: this.pathManager.bundle().sharedWorkspace(),
       globalModels: globalConfig.models ?? {},
     };
 

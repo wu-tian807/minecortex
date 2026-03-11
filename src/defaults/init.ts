@@ -27,15 +27,13 @@ async function ensureDir(path: string): Promise<void> {
 }
 
 /**
- * 确保所有默认配置文件存在
+ * 确保所有默认全局配置文件存在
  * - minecortex.json
  * - key/llm_key.json
  * - key/models.json
- * - brains/ 目录
  */
 export async function ensureDefaultConfigs(root: string): Promise<void> {
   await ensureDir(join(root, "key"));
-  await ensureDir(join(root, "bundle", "brains"));
 
   if (await ensureFile(join(root, "minecortex.json"), DEFAULT_MINECORTEX_JSON)) {
     console.log("Created default minecortex.json");

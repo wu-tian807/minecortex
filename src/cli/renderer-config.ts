@@ -1,14 +1,14 @@
-/** @desc RendererConfig — config/session persistence and active brain/session resolution */
+/** @desc RendererConfig — state persistence and active brain/session resolution */
 
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { getPathManager } from "../fs/index.js";
 import { listBrainIds, listSessionIds } from "./fs-helpers.js";
 
-interface MineclawJson {
-  renderer?: { activeBrain?: string };
+interface RendererStateJson {
+  activeBrain?: string;
   [key: string]: unknown;
 }
 
@@ -20,18 +20,30 @@ export interface ResolvedContext {
 }
 
 export class RendererConfig {
-  constructor(private configPath: string) {}
+  constructor() {}
 
-  // ─── App config (minecortex.json) ───
+  // ─── App config (bundle/state/renderer.json) ───
 
-  read(): MineclawJson {
-    try { return JSON.parse(readFileSync(this.configPath, "utf-8")) as MineclawJson; }
-    catch { return {}; }
+  private get rendererStatePath(): string {
+    return join(getPathManager().bundle().stateDir(), "renderer.json");
+  }
+
+  read(): RendererStateJson {
+    try { 
+      const path = this.rendererStatePath;
+      if (!existsSync(path)) return {};
+      return JSON.parse(readFileSync(path, "utf-8")) as RendererStateJson; 
+    } catch { 
+      return {}; 
+    }
   }
 
   async writeActiveBrain(brain: string): Promise<void> {
+    const statePath = this.rendererStatePath;
     const cfg = this.read();
-    await writeFile(this.configPath, JSON.stringify({ ...cfg, renderer: { activeBrain: brain } }, null, 2));
+    
+    mkdirSync(dirname(statePath), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ ...cfg, activeBrain: brain }, null, 2));
   }
 
   // ─── Per-brain session.json ───
@@ -57,7 +69,7 @@ export class RendererConfig {
   // ─── Resolve active brain + session on startup ───
 
   async resolveActive(): Promise<ResolvedContext> {
-    const brain    = this.read().renderer?.activeBrain ?? "";
+    const brain    = this.read().activeBrain ?? "";
     const brainIds = await listBrainIds();
 
     if (!brain || !brainIds.includes(brain)) {
