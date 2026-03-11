@@ -1,22 +1,19 @@
 /**
- * bundle 环境初始化 — 由 TerminalManager.init() 调用一次（幂等）。
+ * bundle 环境初始化 — 由 BundleManager.init() 调用一次（幂等）。
  *
  * 职责：
- *   1. 确保 bundle 级独立 Python 存在（下载 python-build-standalone，不依赖宿主机 python）
- *   2. 确保 bundle 级独立 Node.js 存在（下载官方预编译包，不依赖宿主机 node）
- *   3. 确保 bundle 级 npm 工作目录存在
- *   4. 生成 bundle/shared/env/base.env（路径是绝对路径，每次启动刷新）
+ *   1. 确保 bundle 级独立 Python 存在（下载 python-build-standalone）
+ *      → 安装到 bundle/shared/runtime/python/（不写 /usr/local，绕开 overlay copy-up 问题）
+ *   2. 确保 bundle 级独立 Node.js 存在（下载官方预编译包）
+ *      → 安装到 bundle/shared/runtime/node/
+ *   3. 写入 base.env：PYTHON_HOME / NODE_HOME / LD_LIBRARY_PATH / PKG_CONFIG_PATH
+ *   4. 确保 bundle 级 npm 工作目录存在
  */
 
-import { mkdir, writeFile, rename, rm } from "node:fs/promises";
-import { existsSync, createWriteStream } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { exec as execCb, spawn } from "node:child_process";
-import { promisify } from "node:util";
-import { pipeline } from "node:stream/promises";
-import { createGunzip } from "node:zlib";
-
-const execAsync = promisify(execCb);
+import { getTerminalManager } from "../terminal/manager.js";
 
 // ─── Python build-standalone config ───────────────────────────────────────────
 
@@ -38,13 +35,16 @@ const NODE_DIR     = `node-${NODE_VERSION}-linux-x64`;
 
 export async function ensureBundleEnvironment(
   bundleRoot: string,
+  manifest: any,
+  saveManifest: () => Promise<void>,
   onProgress?: (msg: string) => void,
 ): Promise<void> {
   const log = onProgress ?? ((m: string) => console.log(m));
-  await ensurePython(bundleRoot, log);
-  await ensureNode(bundleRoot, log);
+  await ensurePython(bundleRoot, log, manifest, saveManifest);
+  await ensureNode(bundleRoot, log, manifest, saveManifest);
   await ensureNodeLib(bundleRoot);
-  await generateBaseEnv(bundleRoot);
+  // base.env 由 BundleManager.initBaseEnv() 生成（在本函数调用完毕后执行），
+  // 内含 PYTHON_HOME / NODE_HOME 等路径。setup.sh 可在此基础上追加自定义变量。
 }
 
 // ─── Python (python-build-standalone) ─────────────────────────────────────────
@@ -52,41 +52,42 @@ export async function ensureBundleEnvironment(
 async function ensurePython(
   bundleRoot: string,
   log: (msg: string) => void,
+  manifest: any,
+  saveManifest: () => Promise<void>
 ): Promise<void> {
-  const pythonHome = join(bundleRoot, "shared/lib/python");
-  const sentinel   = join(pythonHome, "bin/python3");
+  if (manifest.runtimeState.pythonInstalled) return;
 
-  if (existsSync(sentinel)) return;
-
-  log("[bundle] 独立 Python 不存在，开始下载（首次运行，约需 1-2 分钟）...");
+  // Install to bundle-local path to avoid overlayfs copy-up issues in user namespaces.
+  // The host's /usr/local/bin may already contain Python files; overwriting them through
+  // an overlay triggers file copy-up which fails with EACCES.
+  const pythonDest = join(bundleRoot, "shared", "runtime", "python");
+  log("[bundle] 独立 Python 不存在，开始下载并安装...");
   log(`[bundle] 下载源: ${PBS_URL}`);
+  log(`[bundle] 安装目标: ${pythonDest}`);
 
-  const tmpTar = join(bundleRoot, "shared/lib/.python-download.tar.gz");
-  const tmpDir = join(bundleRoot, "shared/lib/.python-unpack");
+  const tm = getTerminalManager();
 
-  await mkdir(join(bundleRoot, "shared/lib"), { recursive: true });
+  const script = `
+    set -e
+    mkdir -p '${pythonDest}'
+    mkdir -p /tmp/python-dl
+    cd /tmp/python-dl
+    curl -L --retry 3 --max-time 300 --progress-bar "${PBS_URL}" -o python.tar.gz
+    tar -xzf python.tar.gz
+    # The extracted folder is 'python'
+    cp -a python/. '${pythonDest}/'
+    rm -rf /tmp/python-dl
+  `;
 
-  try {
-    await downloadFile(PBS_URL, tmpTar, (pct) => {
-      if (pct % 20 === 0) log(`[bundle] Python 下载 ${pct}%...`);
-    });
-
-    log("[bundle] 解压 Python...");
-    await extractTarGz(tmpTar, tmpDir);
-
-    // python-build-standalone 解压后是 python/ 子目录
-    const extractedPython = join(tmpDir, "python");
-    if (!existsSync(extractedPython)) {
-      throw new Error(`解压后未找到 python/ 目录，内容: ${await listDir(tmpDir)}`);
-    }
-    // 清理可能存在的残留目录（上次安装中途中断留下的半成品）
-    await rm(pythonHome, { recursive: true, force: true });
-    await rename(extractedPython, pythonHome);
-    log(`[bundle] Python 就绪: ${pythonHome}`);
-  } finally {
-    await rm(tmpTar, { force: true });
-    await rm(tmpDir, { recursive: true, force: true });
+  const res = await tm.exec(script, { timeoutMs: 0, description: "install-python" });
+  if (res.exitCode !== 0) {
+    const tail = res.stdout?.trim().split("\n").slice(-8).join("\n") ?? "";
+    throw new Error(`Failed to install Python (exit ${res.exitCode}):\n${tail}\n→ full log: ${res.logFile}`);
   }
+
+  log(`[bundle] Python 就绪: ${pythonDest}/bin/python3`);
+  manifest.runtimeState.pythonInstalled = true;
+  await saveManifest();
 }
 
 // ─── Node.js ──────────────────────────────────────────────────────────────────
@@ -94,40 +95,39 @@ async function ensurePython(
 async function ensureNode(
   bundleRoot: string,
   log: (msg: string) => void,
+  manifest: any,
+  saveManifest: () => Promise<void>
 ): Promise<void> {
-  const nodeHome = join(bundleRoot, "shared/lib/node");
-  const sentinel = join(nodeHome, "bin/node");
+  if (manifest.runtimeState.nodeInstalled) return;
 
-  if (existsSync(sentinel)) return;
-
-  log("[bundle] 独立 Node.js 不存在，开始下载（首次运行）...");
+  // Same rationale as ensurePython — install to bundle-local path.
+  const nodeDest = join(bundleRoot, "shared", "runtime", "node");
+  log("[bundle] 独立 Node.js 不存在，开始下载并安装...");
   log(`[bundle] 下载源: ${NODE_URL}`);
+  log(`[bundle] 安装目标: ${nodeDest}`);
 
-  const tmpTar = join(bundleRoot, "shared/lib/.node-download.tar.gz");
-  const tmpDir = join(bundleRoot, "shared/lib/.node-unpack");
+  const tm = getTerminalManager();
 
-  await mkdir(join(bundleRoot, "shared/lib"), { recursive: true });
+  const script = `
+    set -e
+    mkdir -p '${nodeDest}'
+    mkdir -p /tmp/node-dl
+    cd /tmp/node-dl
+    curl -L --retry 3 --max-time 300 --progress-bar "${NODE_URL}" -o node.tar.gz
+    tar --no-same-owner -xzf node.tar.gz
+    cp -a ${NODE_DIR}/. '${nodeDest}/'
+    rm -rf /tmp/node-dl
+  `;
 
-  try {
-    await downloadFile(NODE_URL, tmpTar, (pct) => {
-      if (pct % 20 === 0) log(`[bundle] Node.js 下载 ${pct}%...`);
-    });
-
-    log("[bundle] 解压 Node.js...");
-    await extractTarGz(tmpTar, tmpDir);
-
-    const extractedNode = join(tmpDir, NODE_DIR);
-    if (!existsSync(extractedNode)) {
-      throw new Error(`解压后未找到 ${NODE_DIR}/ 目录，内容: ${await listDir(tmpDir)}`);
-    }
-    // 清理可能存在的残留目录（上次安装中途中断留下的半成品）
-    await rm(nodeHome, { recursive: true, force: true });
-    await rename(extractedNode, nodeHome);
-    log(`[bundle] Node.js 就绪: ${nodeHome}`);
-  } finally {
-    await rm(tmpTar, { force: true });
-    await rm(tmpDir, { recursive: true, force: true });
+  const res = await tm.exec(script, { timeoutMs: 0, description: "install-node" });
+  if (res.exitCode !== 0) {
+    const tail = res.stdout?.trim().split("\n").slice(-8).join("\n") ?? "";
+    throw new Error(`Failed to install Node.js (exit ${res.exitCode}):\n${tail}\n→ full log: ${res.logFile}`);
   }
+
+  log(`[bundle] Node.js 就绪: ${nodeDest}/bin/node`);
+  manifest.runtimeState.nodeInstalled = true;
+  await saveManifest();
 }
 
 // ─── Node lib 目录（bundle 级 node_modules）──────────────────────────────────
@@ -149,111 +149,5 @@ async function ensureNodeLib(bundleRoot: string): Promise<void> {
       ) + "\n",
       "utf-8",
     );
-  }
-}
-
-// ─── base.env 生成 ────────────────────────────────────────────────────────────
-
-/**
- * 每次框架启动时重新生成 base.env（路径是绝对路径，随 bundleRoot 而定）。
- * brain 级 .env 优先级高于此文件，可覆盖任意变量。
- */
-async function generateBaseEnv(bundleRoot: string): Promise<void> {
-  const envDir  = join(bundleRoot, "shared/env");
-  const envPath = join(envDir, "base.env");
-  await mkdir(envDir, { recursive: true });
-
-  const pythonHome    = join(bundleRoot, "shared/lib/python");
-  const nodeHome      = join(bundleRoot, "shared/lib/node");
-  const nmPath        = join(bundleRoot, "shared/lib/node_modules");
-  const browsersPath  = join(bundleRoot, "shared/browsers");
-  const bundleLibPath = join(bundleRoot, "shared/lib");
-
-  const lines = [
-    "# bundle/shared/env/base.env",
-    "# 由框架自动生成（每次启动时刷新），手动修改会被覆盖。",
-    "# 要自定义 brain 级 env，请编辑 bundle/brains/{brainId}/.env",
-    "",
-    "# ─── Python（bundle 级独立安装，不依赖宿主机 python）────────────────────────",
-    `PYTHON_HOME=${pythonHome}`,
-    `# python3/pip3 路径由 env-builder.ts 自动 prepend 到 PATH`,
-    "",
-    "# ─── Node.js（bundle 级独立安装，不依赖宿主机 node）────────────────────────",
-    `NODE_HOME=${nodeHome}`,
-    `NODE_PATH=${nmPath}`,
-    `# npm install 默认装到此目录（等效于 npm install --prefix ${bundleLibPath}）`,
-    `NPM_CONFIG_PREFIX=${bundleLibPath}`,
-    "",
-    "# ─── Playwright（浏览器二进制，按需安装）────────────────────────────────────",
-    `PLAYWRIGHT_BROWSERS_PATH=${browsersPath}`,
-    `# 安装浏览器命令示例（在 brain shell 中执行）：`,
-    `#   npx playwright install chromium`,
-    "",
-    "# ─── /usr/local overlay（namespace 内持久写入）───────────────────────────────",
-    `LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64`,
-    `PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig`,
-    "",
-  ];
-
-  await writeFile(envPath, lines.join("\n"), "utf-8");
-}
-
-// ─── 下载 + 解压 helpers ──────────────────────────────────────────────────────
-
-/**
- * 将 URL 下载到 destPath，带进度回调（0-100）。
- * 使用 Node.js 原生 fetch（Node 18+）。
- */
-async function downloadFile(
-  url: string,
-  destPath: string,
-  onProgress?: (pct: number) => void,
-): Promise<void> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status} downloading ${url}`);
-
-  const total = Number(res.headers.get("content-length") ?? 0);
-  let received = 0;
-  let lastPct = -1;
-
-  const writer = createWriteStream(destPath);
-  const reader = res.body!.getReader();
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      writer.write(value);
-      if (total > 0 && onProgress) {
-        received += value.length;
-        const pct = Math.floor(received / total * 100);
-        if (pct !== lastPct) { lastPct = pct; onProgress(pct); }
-      }
-    }
-    await new Promise<void>((res, rej) => {
-      writer.end();
-      writer.on("finish", res);
-      writer.on("error", rej);
-    });
-  } catch (e) {
-    writer.destroy();
-    throw e;
-  }
-}
-
-/**
- * 将 .tar.gz 文件解压到 destDir（使用系统 tar 命令，最可靠）。
- */
-async function extractTarGz(tarPath: string, destDir: string): Promise<void> {
-  await mkdir(destDir, { recursive: true });
-  await execAsync(`tar -xzf '${tarPath}' -C '${destDir}'`);
-}
-
-async function listDir(dir: string): Promise<string> {
-  try {
-    const { stdout } = await execAsync(`ls '${dir}' 2>/dev/null || echo "(empty)"`);
-    return stdout.trim();
-  } catch {
-    return "(error listing)";
   }
 }
