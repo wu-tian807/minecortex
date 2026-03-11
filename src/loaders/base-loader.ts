@@ -8,7 +8,7 @@
  *   4. onRegister / onUnregister — 实例注册/注销的副作用
  *
  * BaseLoader 自动处理：
- *   - discover(scanFn) + loadAll 的完整加载流程（_loadInternal）
+ *   - 内建三类能力（tools/slots/subscriptions）的 .ts 发现与 loadAll 流程
  *   - FSWatcher 注册：从 capabilitySources 自动推导 watch 目录，覆盖三层
  *     无需手写 regex——sources 本身就是 global / bundle / local 层的物化
  *   - 热更新：文件变更时调用 onWatchedFileChanged → reloadAll
@@ -18,6 +18,8 @@
 
 import { relative } from "node:path";
 import { isAbsolute } from "node:path";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 import type {
   CapabilityDescriptor,
   CapabilitySelector,
@@ -27,9 +29,102 @@ import type {
   PathManagerAPI,
 } from "../core/types.js";
 import { runWithLogContext } from "../core/logger.js";
-import { discover, filterByCapability, flatFilesAndTags } from "./scanner.js";
-import type { ScanFn } from "./scanner.js";
 import type { LoaderContext } from "./types.js";
+
+function resolveBuiltInDir(
+  pm: PathManagerAPI,
+  brainId: string,
+  kind: "tools" | "slots" | "subscriptions",
+  redirected?: string,
+): string[] {
+  const localDir = redirected
+    ? (isAbsolute(redirected) ? redirected : redirected)
+    : kind === "tools"
+      ? pm.local(brainId).toolsDir()
+      : kind === "slots"
+        ? pm.local(brainId).slotsDir()
+        : pm.local(brainId).subscriptionsDir();
+
+  const globalDir = kind === "tools"
+    ? pm.global().toolsDir()
+    : kind === "slots"
+      ? pm.global().slotsDir()
+      : pm.global().subscriptionsDir();
+  const bundleDir = kind === "tools"
+    ? pm.bundle().toolsDir()
+    : kind === "slots"
+      ? pm.bundle().slotsDir()
+      : pm.bundle().subscriptionsDir();
+  return [globalDir, bundleDir, localDir];
+}
+
+async function discoverTypeScriptCapabilities(
+  sources: CapabilitySource[],
+): Promise<CapabilityDescriptor[]> {
+  const preferred = new Map<string, CapabilityDescriptor>();
+  for (const source of sources) {
+    try {
+      const entries = await readdir(source.dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith(".ts")) {
+          const name = entry.name.slice(0, -3);
+          preferred.set(`:${name}`, {
+            name,
+            exposedName: name,
+            path: join(source.dir, entry.name),
+            sourceId: source.id,
+          });
+          continue;
+        }
+        if (!entry.isDirectory()) continue;
+        const tag = entry.name;
+        try {
+          const taggedEntries = await readdir(join(source.dir, tag), { withFileTypes: true });
+          for (const taggedEntry of taggedEntries) {
+            if (!taggedEntry.isFile() || !taggedEntry.name.endsWith(".ts")) continue;
+            const name = taggedEntry.name.slice(0, -3);
+            preferred.set(`${tag}:${name}`, {
+              name,
+              tag,
+              exposedName: name,
+              path: join(source.dir, tag, taggedEntry.name),
+              sourceId: source.id,
+            });
+          }
+        } catch { /* tag dir doesn't exist */ }
+      }
+    } catch { /* source dir doesn't exist */ }
+  }
+
+  const descriptors = [...preferred.values()];
+  const nameCount = new Map<string, number>();
+  for (const d of descriptors) nameCount.set(d.name, (nameCount.get(d.name) ?? 0) + 1);
+  for (const d of descriptors) {
+    d.exposedName = (nameCount.get(d.name) ?? 1) > 1 ? `${d.name}@${d.tag ?? "default"}` : d.name;
+  }
+  return descriptors;
+}
+
+function resolveToken(token: string, descriptors: CapabilityDescriptor[]): CapabilityDescriptor[] {
+  if (token.startsWith("#")) {
+    const tag = token.slice(1);
+    return descriptors.filter((d) => d.tag === tag);
+  }
+
+  const atIndex = token.lastIndexOf("@");
+  if (atIndex > 0) {
+    const name = token.slice(0, atIndex);
+    const tag = token.slice(atIndex + 1);
+    return descriptors.filter((d) => d.name === name && d.tag === tag);
+  }
+
+  const matches = descriptors.filter((d) => d.name === token);
+  if (matches.length === 1) return matches;
+  if (matches.length > 1) {
+    console.warn(`[BaseLoader] ambiguous bare capability "${token}", use "name@tag" instead`);
+  }
+  return [];
+}
 
 export abstract class BaseLoader<TFactory, TInstance> {
   // ─── 静态 source 构建工具 ───
@@ -37,30 +132,14 @@ export abstract class BaseLoader<TFactory, TInstance> {
   static buildSources(
     pm: PathManagerAPI,
     brainId: string,
-    kind: string,
+    kind: "tools" | "slots" | "subscriptions",
     redirected?: string,
   ): CapabilitySource[] {
-    const localDir = redirected
-      ? (isAbsolute(redirected) ? redirected : redirected)
-      : pm.local(brainId).capabilityDir(kind);
-
-    // Source order: later entries override earlier on name collision → local wins.
+    const [globalDir, bundleDir, localDir] = resolveBuiltInDir(pm, brainId, kind, redirected);
     return [
-      { id: "global", dir: pm.global().capabilityDir(kind) },
-      { id: "bundle", dir: pm.bundle().capabilityDir(kind) },
-      { id: brainId,  dir: localDir },
-    ];
-  }
-
-  static buildExtraSources(
-    pm: PathManagerAPI,
-    brainId: string,
-    name: string,
-  ): CapabilitySource[] {
-    return [
-      { id: "global", dir: pm.global().capabilityDir(name) },
-      { id: "bundle", dir: pm.bundle().capabilityDir(name) },
-      { id: brainId,  dir: pm.local(brainId).capabilityDir(name) },
+      { id: "global", dir: globalDir },
+      { id: "bundle", dir: bundleDir },
+      { id: brainId, dir: localDir },
     ];
   }
 
@@ -87,18 +166,9 @@ export abstract class BaseLoader<TFactory, TInstance> {
   abstract onRegister(name: string, instance: TInstance): void;
   abstract onUnregister(name: string, instance: TInstance): void;
 
-  // ─── 扫描策略 ───
-
-  /**
-   * 返回此 loader 使用的扫描策略（默认：.ts 文件 + tag 子目录）。
-   * 内容 loader 覆盖为 flatFiles(".md")；目录型 loader 覆盖为 scanDirs()。
-   */
-  protected scanFn(): ScanFn { return flatFilesAndTags(); }
-
   /**
    * watch 时用于匹配 source 目录内文件路径的 regex 片段。
-   * 与 scanFn() 对应：默认 .ts + tag 子目录；内容 loader 覆盖为 "[^/]+\\.md"。
-   * BaseLoader 在 registerWatchers() 里将其拼合到 source 相对路径上。
+   * 内建 loader 固定使用 .ts 文件与 tag 子目录。
    */
   protected fileWatchPattern(): string {
     return "(?:[^/]+/)?[^/]+\\.ts";
@@ -107,7 +177,7 @@ export abstract class BaseLoader<TFactory, TInstance> {
   // ─── 模板：加载 ───
 
   /**
-   * 内部加载流程：discover(scanFn) → clearRegistry → loadAll。
+   * 内部加载流程：discoverTypeScriptCapabilities → clearRegistry → loadAll。
    * 首次加载后自动将 FSWatcher 绑定到所有 capabilitySources（三层覆盖）。
    *
    * Generation guard: each _loadInternal call increments _loadGeneration.
@@ -119,7 +189,7 @@ export abstract class BaseLoader<TFactory, TInstance> {
     const firstLoad = !this.lastCtx;
     this.lastCtx = ctx;
     const gen = ++this._loadGeneration;
-    const descriptors = await discover(ctx.capabilitySources, this.scanFn());
+    const descriptors = await discoverTypeScriptCapabilities(ctx.capabilitySources);
     if (gen !== this._loadGeneration) return; // superseded by a newer load
     this.clearRegistry();
     await this.loadAll(descriptors, ctx, gen);
@@ -202,7 +272,7 @@ export abstract class BaseLoader<TFactory, TInstance> {
     ctx: LoaderContext,
     gen?: number,
   ): Promise<Map<string, TInstance>> {
-    for (const descriptor of filterByCapability(descriptors, ctx.selector)) {
+    for (const descriptor of BaseLoader.filterByCapability(descriptors, ctx.selector)) {
       try {
         await runWithLogContext({ brainId: this.logBrainId, turn: 0 }, async () => {
           const factory = await this.importFactory(`${descriptor.path}?t=${Date.now()}`);
@@ -268,5 +338,32 @@ export abstract class BaseLoader<TFactory, TInstance> {
     descriptor: CapabilityDescriptor,
   ): Record<string, unknown> | undefined {
     return selector.config?.[descriptor.exposedName] ?? selector.config?.[descriptor.name];
+  }
+
+  static filterByCapability(
+    descriptors: CapabilityDescriptor[],
+    selector: CapabilitySelector,
+  ): CapabilityDescriptor[] {
+    const selected = new Map<string, CapabilityDescriptor>();
+
+    for (const d of descriptors) {
+      if (d.sourceId !== "global" && d.sourceId !== "bundle") {
+        selected.set(d.exposedName, d);
+      } else if (d.sourceId === "bundle") {
+        if ((selector.bundle ?? "none") === "all") selected.set(d.exposedName, d);
+      } else {
+        if ((selector.global ?? "none") === "all") selected.set(d.exposedName, d);
+      }
+    }
+
+    for (const token of selector.enable ?? []) {
+      for (const d of resolveToken(token, descriptors)) selected.set(d.exposedName, d);
+    }
+
+    for (const token of selector.disable ?? []) {
+      for (const d of resolveToken(token, descriptors)) selected.delete(d.exposedName);
+    }
+
+    return [...selected.values()];
   }
 }

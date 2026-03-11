@@ -1,22 +1,7 @@
-/**
- * DirectivesLoader — 扫描 directives/*.md 文件，每个文件产出一个 ContextSlot。
- *
- * 直接继承 BaseLoader，通过 scanFn()/fileWatchPattern() 虚方法声明 .md 策略。
- * scanSync 是本 loader 自己的同步扫描路径，供 slot 工厂调用。
- */
-
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { readFileSync, readdirSync } from "node:fs";
 import type { ContextSlot } from "../../src/context/types.js";
-import type { CapabilityDescriptor, PathManagerAPI } from "../../src/core/types.js";
-import type { LoaderContext } from "../../src/loaders/types.js";
-import { BaseLoader } from "../../src/loaders/base-loader.js";
-import { flatFiles } from "../../src/loaders/scanner.js";
-import type { ScanFn } from "../../src/loaders/scanner.js";
-
-// ─── Types ───
-
-interface MdFile { name: string; path: string }
+import type { PathManagerAPI } from "../../src/core/types.js";
 
 // ─── Frontmatter / content helpers ───
 
@@ -56,50 +41,24 @@ function buildSlots(name: string, path: string): ContextSlot[] {
   }];
 }
 
-// ─── Loader ───
+function directiveDirs(pm: PathManagerAPI, brainId: string): string[] {
+  return [
+    join(pm.global().root(), "directives"),
+    join(pm.bundle().root(), "directives"),
+    join(pm.local(brainId).root(), "directives"),
+  ];
+}
 
-export class DirectivesLoader extends BaseLoader<MdFile, ContextSlot[]> {
-  protected override scanFn(): ScanFn { return flatFiles(); }
-  protected override fileWatchPattern(): string { return "[^/]+\\.md"; }
-
-  async importFactory(pathWithQuery: string): Promise<MdFile> {
-    const path = pathWithQuery.replace(/\?[^?]*$/, "");
-    return { name: basename(path, ".md"), path };
+export function createDirectiveSlots(pm: PathManagerAPI, brainId: string): ContextSlot[] {
+  const map = new Map<string, ContextSlot[]>();
+  for (const dir of directiveDirs(pm, brainId)) {
+    try {
+      for (const file of readdirSync(dir)) {
+        if (!file.endsWith(".md")) continue;
+        const name = file.slice(0, -3);
+        map.set(name, buildSlots(name, join(dir, file)));
+      }
+    } catch { /* directory doesn't exist */ }
   }
-
-  validateFactory(_: MdFile): boolean { return true; }
-
-  createInstance(
-    factory: MdFile,
-    _ctx: LoaderContext,
-    name: string,
-    _descriptor: CapabilityDescriptor,
-  ): ContextSlot[] {
-    return buildSlots(name, factory.path);
-  }
-
-  onRegister(_name: string, _instance: ContextSlot[]): void {}
-  onUnregister(_name: string, _instance: ContextSlot[]): void {}
-
-  // ─── 同步扫描（供 slot 工厂直接调用）───
-
-  scanSync(pm: PathManagerAPI, brainId: string): ContextSlot[][] {
-    const kind = "directives";
-    const dirs = [
-      pm.global().capabilityDir(kind),
-      pm.bundle().capabilityDir(kind),
-      pm.local(brainId).capabilityDir(kind),
-    ];
-    const map = new Map<string, ContextSlot[]>();
-    for (const dir of dirs) {
-      try {
-        for (const file of readdirSync(dir)) {
-          if (!file.endsWith(".md")) continue;
-          const name = file.slice(0, -3);
-          map.set(name, buildSlots(name, join(dir, file)));
-        }
-      } catch { /* 目录不存在 */ }
-    }
-    return [...map.values()];
-  }
+  return [...map.values()].flat();
 }

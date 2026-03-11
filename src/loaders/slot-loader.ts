@@ -3,7 +3,6 @@ import type { ContextSlot, SlotFactory, SlotContext } from "../context/types.js"
 import type { CapabilityDescriptor, FSWatcherAPI, FSChangeEvent } from "../core/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
-import { registerMdPatterns } from "./scanner.js";
 
 type SlotModule = { default: SlotFactory };
 
@@ -64,7 +63,7 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
   /**
    * 除 .ts slot 文件（由 super 从 capabilitySources 自动推导）外，
    * 还需 watch directives / skills / soul.md 的变更。
-   * soul.md 用 ctx 的 brainId 精确定位；directives / skills 用层级静态工具。
+   * soul.md 用 ctx 的 brainId 精确定位；directives / skills 仍按三层 md 文件自定义扫盘。
    */
   protected override registerWatchers(watcher: FSWatcherAPI, ctx: LoaderContext): void {
     super.registerWatchers(watcher, ctx); // .ts slot 文件（全三层自动推导）
@@ -80,9 +79,12 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
       (event) => this.invalidateBrainSlot(event, "soul"),
     );
 
-    // directives / skills — 三层 .md watch，通过 scanner 工具函数注册
-    registerMdPatterns(watcher, "directives", (e) => this.invalidateBrainSlot(e, "directives"));
-    registerMdPatterns(watcher, "skills",     (e) => this.invalidateBrainSlot(e, "skills"));
+    watcher.register(/^directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"));
+    watcher.register(/^bundle\/directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"));
+    watcher.register(/^bundle\/brains\/[^/]+\/directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"));
+    watcher.register(/^skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"));
+    watcher.register(/^bundle\/skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"));
+    watcher.register(/^bundle\/brains\/[^/]+\/skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"));
   }
 
   // ─── 公共 API ───

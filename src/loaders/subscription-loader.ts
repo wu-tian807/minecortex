@@ -11,7 +11,6 @@ import type {
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
 import { runWithLogContext } from "../core/logger.js";
-import { filterByCapability } from "./scanner.js";
 
 interface SubscriptionEntry {
   source: EventSource;
@@ -122,8 +121,8 @@ export class SubscriptionLoader extends BaseLoader<SubscriptionModule, Subscript
     allNames: string[],
   ): { toStart: string[]; toStop: string[] } {
     const descriptors = allNames.map((name) => ({ name, exposedName: name, path: name }));
-    const oldEnabled = new Set(filterByCapability(descriptors, oldSelector).map((d) => d.exposedName));
-    const newEnabled = new Set(filterByCapability(descriptors, newSelector).map((d) => d.exposedName));
+    const oldEnabled = new Set(BaseLoader.filterByCapability(descriptors, oldSelector).map((d) => d.exposedName));
+    const newEnabled = new Set(BaseLoader.filterByCapability(descriptors, newSelector).map((d) => d.exposedName));
 
     const toStart = [...newEnabled].filter((n) => !oldEnabled.has(n));
     const toStop = [...oldEnabled].filter((n) => !newEnabled.has(n));

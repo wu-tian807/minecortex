@@ -293,10 +293,9 @@ export interface EventSource {
 //   bundle()          — bundle/ 层，当前活跃 bundle 的共享运行时
 //   local(brainId)    — bundle/brains/{id}/ 层，单个 brain 的私有空间
 //
-// 每层都有三种内置核心能力目录（tools/slots/subscriptions）和动态扩展目录。
+// 每层都有三种内置核心能力目录（tools/slots/subscriptions）。
 // 用法示例：
 //   pathManager.global().toolsDir()                    → tools/
-//   pathManager.global().extraDir("directives")        → directives/
 //   pathManager.bundle().brainsDir()                   → bundle/brains/
 //   pathManager.bundle().sharedDir("workspace")        → bundle/shared/workspace/
 //   pathManager.local("coder").toolsDir()              → bundle/brains/coder/tools/
@@ -310,14 +309,6 @@ export interface CapabilityLayerAPI {
   slotsDir(): string;
   /** 内置能力：subscriptions */
   subscriptionsDir(): string;
-  /** 动态扩展能力（directives、skills 等），按名称取该层对应目录 */
-  extraDir(name: string): string;
-  /**
-   * 按 kind 名称取该层对应的能力目录。
-   * 内置 kind（tools / slots / subscriptions）走各自专用方法；
-   * 其余 kind 走 extraDir(kind)，方便自定义 loader 无需硬编码路径。
-   */
-  capabilityDir(kind: string): string;
 }
 
 /** Global 层：根目录级，长期稳定，AI 默认只读（evolve 模式除外） */

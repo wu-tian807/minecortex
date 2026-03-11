@@ -22,14 +22,6 @@ export function getPathManager(): PathManager {
 
 // ─── Layer implementations ───────────────────────────────────────────────────
 
-// capabilityDir 是 CapabilityLayerAPI 的统一入口，避免调用方硬编码 kind 判断。
-function resolveCapabilityDir(layer: { toolsDir(): string; slotsDir(): string; subscriptionsDir(): string; extraDir(n: string): string }, kind: string): string {
-  if (kind === "tools") return layer.toolsDir();
-  if (kind === "slots") return layer.slotsDir();
-  if (kind === "subscriptions") return layer.subscriptionsDir();
-  return layer.extraDir(kind);
-}
-
 class GlobalLayer implements GlobalLayerAPI {
   constructor(private readonly r: string) {}
 
@@ -37,8 +29,6 @@ class GlobalLayer implements GlobalLayerAPI {
   toolsDir() { return join(this.r, "tools"); }
   slotsDir() { return join(this.r, "slots"); }
   subscriptionsDir() { return join(this.r, "subscriptions"); }
-  extraDir(name: string) { return join(this.r, name); }
-  capabilityDir(kind: string) { return resolveCapabilityDir(this, kind); }
   logsDir(brainId?: string) { return brainId ? join(this.r, "logs", brainId) : join(this.r, "logs"); }
   keyDir() { return join(this.r, "key"); }
   packsDir() { return join(this.r, "packs"); }
@@ -53,8 +43,6 @@ class BundleLayer implements BundleLayerAPI {
   toolsDir() { return join(this.r, "tools"); }
   slotsDir() { return join(this.r, "slots"); }
   subscriptionsDir() { return join(this.r, "subscriptions"); }
-  extraDir(name: string) { return join(this.r, name); }
-  capabilityDir(kind: string) { return resolveCapabilityDir(this, kind); }
   brainsDir() { return join(this.r, "brains"); }
   
   manifest() { return join(this.r, "manifest.json"); }
@@ -76,8 +64,6 @@ class LocalLayer implements LocalLayerAPI {
   toolsDir() { return join(this.r, "tools"); }
   slotsDir() { return join(this.r, "slots"); }
   subscriptionsDir() { return join(this.r, "subscriptions"); }
-  extraDir(name: string) { return join(this.r, name); }
-  capabilityDir(kind: string) { return resolveCapabilityDir(this, kind); }
   
   config() { return join(this.r, "brain.json"); }
   soul() { return join(this.r, "soul.md"); }
