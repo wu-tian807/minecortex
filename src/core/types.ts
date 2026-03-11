@@ -325,6 +325,9 @@ export interface GlobalLayerAPI extends CapabilityLayerAPI {
   root(): string;
   logsDir(brainId?: string): string;
   keyDir(): string;
+  packsDir(): string;
+  backupsDir(): string;
+  minecortexConfig(): string;
 }
 
 /** Bundle 层：bundle/ 运行时，当前活跃 bundle 的可写共享空间 */
@@ -333,8 +336,20 @@ export interface BundleLayerAPI extends CapabilityLayerAPI {
   root(): string;
   /** bundle/brains/ */
   brainsDir(): string;
-  /** bundle/shared/{sub?} */
-  sharedDir(sub?: string): string;
+  /** bundle/manifest.json */
+  manifest(): string;
+  /** bundle/state/ */
+  stateDir(): string;
+  /** bundle/shared/ */
+  sharedDir(): string;
+  /** bundle/shared/workspace/ */
+  sharedWorkspace(): string;
+  /** bundle/shared/sandbox/ */
+  sandboxDir(): string;
+  /** bundle/shared/sandbox/mounts.json */
+  sandboxMounts(): string;
+  /** bundle/shared/sandbox/overlays/ */
+  sandboxOverlays(): string;
 }
 
 /** Local 层：bundle/brains/{brainId}/，单个 brain 的私有可写空间 */
@@ -343,6 +358,14 @@ export interface LocalLayerAPI extends CapabilityLayerAPI {
   root(): string;
   /** bundle/brains/{brainId}/sessions/ */
   sessionsDir(): string;
+  /** bundle/brains/{brainId}/brain.json */
+  config(): string;
+  /** bundle/brains/{brainId}/soul.md */
+  soul(): string;
+  /** bundle/brains/{brainId}/.home/ - User Terminal $HOME */
+  homeDir(): string;
+  /** bundle/brains/{brainId}/.tmp/ - 沙盒私有垃圾堆 */
+  tmpDir(): string;
 }
 
 export interface PathManagerAPI {
@@ -358,6 +381,10 @@ export interface PathManagerAPI {
   packDir(packId: string): string;
   /** backups/{backupId}/ */
   backupDir(backupId: string): string;
+  /**
+   * 将相对路径解析为特定 brain 的 private .home 下的绝对路径。
+   * 支持多平台路径解析，如果输入的是绝对路径，则返回该绝对路径本身。
+   */
   resolve(input: { path: string; brain?: string }, callerBrainId: string): string;
   checkPermission(absPath: string, op: "read" | "write", callerBrainId: string, evolve: boolean): boolean;
 }
@@ -370,7 +397,8 @@ export interface TerminalInstance {
   pid: number;
   command: string;
   cwd: string;
-  brainId: string;
+  /** undefined means it is a system-level terminal */
+  brainId?: string;
   startedAt: number;
   backgrounded?: boolean;
   exitCode?: number;
@@ -384,7 +412,9 @@ export interface ExecOpts {
    *  Has no effect if an existing session is reused — preserving the model's own cd state. */
   initialCwd?: string;
   env?: Record<string, string>;
-  brainId: string;
+  /** If empty or undefined, runs the command in a system-level terminal instead of a brain-level user terminal. */
+  brainId?: string;
+  /** Timeout in ms. If <= 0, the command will run indefinitely without backgrounding. Default: 30s. */
   timeoutMs?: number;
   /** Short description included in the log filename for easy identification. */
   description?: string;
@@ -395,13 +425,14 @@ export interface TerminalManagerAPI {
   init(): Promise<void>;
   /** 同步查询初始化是否已完成。 */
   isReady(): boolean;
-  /** 异步等待初始化完成（init() 尚未调用时直接 resolve）。 */
+  /** 异步等待初始化完成；若尚未初始化则自动调用 init() 并等待完成。 */
   ensureReady(): Promise<void>;
   exec(command: string, opts: ExecOpts): Promise<ExecResult>;
   get(id: string): TerminalInstance | undefined;
   list(filter?: { brainId?: string; status?: string }): TerminalInstance[];
   kill(id: string): boolean;
   cleanup(maxAge?: number): void;
+  loadSystemEnv(): Promise<void>;
   loadBrainEnv(brainId: string): Promise<void>;
 }
 

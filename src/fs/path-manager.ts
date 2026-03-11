@@ -1,4 +1,4 @@
-import { resolve, join, normalize } from "node:path";
+import { resolve, join, normalize, isAbsolute, sep } from "node:path";
 import type {
   GlobalLayerAPI,
   BundleLayerAPI,
@@ -41,6 +41,9 @@ class GlobalLayer implements GlobalLayerAPI {
   capabilityDir(kind: string) { return resolveCapabilityDir(this, kind); }
   logsDir(brainId?: string) { return brainId ? join(this.r, "logs", brainId) : join(this.r, "logs"); }
   keyDir() { return join(this.r, "key"); }
+  packsDir() { return join(this.r, "packs"); }
+  backupsDir() { return join(this.r, "backups"); }
+  minecortexConfig() { return join(this.r, "minecortex.json"); }
 }
 
 class BundleLayer implements BundleLayerAPI {
@@ -53,7 +56,16 @@ class BundleLayer implements BundleLayerAPI {
   extraDir(name: string) { return join(this.r, name); }
   capabilityDir(kind: string) { return resolveCapabilityDir(this, kind); }
   brainsDir() { return join(this.r, "brains"); }
-  sharedDir(sub?: string) { return sub ? join(this.r, "shared", sub) : join(this.r, "shared"); }
+  
+  manifest() { return join(this.r, "manifest.json"); }
+  stateDir() { return join(this.r, "state"); }
+  
+  sharedDir() { return join(this.r, "shared"); }
+  sharedWorkspace() { return join(this.r, "shared", "workspace"); }
+  
+  sandboxDir() { return join(this.r, "shared", "sandbox"); }
+  sandboxMounts() { return join(this.r, "shared", "sandbox", "mounts.json"); }
+  sandboxOverlays() { return join(this.r, "shared", "sandbox", "overlays"); }
 }
 
 class LocalLayer implements LocalLayerAPI {
@@ -66,6 +78,11 @@ class LocalLayer implements LocalLayerAPI {
   subscriptionsDir() { return join(this.r, "subscriptions"); }
   extraDir(name: string) { return join(this.r, name); }
   capabilityDir(kind: string) { return resolveCapabilityDir(this, kind); }
+  
+  config() { return join(this.r, "brain.json"); }
+  soul() { return join(this.r, "soul.md"); }
+  homeDir() { return join(this.r, ".home"); }
+  tmpDir() { return join(this.r, ".tmp"); }
 }
 
 // ─── PathManager ─────────────────────────────────────────────────────────────
@@ -94,18 +111,18 @@ export class PathManager implements PathManagerAPI {
 
   resolve(input: { path: string; brain?: string }, callerBrainId: string): string {
     const raw = input.path;
-    if (raw.startsWith("/")) return normalize(raw);
-    return resolve(this.local(input.brain ?? callerBrainId).root(), "workspace", raw);
+    if (isAbsolute(raw)) return normalize(raw);
+    return resolve(this.local(input.brain ?? callerBrainId).homeDir(), raw);
   }
 
   checkPermission(absPath: string, op: "read" | "write", _: string, evolve: boolean): boolean {
     if (op === "read") return true;
     const p = normalize(absPath);
     const src = join(this._root, "src");
-    if (p.startsWith(src + "/") || p === src) return false;
+    if (p.startsWith(src + sep) || p === src) return false;
     const bundleRoot = this._bundle.root();
-    if (p.startsWith(bundleRoot + "/") || p === bundleRoot) return true;
-    if (evolve && (p.startsWith(this._root + "/") || p === this._root)) return true;
+    if (p.startsWith(bundleRoot + sep) || p === bundleRoot) return true;
+    if (evolve && (p.startsWith(this._root + sep) || p === this._root)) return true;
     return false;
   }
 }

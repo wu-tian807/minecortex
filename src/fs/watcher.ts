@@ -1,5 +1,5 @@
 import { watch, type FSWatcher as NodeFSWatcher } from "node:fs";
-import { relative } from "node:path";
+import { relative, sep } from "node:path";
 import type { FSWatcherAPI, WatchRegistration, FSChangeEvent, FSHandler } from "../core/types.js";
 
 let _instance: FSWatcher | null = null;
@@ -10,7 +10,7 @@ export function getFSWatcher(): FSWatcher | null {
 }
 
 /** Create (or return existing) global FSWatcher singleton. */
-export function createFSWatcher(rootDir: string): FSWatcher {
+export function createOrGetFSWatcher(rootDir: string): FSWatcher {
   if (!_instance) _instance = new FSWatcher(rootDir);
   return _instance;
 }
@@ -36,6 +36,12 @@ export class FSWatcher implements FSWatcherAPI {
     this.watcher = watch(rootDir, { recursive: true }, (eventType, filename) => {
       if (!filename) return;
       this.dispatch(eventType, filename);
+    });
+    // overlayfs work/work dirs and other kernel-managed paths can trigger EACCES —
+    // swallow those silently to avoid crashing the process
+    this.watcher.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EACCES" || err.code === "EPERM") return;
+      console.warn("[FSWatcher] watch error:", err.message);
     });
   }
 
@@ -72,7 +78,8 @@ export class FSWatcher implements FSWatcherAPI {
   }
 
   private dispatch(eventType: string, filename: string): void {
-    const relPath = filename.includes(this.rootDir)
+    // 用 startsWith(rootDir + sep) 避免路径前缀子串误判（如 /proj 误匹配 /project/...）
+    const relPath = filename.startsWith(this.rootDir + sep)
       ? relative(this.rootDir, filename)
       : filename;
 
