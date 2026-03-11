@@ -77,14 +77,15 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
     watcher.register(
       new RegExp(`^${soulEscaped}/soul\\.md$`),
       (event) => this.invalidateBrainSlot(event, "soul"),
+      { ownerId: ctx.brainId },
     );
 
-    watcher.register(/^directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"));
-    watcher.register(/^bundle\/directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"));
-    watcher.register(/^bundle\/brains\/[^/]+\/directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"));
-    watcher.register(/^skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"));
-    watcher.register(/^bundle\/skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"));
-    watcher.register(/^bundle\/brains\/[^/]+\/skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"));
+    watcher.register(/^directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"), { ownerId: ctx.brainId });
+    watcher.register(/^bundle\/directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"), { ownerId: ctx.brainId });
+    watcher.register(/^bundle\/brains\/[^/]+\/directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"), { ownerId: ctx.brainId });
+    watcher.register(/^skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"), { ownerId: ctx.brainId });
+    watcher.register(/^bundle\/skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"), { ownerId: ctx.brainId });
+    watcher.register(/^bundle\/brains\/[^/]+\/skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"), { ownerId: ctx.brainId });
   }
 
   // ─── 公共 API ───

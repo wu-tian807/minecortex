@@ -149,6 +149,7 @@ export abstract class BaseLoader<TFactory, TInstance> {
   protected logBrainId = "scheduler";
   protected lastCtx?: LoaderContext;
   private storedWatcher?: FSWatcherAPI;
+  private watcherOwnerId?: string;
   private watchersRegistered = false;
   /** Monotonically incremented on each _loadInternal call to detect stale concurrent loads. */
   private _loadGeneration = 0;
@@ -206,8 +207,9 @@ export abstract class BaseLoader<TFactory, TInstance> {
    * 存储 watcher 引用（真正的注册在首次 _loadInternal 完成后进行）。
    * 子类通常不需要 override 此方法。
    */
-  registerWatchPatterns(watcher: FSWatcherAPI): void {
+  registerWatchPatterns(watcher: FSWatcherAPI, ownerId?: string): void {
     this.storedWatcher = watcher;
+    this.watcherOwnerId = ownerId;
   }
 
   /**
@@ -228,6 +230,7 @@ export abstract class BaseLoader<TFactory, TInstance> {
       watcher.register(
         new RegExp(`^${escaped}/${fp}$`),
         (event) => this.onWatchedFileChanged(event),
+        { ownerId: this.watcherOwnerId },
       );
     }
   }

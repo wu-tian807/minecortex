@@ -9,6 +9,7 @@ import type {
   EventBusAPI,
   BrainBoardAPI,
   PathManagerAPI,
+  FSWatcherAPI,
 } from "./types.js";
 import { runWithLogContext, type Logger } from "./logger.js";
 import type { EventBus } from "./event-bus.js";
@@ -34,6 +35,7 @@ export abstract class BaseBrain implements BrainInterface {
   protected readonly pathManager: PathManagerAPI;
   protected readonly logger: Logger;
   protected readonly eventBus: EventBus;
+  protected readonly fsWatcher?: FSWatcherAPI;
 
   /** Brain-bound EventBus facade exposed to tools, subscriptions and scheduler. */
   readonly boundEventBus: EventBusAPI;
@@ -48,6 +50,7 @@ export abstract class BaseBrain implements BrainInterface {
     this.pathManager = config.pathManager;
     this.logger = config.logger;
     this.eventBus = config.eventBus;
+    this.fsWatcher = config.fsWatcher;
 
     // Self-owned components
     this.queue = new EventQueue();
@@ -105,6 +108,7 @@ export abstract class BaseBrain implements BrainInterface {
         src.stop();
       } catch { /* ignore */ }
     }
+    this.fsWatcher?.unregisterOwner(this.id);
     this.eventBus.unregister(this.id);
   }
 

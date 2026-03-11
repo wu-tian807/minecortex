@@ -17,6 +17,7 @@ export function createOrGetFSWatcher(rootDir: string): FSWatcher {
 
 interface Registration {
   id: string;
+  ownerId?: string;
   pattern: RegExp;
   handler: FSHandler;
   debounceMs: number;
@@ -28,6 +29,7 @@ let nextId = 0;
 export class FSWatcher implements FSWatcherAPI {
   private watcher: NodeFSWatcher;
   private registrations = new Map<string, Registration>();
+  private ownerRegistrations = new Map<string, Set<string>>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private rootDir: string;
 
@@ -45,28 +47,35 @@ export class FSWatcher implements FSWatcherAPI {
     });
   }
 
-  register(pattern: RegExp, handler: FSHandler, opts?: { debounceMs?: number }): WatchRegistration {
+  register(pattern: RegExp, handler: FSHandler, opts?: { debounceMs?: number; ownerId?: string }): WatchRegistration {
     const id = `watch_${++nextId}`;
     const reg: Registration = {
       id,
+      ownerId: opts?.ownerId,
       pattern,
       handler,
       debounceMs: opts?.debounceMs ?? DEFAULT_DEBOUNCE_MS,
     };
     this.registrations.set(id, reg);
+    if (reg.ownerId) {
+      let ids = this.ownerRegistrations.get(reg.ownerId);
+      if (!ids) {
+        ids = new Set();
+        this.ownerRegistrations.set(reg.ownerId, ids);
+      }
+      ids.add(id);
+    }
 
     return {
       id,
-      dispose: () => {
-        this.registrations.delete(id);
-        for (const [key, timer] of this.timers) {
-          if (key.startsWith(id + ":")) {
-            clearTimeout(timer);
-            this.timers.delete(key);
-          }
-        }
-      },
+      dispose: () => this.disposeRegistration(id),
     };
+  }
+
+  unregisterOwner(ownerId: string): void {
+    const ids = this.ownerRegistrations.get(ownerId);
+    if (!ids) return;
+    for (const id of [...ids]) this.disposeRegistration(id);
   }
 
   close(): void {
@@ -74,6 +83,7 @@ export class FSWatcher implements FSWatcherAPI {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.registrations.clear();
+    this.ownerRegistrations.clear();
     if (_instance === this) _instance = null;
   }
 
@@ -102,6 +112,23 @@ export class FSWatcher implements FSWatcherAPI {
       }, reg.debounceMs);
 
       this.timers.set(debounceKey, timer);
+    }
+  }
+
+  private disposeRegistration(id: string): void {
+    const reg = this.registrations.get(id);
+    if (!reg) return;
+    this.registrations.delete(id);
+    if (reg.ownerId) {
+      const ids = this.ownerRegistrations.get(reg.ownerId);
+      ids?.delete(id);
+      if (ids && ids.size === 0) this.ownerRegistrations.delete(reg.ownerId);
+    }
+    for (const [key, timer] of this.timers) {
+      if (key.startsWith(id + ":")) {
+        clearTimeout(timer);
+        this.timers.delete(key);
+      }
     }
   }
 }

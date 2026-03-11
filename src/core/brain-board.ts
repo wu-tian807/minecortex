@@ -36,10 +36,11 @@ export class BrainBoard implements BrainBoardAPI {
   }
 
   registerFSWatcher(fsWatcher: FSWatcherAPI): void {
+    fsWatcher.unregisterOwner("brainboard");
     fsWatcher.register(/brainboard\.json$/, () => {
       if (Date.now() - this.lastWriteTs < 500) return;
       this.reloadFromDisk();
-    });
+    }, { ownerId: "brainboard" });
   }
 
   set(brainId: string, key: string, value: unknown, options?: BrainBoardSetOptions): void {

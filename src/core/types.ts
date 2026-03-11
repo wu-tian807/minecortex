@@ -456,6 +456,7 @@ export interface BrainInitConfig {
   pathManager: PathManagerAPI;
   logger: import("./logger.js").Logger;
   eventBus: import("./event-bus.js").EventBus;
+  fsWatcher?: FSWatcherAPI;
 }
 
 export interface ScriptContext {
@@ -480,6 +481,7 @@ export interface FSChangeEvent {
 export type FSHandler = (event: FSChangeEvent) => void | Promise<void>;
 
 export interface FSWatcherAPI {
-  register(pattern: RegExp, handler: FSHandler, opts?: { debounceMs?: number }): WatchRegistration;
+  register(pattern: RegExp, handler: FSHandler, opts?: { debounceMs?: number; ownerId?: string }): WatchRegistration;
+  unregisterOwner(ownerId: string): void;
   close(): void;
 }

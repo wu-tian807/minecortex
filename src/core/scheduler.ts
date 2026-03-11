@@ -152,6 +152,7 @@ export class Scheduler {
 
   private registerHotReloadHandlers(): void {
     if (!this.fsWatcher) return;
+    this.fsWatcher.unregisterOwner("scheduler");
 
     // Brain directory deletion — pattern now under bundle/brains/
     this.fsWatcher.register(/^bundle\/brains\/([^/]+)\/?$/, async (evt) => {
@@ -163,7 +164,7 @@ export class Scheduler {
         this.logger.info("scheduler", 0, `brain dir deleted, auto-removing '${brainId}'`);
         await this.removeBrain(brainId);
       }
-    });
+    }, { ownerId: "scheduler" });
   }
 
   private async discoverBrains(): Promise<string[]> {
@@ -194,6 +195,7 @@ export class Scheduler {
       pathManager: this.pathManager,
       logger: this.logger,
       eventBus: this.eventBus,
+      fsWatcher: this.fsWatcher ?? undefined,
     };
   }
 
@@ -227,7 +229,7 @@ export class Scheduler {
     const selectorTools = brainConfig.tools ?? BRAIN_DEFAULTS.tools;
     const toolLoader = new ToolLoader();
     toolLoader.setLogContext(brainId);
-    if (this.fsWatcher) toolLoader.registerWatchPatterns(this.fsWatcher);
+    if (this.fsWatcher) toolLoader.registerWatchPatterns(this.fsWatcher, brainId);
     const tools = await toolLoader.load({
       brainId,
       brainDir,
@@ -253,7 +255,7 @@ export class Scheduler {
       (slots) => { for (const s of slots) slotRegistry.registerSlot(s); },
       (names) => { for (const n of names) slotRegistry.removeSlot(n); },
     );
-    if (this.fsWatcher) slotLoader.registerWatchPatterns(this.fsWatcher);
+    if (this.fsWatcher) slotLoader.registerWatchPatterns(this.fsWatcher, brainId);
     await slotLoader.load({
       brainId,
       brainDir,
@@ -329,7 +331,7 @@ export class Scheduler {
     };
     subLoader.setBrainContext(brainContext);
 
-    if (this.fsWatcher) subLoader.registerWatchPatterns(this.fsWatcher);
+    if (this.fsWatcher) subLoader.registerWatchPatterns(this.fsWatcher, brainId);
 
     const selectorSub = brainConfig.subscriptions ?? BRAIN_DEFAULTS.subscriptions;
     const subSources = BaseLoader.buildSources(
