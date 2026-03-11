@@ -494,9 +494,10 @@ export class ConsciousBrain extends BaseBrain {
     // Emit EventReceived hook before processing
     this.hooks.emit(HookEvent.EventReceived, { events, turn: this.currentTurn });
 
-    const lines = events.map(e =>
-      `[${e.source}:${e.type}] ${renderEventDisplay(e)}`
-    );
+    const lines = events.map(e => {
+      const display = renderEventDisplay(e);
+      return display ? `[${e.source}:${e.type}] ${display}` : `[${e.source}:${e.type}]`;
+    });
     await this.sessionManager.appendMessage({
       role: "user",
       content: lines.join("\n"),
