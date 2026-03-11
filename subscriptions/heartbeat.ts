@@ -26,7 +26,7 @@ export default function create(ctx: SourceContext): EventSource {
       emit({
         source: "heartbeat",
         type: "tick",
-        payload: { prompt },
+        payload: { content: prompt },
         ts: now,
         priority: 2,
       });

@@ -2,9 +2,6 @@ import type { Event } from "../core/types.js";
 
 export function renderEventDisplay(event: Event): string {
   const payload = event.payload as Record<string, unknown> | undefined;
-  if (payload?.prompt && typeof payload.prompt === "string") {
-    return payload.prompt;
-  }
   if (payload?.content && typeof payload.content === "string") {
     const summary = (payload as any).summary;
     return summary ? `${summary}: ${payload.content}` : String(payload.content);
