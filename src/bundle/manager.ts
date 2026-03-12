@@ -86,10 +86,13 @@ export class BundleManager {
     // 独立进行 Env 初始化控制
     if (!manifest.runtimeState.envInitialized) {
       await this.initBaseEnv();
-      await this.initBrainsDotEnv();
       manifest.runtimeState.envInitialized = true;
       await saveManifest();
     }
+
+    // Brain 私有目录不是运行时副作用，bundle 初始化时就应该准备好。
+    // 这样 shell、session、记忆系统不会依赖“第一次写文件”来隐式创建目录。
+    await this.prepareBrainsFilesystem();
 
     // base.env 可能刚刚生成（envInitialized 从 false 变 true），也可能是 bundle 重启时
     // 首次 loadSystemEnv 时 base.env 已存在 — 无论如何此处重新加载一次，确保
@@ -131,20 +134,26 @@ export class BundleManager {
     }
   }
 
-  private async initBrainsDotEnv(): Promise<void> {
+  private async prepareBrainsFilesystem(): Promise<void> {
     const pm = getPathManager();
     const brainsDir = pm.bundle().brainsDir();
     if (!existsSync(brainsDir)) return;
-    
+
     const { readdir } = await import("node:fs/promises");
     const entries = await readdir(brainsDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const envPath = join(brainsDir, entry.name, ".env");
-        if (!existsSync(envPath)) {
-          await writeFile(envPath, `# Private Env for Brain: ${entry.name}\n`, "utf-8");
-        }
+      if (!entry.isDirectory()) continue;
+
+      const brainRoot = join(brainsDir, entry.name);
+      const envPath = join(brainRoot, ".env");
+
+      if (!existsSync(envPath)) {
+        await writeFile(envPath, `# Private Env for Brain: ${entry.name}\n`, "utf-8");
       }
+      await mkdir(join(brainRoot, ".home"), { recursive: true });
+      await mkdir(join(brainRoot, ".home", ".ssh"), { recursive: true });
+      await mkdir(join(brainRoot, ".tmp"), { recursive: true });
+      await mkdir(join(brainRoot, "sessions"), { recursive: true });
     }
   }
 

@@ -27,7 +27,7 @@ interface PendingCommand {
   marker: string;
   /** Small buffer used only for marker detection — NOT for log accumulation */
   markerBuf: string;
-  onComplete: (exitCode: number | undefined) => void;
+  onComplete: (exitCode: number | undefined, diagnostic?: string) => void;
 }
 
 interface ShellSession {
@@ -41,6 +41,12 @@ interface ShellSession {
   markReady: (() => void) | null;
   terminalIds: Set<string>;
   spawnError?: Error;
+  stderrTail: string;
+}
+
+interface HomeMappingPlan {
+  homeDir: string;
+  shouldBindHostHome: boolean;
 }
 
 // ─── Singleton helpers ───
@@ -208,39 +214,72 @@ export class TerminalManager implements TerminalManagerAPI {
     return this.pathManager.root();
   }
 
-  private createSession(baseBrainId: string, initialCwd?: string, initScript?: string): ShellSession {
-    const isSystem = baseBrainId === ""; // 只有 brainId=undefined 时才是系统终端
-    // brainEnvCache 已由 loadBrainEnv() 或 loadSystemEnv() 预构建好完整 env
-    const cacheKey = baseBrainId; // "" → 系统 env，其余 → brain env
-    const builtEnv   = this.brainEnvCache.get(cacheKey) ?? {};
-    const shellPath  = this.resolveShellPath(builtEnv as Record<string, string>);
-    const sessionCwd = this.resolveSessionCwd(initialCwd);
+  private projectRootLivesUnderHostHome(realHome: string): boolean {
+    const projectRoot = this.pathManager.root();
+    return projectRoot === realHome || projectRoot.startsWith(realHome + "/");
+  }
 
-    // 若 unshare 可用，用 namespace 沙箱启动 shell，否则降级为普通 spawn
-    const child = this.unshareAvailable
-      ? spawn(
-          "unshare",
-          ["--mount", "--user", "--map-root-user", shellPath, "--norc", "--noprofile"],
-          { cwd: sessionCwd, env: { ...builtEnv, PS1: "", PS2: "" }, stdio: ["pipe", "pipe", "pipe"] },
-        )
-      : spawn(shellPath, ["--norc", "--noprofile"], {
-          cwd: sessionCwd,
-          env: { ...builtEnv, PS1: "", PS2: "" },
-          stdio: ["pipe", "pipe", "pipe"],
-        });
+  private planUserHomeMapping(brainId: string, realHome: string): HomeMappingPlan {
+    // When the whole project lives under $HOME, bind-mounting $HOME to .home would also
+    // hide the bundle root, terminal logs, and any absolute paths emitted by tools.
+    return {
+      homeDir: this.pathManager.local(brainId).homeDir(),
+      shouldBindHostHome: !this.projectRootLivesUnderHostHome(realHome),
+    };
+  }
 
-    const session: ShellSession = {
-      id: `s${++this.sessionCounter}-${Date.now()}`,
-      baseBrainId,
-      process: child,
-      shellPath,
-      pending: null,
-      ready: Promise.resolve(),
-      markReady: null,
-      terminalIds: new Set(),
+  private buildSessionFailureDiagnostic(
+    session: ShellSession,
+    reason: "spawn_error" | "shell_exit",
+    exitCode?: number,
+  ): string {
+    const lines = [
+      "",
+      `[shell session failed before command completion: ${reason}]`,
+    ];
+
+    if (typeof exitCode === "number") {
+      lines.push(`session_exit_code: ${exitCode}`);
+    }
+    if (session.spawnError?.message) {
+      lines.push(`spawn_error: ${session.spawnError.message}`);
+    }
+
+    const stderr = session.stderrTail.trim();
+    if (stderr) {
+      lines.push("", "[shell stderr]", stderr);
+    }
+
+    return lines.join("\n") + "\n";
+  }
+
+  private spawnShellProcess(
+    shellPath: string,
+    builtEnv: NodeJS.ProcessEnv,
+    sessionCwd: string,
+  ): ChildProcess {
+    const spawnOpts = {
+      cwd: sessionCwd,
+      env: { ...builtEnv, PS1: "", PS2: "" },
+      stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
     };
 
-    // Only stdout carries the completion markers; stderr is ignored at the session level.
+    if (this.unshareAvailable) {
+      return spawn(
+        "unshare",
+        ["--mount", "--user", "--map-root-user", shellPath, "--norc", "--noprofile"],
+        spawnOpts,
+      );
+    }
+
+    return spawn(shellPath, ["--norc", "--noprofile"], spawnOpts);
+  }
+
+  private attachSessionObservers(cacheKey: string, session: ShellSession): void {
+    const child = session.process;
+
+    // Completion markers are emitted on stdout; stderr is buffered for diagnostics when
+    // the shell exits before the wrapped command can finish.
     child.stdout?.on("data", (data: Buffer) => {
       if (!session.pending) return;
       session.pending.markerBuf += data.toString("utf-8");
@@ -257,34 +296,65 @@ export class TerminalManager implements TerminalManagerAPI {
       cb(isNaN(exitCode) ? undefined : exitCode);
     });
 
+    child.stderr?.on("data", (data: Buffer) => {
+      session.stderrTail = trimTail(session.stderrTail + data.toString("utf-8"));
+    });
+
     child.on("error", (err) => {
       session.spawnError = err instanceof Error ? err : new Error(String(err));
       if (session.pending) {
         const cb = session.pending.onComplete;
         session.pending = null;
-        cb(undefined);
+        cb(undefined, this.buildSessionFailureDiagnostic(session, "spawn_error"));
       }
       this.cleanupSession(cacheKey, session);
     });
+
     child.on("exit", (code) => {
       // Resolve any pending exec() that's still waiting for a marker.
       // This happens when the shell exits early (e.g. set -e cascades out of a command group).
       if (session.pending) {
         const cb = session.pending.onComplete;
         session.pending = null;
-        cb(code ?? 1);
+        cb(code ?? 1, this.buildSessionFailureDiagnostic(session, "shell_exit", code ?? 1));
       }
       this.cleanupSession(cacheKey, session);
     });
+  }
 
+  private writeSessionInitScripts(session: ShellSession, baseBrainId: string, initScript?: string): void {
     // namespace 内初始化挂载（/tmp 私有化、.ssh bind、动态 overlays）
     if (this.unshareAvailable) {
-      try { child.stdin?.write(this.buildNsSetup(isSystem ? undefined : baseBrainId) + "\n"); } catch { /* ignore */ }
+      try { session.process.stdin?.write(this.buildNsSetup(baseBrainId || undefined) + "\n"); } catch { /* ignore */ }
     }
     // Restore prior cwd when creating a replacement session
     if (initScript) {
-      try { child.stdin?.write(initScript + "\n"); } catch { /* ignore */ }
+      try { session.process.stdin?.write(initScript + "\n"); } catch { /* ignore */ }
     }
+  }
+
+  private createSession(baseBrainId: string, initialCwd?: string, initScript?: string): ShellSession {
+    // brainEnvCache 已由 loadBrainEnv() 或 loadSystemEnv() 预构建好完整 env
+    const cacheKey = baseBrainId; // "" → 系统 env，其余 → brain env
+    const builtEnv   = this.brainEnvCache.get(cacheKey) ?? {};
+    const shellPath  = this.resolveShellPath(builtEnv as Record<string, string>);
+    const sessionCwd = this.resolveSessionCwd(initialCwd);
+    const child = this.spawnShellProcess(shellPath, builtEnv, sessionCwd);
+
+    const session: ShellSession = {
+      id: `s${++this.sessionCounter}-${Date.now()}`,
+      baseBrainId,
+      process: child,
+      shellPath,
+      pending: null,
+      ready: Promise.resolve(),
+      markReady: null,
+      terminalIds: new Set(),
+      stderrTail: "",
+    };
+
+    this.attachSessionObservers(cacheKey, session);
+    this.writeSessionInitScripts(session, baseBrainId, initScript);
 
     this.sessions.set(session.id, session);
     return session;
@@ -310,30 +380,18 @@ export class TerminalManager implements TerminalManagerAPI {
     return defaultMounts;
   }
 
-  /**
-   * 生成在 namespace 内执行的 bash setup 脚本（通过 stdin 注入）。
-   * 
-   * SYSTEM Terminal: 针对整个 bundle (brainId='system')
-   * USER Terminal: 针对特定 brain
-   */
-  private buildNsSetup(brainId: string | undefined): string {
-    const isSystem = !brainId;
-    const realHome = process.env.HOME ?? "";
-    const overlaysDir = this.pathManager.bundle().sandboxOverlays();
-    
-    const lines: string[] = [];
-
-    // 1. /tmp 共享化 (挂载到 bundle/shared/sandbox/tmp)
+  private buildTmpSetupLines(): string[] {
     const tmpDir = join(this.pathManager.bundle().sandboxDir(), "tmp");
-    lines.push(
+    return [
       `mkdir -p '${tmpDir}'`,
-      `mount --bind '${tmpDir}' /tmp`
-    );
+      `mount --bind '${tmpDir}' /tmp`,
+    ];
+  }
 
-    // 2. 动态加载 overlays — 必须在 HOME bind mount 之前完成！
-    //    overlay upper/work 目录的绝对路径包含 $HOME 前缀；若先 bind HOME，
-    //    namespace 内访问这些路径会被重定向到 .root_home，导致 overlay 数据写错地方。
+  private buildOverlaySetupLines(overlaysDir: string): string[] {
+    const lines: string[] = [];
     const mounts = this.getSandboxMounts();
+
     for (const m of mounts) {
       const olUpper = join(overlaysDir, m.upper, "upper");
       const olWork  = join(overlaysDir, m.upper, "work");
@@ -355,28 +413,50 @@ export class TerminalManager implements TerminalManagerAPI {
       );
     }
 
-    // 3. Home 映射 — 仅用户终端需要，系统终端不做 HOME bind
-    //    系统终端（install-python/install-node/setup.sh）的日志路径、overlay 目录均在项目根下，
-    //    若 bind $HOME → .root_home，这些绝对路径在 namespace 内会全部失效（循环引用）。
-    if (!isSystem && realHome) {
-      // User Terminal: 映射 brain 的 '.home' 为 '$HOME'
-      const homeDir = this.pathManager.local(brainId).homeDir();
-      lines.push(
-        `mkdir -p '${homeDir}/.ssh'`,
-        `mount --bind '${homeDir}' '${realHome}' 2>/dev/null || true`
-      );
-    }
+    return lines;
+  }
 
-    // 4. 无痛 sudo 包装 (因为 namespace 内部已经是 root，原系统 sudo 可能会因 setuid 报错)
-    lines.push(
+  private buildHomeSetupLines(brainId: string | undefined, realHome: string): string[] {
+    if (!brainId || !realHome) return [];
+
+    // User Terminal: 优先让 HOME 语义落到 '.home'。若项目根本身位于宿主 $HOME 下，
+    // 直接 bind 整个 $HOME 会把 bundle 根目录也一起遮住，此时只保留 HOME env 映射。
+    const plan = this.planUserHomeMapping(brainId, realHome);
+    const lines = [`mkdir -p '${plan.homeDir}/.ssh'`];
+    if (plan.shouldBindHostHome) {
+      lines.push(`mount --bind '${plan.homeDir}' '${realHome}' 2>/dev/null || true`);
+    }
+    return lines;
+  }
+
+  private buildSudoShimLines(): string[] {
+    return [
       `if [ ! -f /usr/local/bin/sudo ]; then`,
       `  echo '#!/bin/sh' > /usr/local/bin/sudo`,
       `  echo 'exec "$@"' >> /usr/local/bin/sudo`,
       `  chmod +x /usr/local/bin/sudo`,
-      `fi`
-    );
+      `fi`,
+    ];
+  }
 
-    return lines.join("\n");
+  /**
+   * 生成在 namespace 内执行的 bash setup 脚本（通过 stdin 注入）。
+   * 
+   * SYSTEM Terminal: 针对整个 bundle (brainId='system')
+   * USER Terminal: 针对特定 brain
+   */
+  private buildNsSetup(brainId: string | undefined): string {
+    const realHome = process.env.HOME ?? "";
+    const overlaysDir = this.pathManager.bundle().sandboxOverlays();
+
+    return [
+      ...this.buildTmpSetupLines(),
+      // 动态 overlays 必须先于 HOME 映射，避免 overlay upper/work 路径被 HOME bind 改写。
+      ...this.buildOverlaySetupLines(overlaysDir),
+      // 仅用户终端需要 HOME 映射；系统终端不做 HOME bind，避免项目绝对路径循环失效。
+      ...this.buildHomeSetupLines(brainId, realHome),
+      ...this.buildSudoShimLines(),
+    ].join("\n");
   }
 
   private cleanupSession(baseBrainId: string, session: ShellSession): void {
@@ -504,11 +584,23 @@ export class TerminalManager implements TerminalManagerAPI {
       session.pending = {
         marker,
         markerBuf: "",
-        onComplete: async (exitCode) => {
+        onComplete: async (exitCode, diagnostic) => {
           if (timer) clearTimeout(timer);
           session.terminalIds.delete(id);
           instance.exitCode  = exitCode;
           instance.elapsedMs = Date.now() - startedAt;
+
+          if (diagnostic) {
+            const footer = [
+              "",
+              "---",
+              `exit_code: ${instance.exitCode ?? "unknown"}`,
+              `elapsed_ms: ${instance.elapsedMs}`,
+              "---",
+              "",
+            ].join("\n");
+            await appendFile(logFile, diagnostic + footer, "utf-8").catch(() => {});
+          }
 
           if (!settled) {
             settled = true;
@@ -671,6 +763,10 @@ function slugify(s: string): string {
     .replace(/[^\w\u4e00-\u9fff]+/g, "_")
     .replace(/^_|_$/g, "")
     .slice(0, 32);
+}
+
+function trimTail(s: string, maxLen = 16_000): string {
+  return s.length <= maxLen ? s : s.slice(-maxLen);
 }
 
 /** Read the log body (everything after the header) for inline return to the caller. */
