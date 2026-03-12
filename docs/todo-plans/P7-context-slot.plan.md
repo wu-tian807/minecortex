@@ -23,9 +23,9 @@ todos:
   - id: slot-tools
     content: "新建 slots/tools.ts — 工具定义列表 → 1个 system Slot"
   - id: slot-skills
-    content: "新建 slots/skills.ts — 完整 Skills 扫描(skills/*.md + brains/<id>/skills/*.md) + YAML frontmatter 提取(name/description/globs) + 生成摘要列表注入 system Slot"
+    content: "新建 slots/skills.ts — 递归扫描三层 `**/SKILL.md`，只提取 name/description 并生成摘要列表注入 system Slot"
   - id: skill-read-tool
-    content: "新建 tools/read_skill.ts — 按 skill 名称读取完整 .md 内容供 LLM 使用"
+    content: "新建 tools/read_skill.ts — 按 skill 名称读取完整 SKILL.md 与 supporting files 清单，具体文件继续走通用 read_file / shell"
   - id: slot-context-file
     content: "新建 slots/context-file.ts — focus 目录 AGENTS.md/README.md + 目录结构 → 1个 dynamic Slot"
   - id: focus-tool
@@ -133,13 +133,18 @@ ctx.slot.release("thought:t1");
 
 ### skills 扫描
 
-`slots/skills.ts` 扫描 `skills/*.md` + `brains/<id>/skills/*.md`，提取每个 `.md` 文件的 YAML frontmatter：
+`slots/skills.ts` 递归扫描三层目录下的 `**/SKILL.md`：
+
+- `skills/**/SKILL.md`
+- `bundle/skills/**/SKILL.md`
+- `bundle/brains/<id>/skills/**/SKILL.md`
+
+启动时只提取轻量 metadata 注入摘要，正文与 supporting files 按需读取。当前 frontmatter 只需要 `name` 和 `description`。`glob/globs` 不再属于 skill schema。
 
 ```yaml
 ---
 name: typescript-coding
 description: TypeScript 编码规范与最佳实践
-globs: ["**/*.ts", "**/*.tsx"]
 ---
 （Skill 完整内容...）
 ```
@@ -148,28 +153,28 @@ globs: ["**/*.ts", "**/*.tsx"]
 
 ```
 Available Skills:
-- typescript-coding: TypeScript 编码规范与最佳实践 (globs: **/*.ts, **/*.tsx)
-- python-coding: Python 编码规范 (globs: **/*.py)
-- minecraft-api: Minecraft Bot API 参考 (globs: *)
+- typescript-coding: TypeScript 编码规范与最佳实践
+- python-coding: Python 编码规范
+- minecraft-api: Minecraft Bot API 参考
 ```
 
 ### read_skill 工具
 
-LLM 看到摘要后可按需调用 `read_skill({ name: "typescript-coding" })` 读取完整内容。
+LLM 看到摘要后可按需调用 `read_skill({ name: "typescript-coding" })` 读取完整内容和 supporting file 索引；如需继续读取 `references/`、`scripts/`、`assets/` 等资源，可直接使用通用 `read_file` 工具，执行脚本则继续走 shell。
 
 ```typescript
 // tools/read_skill.ts
 {
   name: "read_skill",
-  description: "读取指定 skill 的完整内容",
+  description: "读取指定 skill 的完整内容以及 supporting files 清单",
   input_schema: {
     type: "object",
     properties: { name: { type: "string", description: "skill 名称" } },
     required: ["name"],
   },
   execute: async (args, ctx) => {
-    const skillPath = resolveSkill(args.name, ctx.brainId);
-    return readFileSync(skillPath, "utf-8");
+    const skill = loadSkillByName(ctx.pathManager, ctx.brainId, args.name);
+    return renderSkill(skill);
   },
 }
 ```

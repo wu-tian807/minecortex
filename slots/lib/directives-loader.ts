@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { readFileSync, readdirSync } from "node:fs";
 import type { ContextSlot } from "../../src/context/types.js";
 import type { PathManagerAPI } from "../../src/core/types.js";
+import type { SlotWatchPattern } from "../../src/loaders/types.js";
 
 // ─── Frontmatter / content helpers ───
 
@@ -49,6 +50,13 @@ function directiveDirs(pm: PathManagerAPI, brainId: string): string[] {
   ];
 }
 
+export function buildDirectiveWatchPatterns(pm: PathManagerAPI, brainId: string): SlotWatchPattern[] {
+  return directiveDirs(pm, brainId).map((dir) => ({
+    pattern: new RegExp(`^${escapeRegex(relativeFromRoot(pm.root(), dir))}/[^/]+\\.md$`),
+    action: "reloadAll",
+  }));
+}
+
 export function createDirectiveSlots(pm: PathManagerAPI, brainId: string): ContextSlot[] {
   const map = new Map<string, ContextSlot[]>();
   for (const dir of directiveDirs(pm, brainId)) {
@@ -61,4 +69,12 @@ export function createDirectiveSlots(pm: PathManagerAPI, brainId: string): Conte
     } catch { /* directory doesn't exist */ }
   }
   return [...map.values()].flat();
+}
+
+function relativeFromRoot(root: string, dir: string): string {
+  return dir.slice(root.length).replace(/^[/\\]+/, "").replace(/\\/g, "/");
+}
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
 }

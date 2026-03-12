@@ -1,15 +1,20 @@
-import { relative } from "node:path";
 import type { ContextSlot, SlotFactory, SlotContext } from "../context/types.js";
-import type { CapabilityDescriptor, FSWatcherAPI, FSChangeEvent } from "../core/types.js";
-import type { LoaderContext } from "./types.js";
+import type { CapabilityDescriptor, FSWatcherAPI } from "../core/types.js";
+import type { LoaderContext, SlotWatchFactory, SlotWatchPattern } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
 
-type SlotModule = { default: SlotFactory };
+type SlotModule = {
+  default: SlotFactory;
+  watch?: SlotWatchFactory;
+};
 
 export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
   private slotCtx: SlotContext | null = null;
   private onSlotChange: ((slots: ContextSlot[]) => void) | null = null;
   private onSlotRemove: ((names: string[]) => void) | null = null;
+  private contentWatcher: FSWatcherAPI | null = null;
+  private contentWatcherOwnerId?: string;
+  private declarativeWatches = new Map<string, SlotWatchPattern[]>();
 
   setSlotContext(ctx: SlotContext): void {
     this.slotCtx = ctx;
@@ -35,13 +40,17 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
 
   createInstance(
     factory: SlotModule,
-    _ctx: LoaderContext,
+    ctx: LoaderContext,
     _name: string,
     descriptor: CapabilityDescriptor,
   ): ContextSlot[] {
     if (!this.slotCtx) {
       throw new Error(`[SlotLoader] setSlotContext must be called before loading slot "${descriptor.exposedName}"`);
     }
+    this.declarativeWatches.set(
+      descriptor.exposedName,
+      factory.watch?.(ctx) ?? [],
+    );
     const result = factory.default(this.slotCtx);
     return Array.isArray(result) ? result : [result];
   }
@@ -54,41 +63,23 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
     this.onSlotRemove?.(slots.map((s) => s.id));
   }
 
-  // ─── 扩展 watch：.md 内容文件额外模式 ───
-
-  /**
-   * 除 .ts slot 文件（由 super 从 capabilitySources 自动推导）外，
-   * 还需 watch directives / skills / soul.md 的变更。
-   * soul.md 用 ctx 的 brainId 精确定位；directives / skills 仍按三层 md 文件自定义扫盘。
-   */
-  protected override registerWatchers(watcher: FSWatcherAPI, ctx: LoaderContext): void {
-    super.registerWatchers(watcher, ctx); // .ts slot 文件（全三层自动推导）
-
-    // soul.md：定位到具体 brain 的 local root
-    const localRoot = relative(
-      ctx.pathManager.root(),
-      ctx.pathManager.local(ctx.brainId).root(),
-    ).replace(/\\/g, "/");
-    const soulEscaped = localRoot.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-    watcher.register(
-      new RegExp(`^${soulEscaped}/soul\\.md$`),
-      (event) => this.invalidateBrainSlot(event, "soul"),
-      { ownerId: ctx.brainId },
-    );
-
-    watcher.register(/^directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"), { ownerId: ctx.brainId });
-    watcher.register(/^bundle\/directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"), { ownerId: ctx.brainId });
-    watcher.register(/^bundle\/brains\/[^/]+\/directives\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "directives"), { ownerId: ctx.brainId });
-    watcher.register(/^skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"), { ownerId: ctx.brainId });
-    watcher.register(/^bundle\/skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"), { ownerId: ctx.brainId });
-    watcher.register(/^bundle\/brains\/[^/]+\/skills\/[^/]+\.md$/, (e) => this.invalidateBrainSlot(e, "skills"), { ownerId: ctx.brainId });
+  override registerWatchPatterns(watcher: FSWatcherAPI, ownerId?: string): void {
+    super.registerWatchPatterns(watcher, ownerId);
+    this.contentWatcher = watcher;
+    this.contentWatcherOwnerId = ownerId;
   }
 
   // ─── 公共 API ───
 
   async load(ctx: LoaderContext): Promise<ContextSlot[]> {
     await this._loadInternal(ctx);
+    this.refreshDeclarativeWatches();
     return [...this.registry.values()].flat();
+  }
+
+  protected override async reloadAll(): Promise<void> {
+    await super.reloadAll();
+    this.refreshDeclarativeWatches();
   }
 
   invalidateSlot(name: string, reason?: string): void {
@@ -100,7 +91,28 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
     }
   }
 
-  invalidateBrainSlot(event: FSChangeEvent, name: string): void {
-    this.invalidateSlot(name, event.path);
+  private refreshDeclarativeWatches(): void {
+    if (!this.contentWatcher || !this.contentWatcherOwnerId) return;
+    const ownerId = `${this.contentWatcherOwnerId}:slot-content`;
+    this.contentWatcher.unregisterOwner(ownerId);
+
+    for (const [slotName, patterns] of this.declarativeWatches) {
+      if (!this.registry.has(slotName)) continue;
+      for (const watch of patterns) {
+        this.contentWatcher.register(
+          watch.pattern,
+          (event) => {
+            if (watch.action === "reloadAll") {
+              this.reloadAll()
+                .then(() => console.log(`[SlotLoader] reloaded: ${slotName} (${event.path})`))
+                .catch((err) => console.error(`[SlotLoader] reload failed: ${slotName} (${event.path})`, err));
+              return;
+            }
+            this.invalidateSlot(slotName, event.path);
+          },
+          { ownerId, debounceMs: watch.debounceMs },
+        );
+      }
+    }
   }
 }

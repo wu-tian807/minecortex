@@ -8,3 +8,11 @@ export interface LoaderContext {
   selector: CapabilitySelector;
   capabilitySources: CapabilitySource[];
 }
+
+export interface SlotWatchPattern {
+  pattern: RegExp;
+  debounceMs?: number;
+  action?: "invalidate" | "reloadAll";
+}
+
+export type SlotWatchFactory = (ctx: LoaderContext) => SlotWatchPattern[];
