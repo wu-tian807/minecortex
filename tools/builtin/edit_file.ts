@@ -13,12 +13,13 @@ export default {
     "Use replace_all for renaming variables or updating repeated patterns across the file. " +
     "When constructing old_string from read_file output, do NOT include the line number prefix (e.g. '     1|'). " +
     "For larger edits or when edit_file fails repeatedly, use write_file to rewrite the entire file.",
+  guidance: "**edit_file**: On first failure, re-read the file and copy old_string exactly. On second failure, switch to write_file.",
   input_schema: {
     type: "object",
     properties: {
       path: {
         type: "string",
-        description: "File path (absolute, project-relative, or brain-local)",
+        description: "File path (absolute or relative to currentDir)",
       },
       old_string: {
         type: "string",

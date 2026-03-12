@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
+import { BRAINBOARD_KEYS } from "../../src/defaults/brainboard-vars.js";
 import { getTerminalManager } from "../../src/terminal/manager.js";
 
 const DEFAULT_TIMEOUT = 30_000;
@@ -12,6 +13,7 @@ export default {
     "Use read_file on the returned logFile path to poll a backgrounded command's progress. " +
     "IMPORTANT: Do not use grep/find/cat/sed/awk — use the dedicated tools (grep, glob, read_file, edit_file) instead. " +
     "Always quote file paths containing spaces. Use ';' or '&&' to chain commands, not newlines.",
+  guidance: "**shell**: Always provide the description parameter (5-10 words stating the command's purpose).",
   input_schema: {
     type: "object",
     properties: {
@@ -25,7 +27,7 @@ export default {
       },
       cwd: {
         type: "string",
-        description: "Working directory. Defaults to project root.",
+        description: "Working directory. Relative paths resolve from currentDir. Defaults to currentDir.",
       },
       timeout_ms: {
         type: "integer",
@@ -41,7 +43,7 @@ export default {
   async execute(args, ctx): Promise<ToolOutput> {
     const command = String(args.command);
     const cwd = args.cwd ? String(args.cwd) : undefined;
-    const initialCwd = ctx.brainBoard.get(ctx.brainId, "current_dir") as string | undefined;
+    const initialCwd = ctx.brainBoard.get(ctx.brainId, BRAINBOARD_KEYS.CURRENT_DIR) as string | undefined;
     const timeoutMs = (args.timeout_ms as number) ?? DEFAULT_TIMEOUT;
     const extraEnv = args.env as Record<string, string> | undefined;
     const terminalManager = getTerminalManager();

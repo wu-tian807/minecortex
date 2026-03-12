@@ -15,7 +15,7 @@ export default {
     properties: {
       path: {
         type: "string",
-        description: "File path. Relative paths resolve to this brain's local workspace/. Absolute paths must be under bundle/ (e.g. bundle/shared/docs/) — writing outside bundle/ will be denied.",
+        description: "File path. Relative paths resolve from currentDir. Absolute paths must be under bundle/ (e.g. bundle/shared/docs/) — writing outside bundle/ will be denied.",
       },
       contents: {
         type: "string",

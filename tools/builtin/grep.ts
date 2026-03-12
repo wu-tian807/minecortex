@@ -79,6 +79,7 @@ export default {
     "and line numbers. Skips binary files, node_modules, .git, dist. " +
     "ALWAYS use this tool instead of shell grep/rg. " +
     "Supports full regex syntax (e.g. 'TODO', 'function\\s+\\w+').",
+  guidance: "**grep**: Preferred over shell grep/rg for searching file contents. Use glob to search by filename instead.",
   input_schema: {
     type: "object",
     properties: {
@@ -88,7 +89,7 @@ export default {
       },
       path: {
         type: "string",
-        description: "Directory or file to search in. Defaults to project root.",
+        description: "Directory or file to search in. Relative paths resolve from currentDir. Defaults to currentDir.",
       },
       case_insensitive: {
         type: "boolean",

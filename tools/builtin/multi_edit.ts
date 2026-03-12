@@ -14,12 +14,13 @@ export default {
     "Edits are applied sequentially — each edit operates on the result of the previous one. " +
     "Atomic: if any edit fails, none are applied. " +
     "Prefer this over multiple edit_file calls when making several changes to the same file.",
+  guidance: "**multi_edit**: Prefer over multiple edit_file calls when making several changes to the same file — atomic and more efficient.",
   input_schema: {
     type: "object",
     properties: {
       path: {
         type: "string",
-        description: "File path (absolute, project-relative, or brain-local)",
+        description: "File path (absolute or relative to currentDir)",
       },
       edits: {
         type: "array",

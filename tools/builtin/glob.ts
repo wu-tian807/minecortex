@@ -60,6 +60,7 @@ export default {
     "Fast file pattern matching tool. Patterns not starting with '**/' are auto-prepended " +
     "for recursive search. Returns matching file paths. Skips node_modules, .git, dist. " +
     "It is always better to speculatively perform multiple searches as a batch.",
+  guidance: "**glob**: Preferred over shell find for searching filenames. Use grep to search file contents instead.",
   input_schema: {
     type: "object",
     properties: {
@@ -70,7 +71,7 @@ export default {
       },
       path: {
         type: "string",
-        description: "Base directory to search from. Defaults to project root.",
+        description: "Base directory to search from. Relative paths resolve from currentDir. Defaults to currentDir.",
       },
     },
     required: ["pattern"],

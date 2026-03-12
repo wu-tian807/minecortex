@@ -12,7 +12,7 @@ export default {
     properties: {
       path: {
         type: "string",
-        description: "Directory path (absolute or project-relative). Defaults to project root.",
+        description: "Directory path (absolute or relative to currentDir). Defaults to currentDir.",
       },
     },
   },
