@@ -34,6 +34,7 @@ import { SlotLoader } from "../loaders/slot-loader.js";
 import { SubscriptionLoader } from "../loaders/subscription-loader.js";
 import { BaseLoader } from "../loaders/base-loader.js";
 import { SubscriptionRegistry } from "./subscription-registry.js";
+import { readBrainDotEnv } from "../terminal/env-builder.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -98,11 +99,13 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       sessionManager,
       trackBackgroundTask: opts.trackBackgroundTask,
       logger,
+      env: {},
     };
 
     for (;;) {
       if (signal.aborted || (maxIterations != -1 && iterations >= maxIterations) ) break;
       iterations++;
+      toolCtx.env = await readBrainDotEnv(brainId, pathManager);
 
       const sessionHistory = await sessionManager.loadPromptHistory({ keepToolResults, keepMedias });
 
@@ -593,6 +596,7 @@ export class ConsciousBrain extends BaseBrain {
         p.finally(() => this.pendingTasks.delete(p));
       },
       logger: this.logger,
+      env: await readBrainDotEnv(this.id, this.pathManager),
     };
 
     this.hooks.emit(HookEvent.TurnStart, { turn: this.currentTurn, eventCount: 1 });

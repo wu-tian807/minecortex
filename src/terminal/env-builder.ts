@@ -135,3 +135,29 @@ function pickSafeHostEnv(): NodeJS.ProcessEnv {
   
     return merged;
   }
+
+/**
+ * 即拿即用：直接从磁盘读取 base.env + brain .env 并合并，不做 PATH / HOME 处理。
+ * 每次调用均读取最新文件，无需缓存或 watcher。
+ * 传空 brainId 时只返回 base.env。
+ */
+export async function readBrainDotEnv(
+  brainId: string | undefined,
+  pathManager: PathManagerAPI,
+): Promise<Record<string, string>> {
+  let env: Record<string, string> = {};
+
+  try {
+    const content = await readFile(pathManager.bundle().sharedDir() + "/env/base.env", "utf-8");
+    env = { ...env, ...parseEnvFile(content) };
+  } catch { /* base.env 不存在则跳过 */ }
+
+  if (brainId) {
+    try {
+      const content = await readFile(pathManager.local(brainId).root() + "/.env", "utf-8");
+      env = { ...env, ...parseEnvFile(content) };
+    } catch { /* brain .env 不存在则跳过 */ }
+  }
+
+  return env;
+}

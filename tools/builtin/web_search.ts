@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "../../src/core/types.js";
+import type { ToolDefinition, ToolContext } from "../../src/core/types.js";
 
 interface SearchResult {
   title: string;
@@ -6,8 +6,8 @@ interface SearchResult {
   snippet: string;
 }
 
-async function tavilySearch(query: string, maxResults: number): Promise<SearchResult[]> {
-  const apiKey = process.env.TAVILY_API_KEY;
+async function tavilySearch(query: string, maxResults: number, ctx: ToolContext): Promise<SearchResult[]> {
+  const apiKey = ctx.env.TAVILY_API_KEY;
   if (!apiKey) throw new Error("no_api_key");
 
   const res = await fetch("https://api.tavily.com/search", {
@@ -78,12 +78,12 @@ export default {
     },
     required: ["query"],
   },
-  async execute(args) {
+  async execute(args, ctx) {
     const query = String(args.query);
     const maxResults = Number(args.max_results ?? 5);
 
     try {
-      return JSON.stringify({ results: await tavilySearch(query, maxResults) });
+      return JSON.stringify({ results: await tavilySearch(query, maxResults, ctx) });
     } catch {
       try {
         return JSON.stringify({ results: await ddgSearch(query, maxResults) });

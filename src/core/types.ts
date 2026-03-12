@@ -237,6 +237,8 @@ export interface ToolContext {
   trackBackgroundTask?: (p: Promise<unknown>) => void;
   /** Logger for sub-agents to inherit real-time debug output. */
   logger?: import("./logger.js").Logger;
+  /** Brain's full environment variables (merged from base.env, brain .env, and safe host env) */
+  env: Record<string, string>;
 }
 
 // ─── BrainBoard (reactive state registry) ───
