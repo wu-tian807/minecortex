@@ -19,6 +19,7 @@ import "./llm/deepseek-reasoning.js";
 import { Scheduler } from "./core/scheduler.js";
 import { ConsciousBrain } from "./core/brain.js";
 import { CLIRenderer } from "./cli/renderer.js";
+import { clearScreen } from "./cli/ansi.js";
 import { ensureDefaultConfigs } from "./defaults/index.js";
 import { getModelSpec } from "./llm/provider.js";
 
@@ -111,6 +112,19 @@ async function main() {
       });
     },
   });
+
+  let terminalCleaned = false;
+  const cleanupTerminal = () => {
+    if (terminalCleaned) return;
+    terminalCleaned = true;
+    renderer.stop();
+    clearScreen();
+  };
+
+  process.once("exit", cleanupTerminal);
+  process.once("uncaughtException", cleanupTerminal);
+  process.once("unhandledRejection", cleanupTerminal);
+
   await renderer.start();
 }
 

@@ -24,8 +24,8 @@ export class EventTailer {
     /**
      * Called for each new event parsed from the file.
      * `nextByteOffset` is the byte position just after this event's line (including its \n).
-     * If the handler calls replayFromFile and sets tailer.offset = nextByteOffset,
-     * readNewLines will skip directly to that position and avoid double-processing.
+     * The renderer currently processes live events incrementally, but we still expose
+     * the offset so callers can coordinate any future jump-forward logic safely.
      */
     private onEvent:          (ev: RendererEvent, isLive: boolean, nextByteOffset: number) => void,
     /** Called when session.json indicates a different active session. */
@@ -92,9 +92,8 @@ export class EventTailer {
 
       // Process line-by-line while tracking byte positions.
       // We do NOT set this.offset = bytes upfront: instead we advance it per-line.
-      // This lets an onEvent handler (e.g. replayFromFile) set this.offset to
-      // nextByteOffset, which we detect and use to jump forward — preventing
-      // double-processing of events that were already included in a replay.
+      // This preserves the ability for onEvent handlers to jump the tail offset
+      // forward explicitly if they ever need to resynchronize with the file.
       const buf = Buffer.from(raw, "utf-8");
       let pos = this.offset;
 
@@ -112,8 +111,8 @@ export class EventTailer {
           }
         }
 
-        // If the callback externally advanced this.offset (e.g. via replayFromFile),
-        // jump to the new offset — it already handled the events up to there.
+        // If the callback externally advanced this.offset, jump to the new offset —
+        // it already handled the events up to there.
         if (this.offset > pos) {
           pos = this.offset;
         } else {

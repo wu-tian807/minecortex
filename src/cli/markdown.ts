@@ -7,8 +7,8 @@
  *
  * Design notes (aligned with Claude Code / Gemini CLI philosophy):
  *  - Zero external deps; pure string transformation.
- *  - Used for post-stream rendering of complete `assistant` messages.
- *  - Streaming chunks are output as raw text first, then replaced on finalize.
+ *  - Used when rendering persisted `assistant` messages from events.jsonl.
+ *  - Live streaming stays incremental; history/session replay is where full Markdown styling applies.
  */
 
 import { C } from "./ansi.js";

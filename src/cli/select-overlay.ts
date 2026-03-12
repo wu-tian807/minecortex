@@ -19,7 +19,7 @@
  */
 
 import * as readline from "node:readline";
-import { C, clearToEnd } from "./ansi.js";
+import { C } from "./ansi.js";
 
 export interface SelectItem {
   label: string;
@@ -32,6 +32,9 @@ export class SelectOverlay {
   private title: string;
   /** Absolute terminal row (1-indexed) where the overlay starts. Set by show(). */
   private startRow = 1;
+  /** Last rendered region so stale overlays can be cleared before moving/reopening. */
+  private renderedStartRow: number | null = null;
+  private renderedRowCount = 0;
 
   constructor(title: string, items: SelectItem[], activeIdx = 0) {
     this.title = title;
@@ -66,16 +69,24 @@ export class SelectOverlay {
    * Uses absolute cursor positioning so it works regardless of scroll region.
    */
   show(startRow: number): void {
+    if (this.renderedStartRow !== null && this.renderedStartRow !== startRow) {
+      this.clear();
+    }
     this.startRow = startRow;
     this.renderLines();
   }
 
   /** Erase all overlay rows using absolute positioning. */
   clear(): void {
+    if (this.renderedStartRow === null || this.renderedRowCount <= 0) return;
     process.stdout.write("\x1b[s");
-    process.stdout.write(`\x1b[${this.startRow};1H`);
-    clearToEnd();
+    for (let i = 0; i < this.renderedRowCount; i++) {
+      process.stdout.write(`\x1b[${this.renderedStartRow + i};1H`);
+      readline.clearLine(process.stdout, 0);
+    }
     process.stdout.write("\x1b[u");
+    this.renderedStartRow = null;
+    this.renderedRowCount = 0;
   }
 
   // ─── Private rendering ───
@@ -123,6 +134,8 @@ export class SelectOverlay {
       process.stdout.write(`${C.dim}${lines[i]}${C.reset}`);
     }
     process.stdout.write("\x1b[u");
+    this.renderedStartRow = this.startRow;
+    this.renderedRowCount = lines.length;
   }
 
   private redraw(): void {

@@ -1,7 +1,7 @@
 /** @desc CLIRenderer — interactive terminal renderer that tails events.jsonl */
 
 import * as readline from "node:readline";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -12,7 +12,6 @@ import {
 } from "./ansi.js";
 import { FooterRenderer, type FooterCursorPos } from "./footer-renderer.js";
 import { type RendererEvent, type InputSegment, formatEvent, parseRendererEvent } from "./events.js";
-import { renderMarkdown } from "./markdown.js";
 import { SelectOverlay } from "./select-overlay.js";
 import { StatusBar } from "./status-bar.js";
 import { parseCommand } from "../core/command-parser.js";
@@ -317,7 +316,6 @@ export class CLIRenderer implements OverlayHost {
     if (!text) return;
     if (this.overlay) { this.pendingPrints.push(text); return; }
     if (!this.isTTY) { process.stdout.write(text); return; }
-    if (this.replaying) { process.stdout.write(text); return; }
     // Write at the bottom of the scroll region; content scrolls up within rows 1..N-3.
     // Footer rows (N-2, N-1, N) are protected by the scroll region and stay visible.
     process.stdout.write(`\x1b[${this.footer.contentBottom()};1H`);
@@ -343,70 +341,23 @@ export class CLIRenderer implements OverlayHost {
     this.scheduleRedraw();
   }
 
-  /** True while replayFromFile is running — print() skips footer redraws. */
-  private replaying = false;
-
   /**
-   * Clear screen and replay events from events.jsonl up to (and including) `untilOffset`.
-   * If `untilOffset` is omitted, replays the entire file.
+   * Finalize a streamed assistant turn without a full clear + replay.
    *
-   * During replay the scroll region is temporarily reset to full-screen so content
-   * fills naturally from the top. After replay the scroll region is re-established and
-   * the footer is redrawn at its absolute rows.
-   *
-   * Setting tailer.offset = untilOffset signals EventTailer.readNewLines to jump forward,
-   * so events after the replayed range are processed exactly once by the live batch.
+   * We intentionally keep the raw streamed text on screen: it avoids replaying the
+   * same history twice in terminal capture logs while still preserving incremental
+   * output in interactive TTYs.
    */
-  private replayFromFile(untilOffset?: number): void {
-    const path = this.eventsPath();
-    if (!existsSync(path)) return;
-    const raw = readFileSync(path, "utf-8");
-    const buf = Buffer.from(raw, "utf-8");
-    const stopAt = untilOffset !== undefined ? Math.min(untilOffset, buf.length) : buf.length;
-
-    // Clear the full screen first (needs full-screen scroll region so clearScreen
-    // erases the footer rows too), then immediately constrain to the content area
-    // before the replay loop.  This keeps all replayed output within rows 1..N-3
-    // so that subsequent drawFooter() cannot overwrite the last content lines.
-    this.footer.resetScrollRegion();
-    clearScreen();
-    this.footer.setupScrollRegion();
-
-    this.replaying = true;
-    let pos = 0;
-    while (pos < stopAt) {
-      let lineEnd = pos;
-      while (lineEnd < stopAt && buf[lineEnd] !== 0x0A) lineEnd++;
-      const line = buf.subarray(pos, lineEnd).toString("utf-8").trim();
-      pos = lineEnd < buf.length ? lineEnd + 1 : buf.length;
-      if (pos > stopAt) pos = stopAt;
-      const ev = parseRendererEvent(line);
-      if (ev) this.printEvent(ev); // isLive=false → assistant renders as markdown
-    }
-    this.replaying = false;
-
-    this.tailer.offset = stopAt; // signal readNewLines to resume from here
-
-    this.drawFooter();
-  }
-
-  /**
-   * Replace streamed raw text with a full clearScreen + replay, then restore the footer.
-   * `replayUntil` is the byte offset just after the triggering assistant event: replay
-   * stops there so that events after it (tool_call, tool_result, …) are NOT double-printed
-   * — the live readNewLines batch continues processing them normally.
-   * Returns true if text was streamed this turn (caller should skip reprinting).
-   */
-  private finalizeLiveAssistant(replayUntil?: number): boolean {
+  private finalizeLiveAssistant(): boolean {
     const { active: hadStreaming, thinking: hadThinkingText } = this.streaming;
     this.streaming = makeStreamingState();
 
     if (!this.isTTY) return hadStreaming;
 
     if (hadStreaming) {
-      // Do NOT setThinking(false) here — the turn may continue with more tool calls.
-      // Spinner stays on until turn_end fires.
-      this.replayFromFile(replayUntil);
+      // Ensure the next rendered event starts on a fresh line after the streamed body.
+      process.stdout.write("\n\n");
+      this.drawFooter();
     } else if (hadThinkingText) {
       this.refreshFooter();
     }
@@ -437,7 +388,7 @@ export class CLIRenderer implements OverlayHost {
     }
     if (ev.k === "assistant" && isLive) {
       const hadStreaming = this.streaming.active;
-      this.finalizeLiveAssistant(replayUntil);
+      this.finalizeLiveAssistant();
       if (!hadStreaming) {
         const out = formatEvent(ev);
         if (out) this.print(out);
@@ -451,6 +402,7 @@ export class CLIRenderer implements OverlayHost {
   // ─── Overlay lifecycle ───
 
   openOverlay(ov: SelectOverlay, onConfirm: (idx: number) => Promise<void>): void {
+    this.overlay?.clear();
     this.overlay          = ov;
     this.overlayOnConfirm = onConfirm;
     this.input.clear();
