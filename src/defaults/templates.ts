@@ -17,6 +17,7 @@ export const DEFAULT_BRAIN_JSON: BrainJson = {
     keepMedias: BRAIN_DEFAULTS.session.keepMedias,
   },
   timezone: BRAIN_DEFAULTS.timezone,
+  defaultDir: BRAIN_DEFAULTS.defaultDir,
 };
 
 export const DEFAULT_MINECORTEX_JSON: MinecortexConfig = {

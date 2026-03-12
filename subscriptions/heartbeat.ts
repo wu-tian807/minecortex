@@ -1,16 +1,17 @@
 /** @desc Heartbeat subscription — brainboard-tracked timer as EventSource */
 
-import type { Event, EventSource, SourceContext } from "../src/core/types.js";
+import type { Event, EventSource, SubscriptionContext } from "../src/core/types.js";
 
 const BRAINBOARD_KEY = "lastHeartbeatTime";
 /** Poll interval for checking whether it's time to fire. */
 const POLL_INTERVAL_MS = 10_000;
 
-export default function create(ctx: SourceContext): EventSource {
-  const intervalMs = (ctx.eventConfig?.intervalMs as number) ?? 60_000;
-  const prompt = (ctx.eventConfig?.prompt as string) ?? "";
-  const brainId = ctx.brain.id;
-  const board = ctx.brain.brainBoard;
+export default function create(ctx: SubscriptionContext): EventSource {
+  const config = ctx.getBrainJson().subscriptions?.config?.heartbeat;
+  const intervalMs = (config?.intervalMs as number) ?? 60_000;
+  const prompt = (config?.prompt as string) ?? "";
+  const brainId = ctx.brainId;
+  const board = ctx.brainBoard;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
 

@@ -1,11 +1,12 @@
-import type { DynamicSubscriptionAPI, Event, EventSource } from "./types.js";
+import type { DynamicSubscriptionAPI, EventSource } from "../core/types.js";
+import type { SubscriptionEmitter } from "./types.js";
 
 export class SubscriptionRegistry implements DynamicSubscriptionAPI {
   private staticSources = new Map<string, EventSource>();
   private dynamicSources = new Map<string, EventSource>();
-  private emitter: ((event: Event) => void) | null = null;
+  private emitter: SubscriptionEmitter | null = null;
 
-  setEmitter(emitter: (event: Event) => void): void {
+  setEmitter(emitter: SubscriptionEmitter): void {
     this.emitter = emitter;
   }
 

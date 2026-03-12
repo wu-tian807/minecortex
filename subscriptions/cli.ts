@@ -5,10 +5,10 @@
  *  in non-TTY (piped) mode as a fallback. */
 
 import * as readline from "node:readline";
-import type { Event, EventSource, SourceContext } from "../src/core/types.js";
+import type { Event, EventSource, SubscriptionContext } from "../src/core/types.js";
 import { parseCommand } from "../src/core/command-parser.js";
 
-export default function create(ctx: SourceContext): EventSource {
+export default function create(ctx: SubscriptionContext): EventSource {
   let rl: readline.Interface | null = null;
 
   return {
@@ -26,7 +26,7 @@ export default function create(ctx: SourceContext): EventSource {
         if (trimmed.startsWith("/")) {
           const cmd = parseCommand(trimmed);
           if (cmd) {
-            ctx.brain.queueCommand(cmd.toolName, cmd.args);
+            ctx.queueCommand?.(cmd.toolName, cmd.args);
             return;
           }
         }

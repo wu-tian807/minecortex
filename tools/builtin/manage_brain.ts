@@ -33,18 +33,6 @@ export default {
         type: "object",
         description: "(create only) Custom subscriptions selector",
       },
-      tools_path: {
-        type: "string",
-        description: "(create only) Redirect tools loading to this workspace-relative or absolute directory",
-      },
-      slots_path: {
-        type: "string",
-        description: "(create only) Redirect slots loading to this workspace-relative or absolute directory",
-      },
-      subscriptions_path: {
-        type: "string",
-        description: "(create only) Redirect subscriptions loading to this workspace-relative or absolute directory",
-      },
       auto_start: {
         type: "boolean",
         description: "(create only) Start the brain immediately after creation",
@@ -67,11 +55,6 @@ export default {
       model: args.model ? String(args.model) : undefined,
       soul: args.soul ? String(args.soul) : undefined,
       subscriptions: args.subscriptions as Record<string, unknown> | undefined,
-      paths: {
-        ...(args.tools_path ? { tools: String(args.tools_path) } : {}),
-        ...(args.slots_path ? { slots: String(args.slots_path) } : {}),
-        ...(args.subscriptions_path ? { subscriptions: String(args.subscriptions_path) } : {}),
-      },
       autoStart: Boolean(args.auto_start),
     } : undefined;
 

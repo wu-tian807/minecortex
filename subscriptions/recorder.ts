@@ -3,7 +3,7 @@
 import { readFile, writeFile, appendFile, mkdir } from "node:fs/promises";
 import { readFileSync, watch as watchFs } from "node:fs";
 import { join, dirname } from "node:path";
-import type { Event, EventSource, SourceContext, BrainJson, EventBusAPI } from "../src/core/types.js";
+import type { Event, EventSource, SubscriptionContext, EventBusAPI } from "../src/core/types.js";
 import type { LLMMessage } from "../src/llm/types.js";
 import { HookEvent } from "../src/hooks/types.js";
 
@@ -43,10 +43,9 @@ function formatTodoList(todos: TodoItem[]): string {
   return `[todos] ${done}/${total}\n${lines.join("\n")}`;
 }
 
-function getShowThinking(ctx: SourceContext): boolean {
+function getShowThinking(ctx: SubscriptionContext): boolean {
   try {
-    const raw = readFileSync(join(ctx.brain.brainDir, "brain.json"), "utf-8");
-    const config = JSON.parse(raw) as BrainJson & { showThinking?: boolean };
+    const config = ctx.getBrainJson() as { showThinking?: boolean; models?: { showThinking?: boolean } };
     return config.showThinking === true || config.models?.showThinking === true;
   } catch {
     return false;
@@ -281,11 +280,11 @@ class EventRecorder {
   }
 }
 
-export default function create(ctx: SourceContext): EventSource {
+export default function create(ctx: SubscriptionContext): EventSource {
   const unsubs: (() => void)[] = [];
-  const logsDir = ctx.brain.pathManager.global().logsDir(ctx.brain.id);
-  const brainDir = ctx.brain.pathManager.local(ctx.brain.id).root();
-  const recorder = new EventRecorder(logsDir, ctx.brain.id);
+  const logsDir = ctx.pathManager.global().logsDir(ctx.brainId);
+  const brainDir = ctx.pathManager.local(ctx.brainId).root();
+  const recorder = new EventRecorder(logsDir, ctx.brainId);
   const showThinking = getShowThinking(ctx);
 
   return {
@@ -293,11 +292,11 @@ export default function create(ctx: SourceContext): EventSource {
 
     start(_emit: (event: Event) => void) {
       recorder.init(brainDir).catch(() => {});
-      recorder.setEventBus(ctx.brain.eventBus);
+      recorder.setEventBus(ctx.eventBus);
 
       // User input + inter-brain messages
       unsubs.push(
-        ctx.brain.hooks.on(HookEvent.EventReceived, ({ events }) => {
+        ctx.hooks!.on(HookEvent.EventReceived, ({ events }) => {
           for (const e of events) {
             if (e.type === "user_input") {
               const p = e.payload as { content?: string; text?: string } | undefined;
@@ -319,13 +318,13 @@ export default function create(ctx: SourceContext): EventSource {
       );
 
       unsubs.push(
-        ctx.brain.hooks.on(HookEvent.AssistantMessage, ({ msg }) =>
+        ctx.hooks!.on(HookEvent.AssistantMessage, ({ msg }) =>
           recorder.recordAssistantMessage(msg)
         )
       );
 
       unsubs.push(
-        ctx.brain.hooks.on(HookEvent.StreamChunk, ({ chunk }) => {
+        ctx.hooks!.on(HookEvent.StreamChunk, ({ chunk }) => {
           if (chunk.type === "text") {
             recorder.recordAssistantChunk("text", chunk.text);
             return;
@@ -337,25 +336,25 @@ export default function create(ctx: SourceContext): EventSource {
       );
 
       unsubs.push(
-        ctx.brain.hooks.on(HookEvent.ToolCall, ({ name, args }) =>
+        ctx.hooks!.on(HookEvent.ToolCall, ({ name, args }) =>
           recorder.recordToolCall(name, args)
         )
       );
 
       unsubs.push(
-        ctx.brain.hooks.on(HookEvent.ToolResult, ({ name, result, durationMs }) =>
+        ctx.hooks!.on(HookEvent.ToolResult, ({ name, result, durationMs }) =>
           recorder.recordToolResult(name, result, durationMs)
         )
       );
 
-      unsubs.push(ctx.brain.hooks.on(HookEvent.TurnStart, () => {
+      unsubs.push(ctx.hooks!.on(HookEvent.TurnStart, () => {
         // recordTurnStart emits live_turn_start via eventBus THEN writes to events.jsonl.
         // The live event arrives synchronously before any chunks, ensuring the renderer
         // resets streaming state before the first chunk appears.
         recorder.recordTurnStart();
       }));
 
-      unsubs.push(ctx.brain.hooks.on(HookEvent.TurnEnd, ({ error }) => {
+      unsubs.push(ctx.hooks!.on(HookEvent.TurnEnd, ({ error }) => {
         recorder.recordTurnEnd();
         if (error) recorder.recordError(error);
       }));
@@ -364,7 +363,7 @@ export default function create(ctx: SourceContext): EventSource {
       // send_message { to: "user" } → type: "user_message", no brain routing.
       // system_message (e.g. from tools like shell during init) follows the same pattern.
       unsubs.push(
-        ctx.brain.eventBus.observe((e) => {
+        ctx.eventBus.observe((e) => {
           if (e.type === "user_message" || e.type === "system_message") {
             const payload = e.payload as { content?: string; summary?: string } | undefined;
             const text = payload?.content ?? JSON.stringify(e.payload);
@@ -375,7 +374,7 @@ export default function create(ctx: SourceContext): EventSource {
 
       // BrainBoard reactive todo state
       unsubs.push(
-        ctx.brain.brainBoard.watch(ctx.brain.id, "todo-list", (value) => {
+        ctx.brainBoard.watch(ctx.brainId, "todo-list", (value) => {
           const todos = value as TodoItem[] | undefined;
           if (todos) recorder.recordTodoUpdate(todos);
         })

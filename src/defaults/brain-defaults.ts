@@ -33,6 +33,9 @@ export const BRAIN_DEFAULTS = {
   /** 时区 */
   timezone: "Asia/Shanghai",
 
+  /** 默认工作目录（相对路径以 .home 为基准） */
+  defaultDir: ".",
+
   /**
    * Capability selector defaults — local layer always loads unconditionally.
    * global and bundle are both "none" so a brain without an explicit selector

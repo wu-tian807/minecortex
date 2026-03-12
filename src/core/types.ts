@@ -106,12 +106,6 @@ export interface CapabilityDescriptor {
   sourceId?: string;
 }
 
-export interface CapabilityPathRedirects {
-  tools?: string;
-  slots?: string;
-  subscriptions?: string;
-}
-
 export interface ModelsConfig {
   /** 模型名称，可以是单个或数组（fallback 链） */
   model?: string | string[];
@@ -147,7 +141,6 @@ export interface BrainJson {
   subscriptions?: CapabilitySelector;
   tools?: CapabilitySelector;
   slots?: CapabilitySelector;
-  paths?: CapabilityPathRedirects;
 
   /** Session 压缩配置 */
   session?: {
@@ -160,6 +153,13 @@ export interface BrainJson {
 
   /** 时区，默认 Asia/Shanghai */
   timezone?: string;
+
+  /**
+   * 默认工作目录（相对路径以 .home 为基准，或绝对路径）。
+   * 不设置时默认为 bundle/brains/{id}/.home/。
+   * 设置后作为 currentDir 初始值，focus 工具无参调用时也重置到此路径。
+   */
+  defaultDir?: string;
 }
 
 export interface MinecortexConfig {
@@ -174,6 +174,8 @@ export type ToolOutput = string | ContentPart[];
 export interface ToolDefinition {
   name: string;
   description: string;
+  /** Behavioral guidance injected into the system prompt via the tools slot. */
+  guidance?: string;
   ccVersion?: string;
   input_schema: {
     type: "object";
@@ -221,26 +223,6 @@ export interface SessionManagerAPI {
   updateSessionMeta(updates: Record<string, unknown>): Promise<void>;
 }
 
-export interface ToolContext {
-  brainId: string;
-  signal: AbortSignal;
-  eventBus: EventBusAPI;
-  brainBoard: BrainBoardAPI;
-  slot: DynamicSlotAPI;
-  tools: DynamicToolAPI;
-  subscriptions: DynamicSubscriptionAPI;
-  pathManager: PathManagerAPI;
-  workspace: string;
-  /** Session management — use for creating/switching sessions inside tools. */
-  sessionManager?: SessionManagerAPI;
-  /** Register a background promise so the parent brain can await it on shutdown. */
-  trackBackgroundTask?: (p: Promise<unknown>) => void;
-  /** Logger for sub-agents to inherit real-time debug output. */
-  logger?: import("./logger.js").Logger;
-  /** Brain's full environment variables (merged from base.env, brain .env, and safe host env) */
-  env: Record<string, string>;
-}
-
 // ─── BrainBoard (reactive state registry) ───
 
 export type WatchCallback = (value: unknown, prev: unknown) => void;
@@ -262,25 +244,35 @@ export interface BrainBoardAPI {
   registerFSWatcher(watcher: FSWatcherAPI): void;
 }
 
+// ─── Shared capability context ───
+
+export interface BrainContext {
+  brainId: string;
+  brainDir: string;
+  signal: AbortSignal;
+  eventBus: EventBusAPI;
+  brainBoard: BrainBoardAPI;
+  pathManager: PathManagerAPI;
+  /** Brain's environment variables (tool execution may populate this dynamically). */
+  env: Record<string, string>;
+  /** Returns the live in-memory brain.json reference for this brain. */
+  getBrainJson: () => BrainJson;
+  hooks?: import("../hooks/types.js").BrainHooksAPI;
+  queueCommand?: (toolName: string, args: Record<string, string>, reason?: string) => void;
+  /** Session management — use for creating/switching sessions inside tools. */
+  sessionManager?: SessionManagerAPI;
+  slot?: DynamicSlotAPI;
+  tools?: DynamicToolAPI;
+  subscriptions?: DynamicSubscriptionAPI;
+}
+
+export type ToolContext = BrainContext;
+
 // ─── EventSource (pluggable subscription, factory pattern) ───
 
-/** Brain 暴露给 Subscription 的能力接口 */
-export interface BrainContextAPI {
-  readonly id: string;
-  readonly brainDir: string;
-  readonly hooks: import("../hooks/types.js").BrainHooksAPI;
-  readonly brainBoard: BrainBoardAPI;
-  readonly pathManager: PathManagerAPI;
-  readonly eventBus: EventBusAPI;
-  queueCommand(toolName: string, args: Record<string, string>, reason?: string): void;
-}
+export type SubscriptionContext = BrainContext;
 
-export interface SourceContext {
-  brain: BrainContextAPI;
-  eventConfig?: Record<string, unknown>;
-}
-
-export type EventSourceFactory = (ctx: SourceContext) => EventSource;
+export type EventSourceFactory = (ctx: SubscriptionContext) => EventSource;
 
 export interface EventSource {
   name: string;
@@ -461,11 +453,7 @@ export interface BrainInitConfig {
   fsWatcher?: FSWatcherAPI;
 }
 
-export interface ScriptContext {
-  brainId: string;
-  eventBus: EventBusAPI;
-  brainBoard: BrainBoardAPI;
-}
+export type ScriptContext = BrainContext;
 
 // ─── FSWatcher ───
 

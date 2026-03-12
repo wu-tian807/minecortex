@@ -43,6 +43,7 @@ export default {
     "Use `clear: true` to remove all todos entirely.\n\n" +
     "Status values: pending, in_progress, completed, cancelled.\n" +
     "Keep exactly ONE task in_progress at a time.",
+  guidance: "**todo_write**: Use for tasks with 3+ steps or multiple user requests. Keep exactly one task in_progress; mark complete immediately when done.",
   input_schema: {
     type: "object",
     properties: {
@@ -83,12 +84,16 @@ export default {
   async execute(args, ctx): Promise<ToolOutput> {
     const board = ctx.brainBoard;
     const brainId = ctx.brainId;
+    const slotApi = ctx.slot;
+    if (!slotApi) {
+      return "Error: todo_write requires slot registry access.";
+    }
 
     if (args.clear === true) {
       board.remove(brainId, BOARD_KEY);
-      const existing = ctx.slot.get("todos");
+      const existing = slotApi.get("todos");
       if (existing !== undefined) {
-        ctx.slot.release("todos");
+        slotApi.release("todos");
       }
       return "Cleared all todos.";
     }
@@ -134,15 +139,15 @@ export default {
     board.set(brainId, BOARD_KEY, current);
 
     const rendered = renderTodos(current);
-    const existing = ctx.slot.get("todos");
+    const existing = slotApi.get("todos");
     if (rendered) {
       if (existing !== undefined) {
-        ctx.slot.update("todos", rendered);
+        slotApi.update("todos", rendered);
       } else {
-        ctx.slot.register("todos", rendered);
+        slotApi.register("todos", rendered);
       }
     } else if (existing !== undefined) {
-      ctx.slot.release("todos");
+      slotApi.release("todos");
     }
 
     const counts: Record<TodoStatus, number> = {

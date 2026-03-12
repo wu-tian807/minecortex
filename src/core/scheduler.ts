@@ -9,7 +9,6 @@ import type {
   ModelsConfig,
   BrainInitConfig,
   CapabilitySelector,
-  CapabilityPathRedirects,
 } from "./types.js";
 import { EventBus } from "./event-bus.js";
 import { BrainBoard } from "./brain-board.js";
@@ -20,8 +19,6 @@ import { BaseLoader } from "../loaders/base-loader.js";
 import { ToolLoader } from "../loaders/tool-loader.js";
 import { SubscriptionLoader } from "../loaders/subscription-loader.js";
 import { SlotLoader } from "../loaders/slot-loader.js";
-import { ContextEngine } from "../context/context-engine.js";
-import { SlotRegistry } from "../context/slot-registry.js";
 import { initPathManager, type PathManager } from "../fs/path-manager.js";
 import { createOrGetFSWatcher, getFSWatcher, type FSWatcher } from "../fs/watcher.js";
 import { getTerminalManager, initTerminalManager } from "../terminal/manager.js";
@@ -224,10 +221,8 @@ export class Scheduler {
         return;
       }
 
-      // ConsciousBrain — workspace 指向 bundle/shared/workspace 供 AI 作为共享操作空间
       const consciousConfig: ConsciousBrainInitConfig = {
         ...baseConfig,
-        workspace: this.pathManager.bundle().sharedWorkspace(),
         globalModels: globalConfig.models ?? {},
       };
 
@@ -280,7 +275,6 @@ export class Scheduler {
     subscriptions?: Record<string, unknown>;
     tools?: CapabilitySelector;
     slots?: CapabilitySelector;
-    paths?: CapabilityPathRedirects;
     autoStart?: boolean;
   }): Promise<string> {
     this.logger.info("scheduler", 0, `brain_control: ${action}${target ? ` → '${target}'` : ""}`);
@@ -311,7 +305,6 @@ export class Scheduler {
     subscriptions?: Record<string, unknown>;
     tools?: CapabilitySelector;
     slots?: CapabilitySelector;
-    paths?: CapabilityPathRedirects;
     autoStart?: boolean;
   }): Promise<string> {
     if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
@@ -331,7 +324,6 @@ export class Scheduler {
     if (opts?.subscriptions) brainJson.subscriptions = opts.subscriptions;
     if (opts?.tools) brainJson.tools = opts.tools;
     if (opts?.slots) brainJson.slots = opts.slots;
-    if (opts?.paths) brainJson.paths = opts.paths;
     await writeFile(join(brainDir, "brain.json"), JSON.stringify(brainJson, null, 2) + "\n", "utf-8");
     await writeFile(join(brainDir, "soul.md"), opts?.soul ?? Scheduler.defaultSoul(id), "utf-8");
 

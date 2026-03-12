@@ -1,12 +1,11 @@
 /** @desc Auto-compaction subscription — watches currentContextUsage, triggers compact */
 
-import type { EventSource, SourceContext } from "../src/core/types.js";
+import type { EventSource, SubscriptionContext } from "../src/core/types.js";
 import { getModelSpec } from "../src/llm/provider.js";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
-export default function create(ctx: SourceContext): EventSource {
-  const threshold = (ctx.eventConfig?.threshold as number) ?? 1.0;
+export default function create(ctx: SubscriptionContext): EventSource {
+  const config = ctx.getBrainJson().subscriptions?.config?.auto_compact;
+  const threshold = (config?.threshold as number) ?? 1.0;
   let unwatch: (() => void) | null = null;
   let compacting = false;
 
@@ -14,15 +13,15 @@ export default function create(ctx: SourceContext): EventSource {
     name: "auto_compact",
 
     start() {
-      unwatch = ctx.brain.brainBoard.watch(ctx.brain.id, "currentContextUsage", (value) => {
+      unwatch = ctx.brainBoard.watch(ctx.brainId, "currentContextUsage", (value) => {
         const totalTokens = value as number;
         if (!totalTokens || totalTokens <= 0 || compacting) return;
 
         let modelName: string | undefined;
         try {
-          const brainJson = JSON.parse(readFileSync(join(ctx.brain.brainDir, "brain.json"), "utf-8"));
-          modelName = brainJson.model;
-          if (Array.isArray(modelName)) modelName = modelName[0];
+          const brainJson = ctx.getBrainJson();
+          const configuredModel = brainJson.models?.model;
+          modelName = Array.isArray(configuredModel) ? configuredModel[0] : configuredModel;
         } catch { return; }
         if (!modelName) return;
 
@@ -33,7 +32,7 @@ export default function create(ctx: SourceContext): EventSource {
         if (utilization > threshold) {
           compacting = true;
           const reason = `Context at ${(utilization * 100).toFixed(1)}% (${totalTokens}/${contextWindow}), auto-compacting.`;
-          ctx.brain.queueCommand("compact", {}, reason);
+          ctx.queueCommand?.("compact", {}, reason);
           setTimeout(() => { compacting = false; }, 5000);
         }
       });

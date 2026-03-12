@@ -2,10 +2,10 @@ import type {
   CapabilityDescriptor,
   EventSource,
   EventSourceFactory,
-  SourceContext,
+  SubscriptionContext,
   CapabilitySelector,
   Event,
-  BrainContextAPI,
+  BrainContext,
 } from "../core/types.js";
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
@@ -20,14 +20,14 @@ type SubscriptionModule = { default?: EventSourceFactory };
 
 export class SubscriptionLoader extends BaseLoader<SubscriptionModule, SubscriptionEntry> {
   private emitter: ((event: Event) => void) | null = null;
-  private brainContext: BrainContextAPI | null = null;
+  private brainContext: BrainContext | null = null;
   private onSourcesChange: ((sources: EventSource[]) => void) | null = null;
 
   setEmitter(emit: (event: Event) => void): void {
     this.emitter = emit;
   }
 
-  setBrainContext(ctx: BrainContextAPI): void {
+  setBrainContext(ctx: BrainContext): void {
     this.brainContext = ctx;
   }
 
@@ -47,15 +47,11 @@ export class SubscriptionLoader extends BaseLoader<SubscriptionModule, Subscript
 
   createInstance(
     factory: SubscriptionModule,
-    ctx: LoaderContext,
+    _ctx: LoaderContext,
     name: string,
-    descriptor: CapabilityDescriptor,
+    _descriptor: CapabilityDescriptor,
   ): SubscriptionEntry {
-    const sourceCtx: SourceContext = {
-      brain: this.brainContext!,
-      eventConfig: this.resolveConfig(ctx.selector, descriptor),
-    };
-    const source = factory.default!(sourceCtx);
+    const source = factory.default!(this.brainContext!);
     return { source: { ...source, name }, name };
   }
 

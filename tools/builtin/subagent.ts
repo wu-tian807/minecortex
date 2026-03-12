@@ -49,6 +49,7 @@ export default {
     "For observe/explore tasks, always prefer absolute file or directory paths in the task text so weaker models do not get lost. " +
     "Supports stateful question/reply for any subagent type. " +
     "Only use action=reply after a previous subagent call returned status=question for that same subagent.",
+  guidance: "**subagent**: Delegate long-running or independent subtasks to save the main brain's context window.",
   input_schema: {
     type: "object",
     properties: {
@@ -129,8 +130,7 @@ async function loadParentBrainConfig(
   ctx: ToolContext,
 ): Promise<BrainJson> {
   try {
-    const raw = await readFile(join(ctx.pathManager.local(ctx.brainId).root(), "brain.json"), "utf-8");
-    return JSON.parse(raw) as BrainJson;
+    return ctx.getBrainJson();
   } catch {
     return {};
   }
@@ -256,6 +256,34 @@ async function monitorSubagentInBackground(opts: {
   });
 }
 
+function launchBackgroundMonitor(opts: {
+  ctx: ToolContext;
+  scheduler: NonNullable<ReturnType<typeof getScheduler>>;
+  sessionManager: SessionManager;
+  subagentId: string;
+  type: SubagentType;
+}): void {
+  void monitorSubagentInBackground(opts).catch(async (err) => {
+    try {
+      await finalizeSubagent(opts.ctx, opts.scheduler, opts.subagentId, "error");
+    } catch {
+      // Best-effort cleanup; the subagent lifecycle is self-managed.
+    }
+    opts.ctx.eventBus.emitToSelf({
+      source: "tool:subagent",
+      type: "subagent_error",
+      payload: {
+        subagentId: opts.subagentId,
+        type: opts.type,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      ts: Date.now(),
+      priority: 0,
+      handoff: "turn",
+    });
+  });
+}
+
 async function launchSubagent(
   args: Record<string, unknown>,
   ctx: ToolContext,
@@ -353,14 +381,13 @@ async function launchSubagent(
     });
   }
 
-  const monitor = monitorSubagentInBackground({
+  launchBackgroundMonitor({
     ctx,
     scheduler,
     sessionManager,
     subagentId,
     type,
   });
-  ctx.trackBackgroundTask?.(monitor);
 
   return JSON.stringify({
     subagentId,
@@ -433,14 +460,13 @@ async function replyToSubagent(
     });
   }
 
-  const monitor = monitorSubagentInBackground({
+  launchBackgroundMonitor({
     ctx,
     scheduler,
     sessionManager,
     subagentId,
     type: typeValue,
   });
-  ctx.trackBackgroundTask?.(monitor);
 
   return JSON.stringify({
     subagentId,

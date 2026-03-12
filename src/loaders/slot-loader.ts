@@ -35,18 +35,14 @@ export class SlotLoader extends BaseLoader<SlotModule, ContextSlot[]> {
 
   createInstance(
     factory: SlotModule,
-    ctx: LoaderContext,
+    _ctx: LoaderContext,
     _name: string,
     descriptor: CapabilityDescriptor,
   ): ContextSlot[] {
     if (!this.slotCtx) {
       throw new Error(`[SlotLoader] setSlotContext must be called before loading slot "${descriptor.exposedName}"`);
     }
-    const slotCtx: SlotContext = {
-      ...this.slotCtx,
-      config: this.resolveConfig(ctx.selector, descriptor) ?? this.slotCtx.config,
-    };
-    const result = factory.default(slotCtx);
+    const result = factory.default(this.slotCtx);
     return Array.isArray(result) ? result : [result];
   }
 

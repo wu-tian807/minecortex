@@ -116,10 +116,10 @@ export default {
 
     let modelName: string | undefined;
     try {
-      const brainJson = JSON.parse(await readFile(join(brainDir, "brain.json"), "utf-8"));
-      modelName = (brainJson.models?.model ?? brainJson.model) as string | undefined;
-      if (Array.isArray(modelName)) modelName = modelName[0];
-    } catch { /* no brain.json */ }
+      const brainJson = ctx.getBrainJson();
+      const configuredModel = brainJson.models?.model;
+      modelName = Array.isArray(configuredModel) ? configuredModel[0] : configuredModel;
+    } catch { /* no brain config */ }
 
     const customInstructions = args.instructions as string | undefined;
 

@@ -1,11 +1,12 @@
 import type { DynamicToolAPI, ToolDefinition } from "../core/types.js";
+import type { ToolRegistryChangeHandler } from "./types.js";
 
 export class ToolRegistry implements DynamicToolAPI {
   private staticTools = new Map<string, ToolDefinition>();
   private dynamicTools = new Map<string, ToolDefinition>();
-  private onChange: ((tools: ToolDefinition[]) => void) | null = null;
+  private onChange: ToolRegistryChangeHandler | null = null;
 
-  setOnChange(cb: (tools: ToolDefinition[]) => void): void {
+  setOnChange(cb: ToolRegistryChangeHandler): void {
     this.onChange = cb;
   }
 

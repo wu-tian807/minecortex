@@ -1,7 +1,7 @@
 /** @desc ConsciousBrain — streaming agent loop with handoff-aware scheduling */
 
 import { watch as fsWatch } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import type {
   BrainInitConfig,
@@ -19,7 +19,7 @@ import type { LLMProvider, LLMMessage, LLMToolCall, LLMResponse } from "../llm/t
 import { createFallbackProvider, getModelSpec, mergeModelsConfig } from "../llm/provider.js";
 import type { ModelsConfig } from "./types.js";
 import { ContextEngine } from "../context/context-engine.js";
-import { SlotRegistry } from "../context/slot-registry.js";
+import { SlotRegistry } from "../registries/slot-registry.js";
 import { SessionManager } from "../session/session-manager.js";
 import { assembleResponseWithCallback } from "../llm/stream.js";
 import { renderEventDisplay } from "../context/event-router.js";
@@ -28,12 +28,18 @@ import { runToolBatch } from "./tool-batch-runner.js";
 import { BaseBrain } from "./base-brain.js";
 import { runWithLogContext } from "./logger.js";
 import { BRAIN_DEFAULTS } from "../defaults/brain-defaults.js";
-import { ToolRegistry } from "../context/tool-registry.js";
+import {
+  BRAINBOARD_KEYS,
+  createCurrentDirPathManager,
+  buildBuiltinBrainBoardVars,
+  resolveBrainDefaultDir,
+} from "../defaults/brainboard-vars.js";
+import { ToolRegistry } from "../registries/tool-registry.js";
 import { ToolLoader } from "../loaders/tool-loader.js";
 import { SlotLoader } from "../loaders/slot-loader.js";
 import { SubscriptionLoader } from "../loaders/subscription-loader.js";
 import { BaseLoader } from "../loaders/base-loader.js";
-import { SubscriptionRegistry } from "./subscription-registry.js";
+import { SubscriptionRegistry } from "../registries/subscription-registry.js";
 import { readBrainDotEnv } from "../terminal/env-builder.js";
 
 function sleep(ms: number): Promise<void> {
@@ -44,6 +50,7 @@ function sleep(ms: number): Promise<void> {
 
 export interface AgentLoopOpts {
   brainId: string;
+  getBrainJson: () => BrainJson;
   provider: LLMProvider;
   getTools: () => ToolDefinition[];
   dynamicTools: DynamicToolAPI;
@@ -55,7 +62,6 @@ export interface AgentLoopOpts {
   brainBoard: import("./types.js").BrainBoardAPI;
   slotRegistry: DynamicSlotAPI;
   pathManager: import("./types.js").PathManagerAPI;
-  workspace: string;
   eventBus: EventBusAPI;
   logger?: import("./logger.js").Logger;
   /** Persistent session — history is reloaded from disk each iteration. */
@@ -66,7 +72,6 @@ export interface AgentLoopOpts {
   keepToolResults?: number;
   keepMedias?: number;
   showThinking?: boolean;
-  trackBackgroundTask?: (p: Promise<unknown>) => void;
   shouldYieldInnerLoop?: () => boolean;
   timezone?: string;
 }
@@ -76,7 +81,7 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
     const {
       brainId, provider, getTools, dynamicTools, dynamicSubscriptions, contextEngine,
       modelSpec, maxIterations, signal, brainBoard, slotRegistry,
-      pathManager, workspace, eventBus, logger,
+      pathManager, eventBus, logger,
       sessionManager, turn = 0, onAssistantMessage, hooks,
       keepToolResults = 8, keepMedias = 2, showThinking = false,
       shouldYieldInnerLoop,
@@ -88,18 +93,19 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
 
     const toolCtx: ToolContext = {
       brainId,
+      brainDir: pathManager.local(brainId).root(),
       signal,
       eventBus,
       brainBoard,
+      env: {},
+      getBrainJson: opts.getBrainJson,
+      hooks,
+      queueCommand: undefined,
       slot: slotRegistry,
       tools: dynamicTools,
       subscriptions: dynamicSubscriptions,
-      pathManager,
-      workspace,
+      pathManager: createCurrentDirPathManager(pathManager, brainBoard, brainId),
       sessionManager,
-      trackBackgroundTask: opts.trackBackgroundTask,
-      logger,
-      env: {},
     };
 
     for (;;) {
@@ -110,7 +116,12 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       const sessionHistory = await sessionManager.loadPromptHistory({ keepToolResults, keepMedias });
 
       const tz = opts.timezone ?? "Asia/Shanghai";
-      brainBoard.set(brainId, "CURRENT_TIME", new Date().toLocaleString("zh-CN", { timeZone: tz }), { persist: false });
+      brainBoard.set(
+        brainId,
+        BRAINBOARD_KEYS.CURRENT_TIME,
+        new Date().toLocaleString("zh-CN", { timeZone: tz }),
+        { persist: false },
+      );
 
       const vars: Record<string, string> = {};
       for (const [k, v] of Object.entries(brainBoard.getAll(brainId))) {
@@ -261,7 +272,6 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
 // ─── ConsciousBrain-specific init config ───
 
 export interface ConsciousBrainInitConfig extends BrainInitConfig {
-  workspace: string;
   /** Global model defaults from minecortex.json — brain.json.models overrides these at call time. */
   globalModels: ModelsConfig;
 }
@@ -276,15 +286,14 @@ export class ConsciousBrain extends BaseBrain {
   private readonly slotRegistry: SlotRegistry;
   private readonly contextEngine: ContextEngine;
   private readonly sessionManager: SessionManager;
-  private readonly workspace: string;
   private readonly toolLoader: ToolLoader;
   private readonly slotLoader: SlotLoader;
   private readonly subscriptionLoader: SubscriptionLoader;
   private currentTurn = 0;
   private turnAbort: AbortController | null = null;
-  private pendingTasks = new Set<Promise<unknown>>();
   private commandQueue: Array<{ toolName: string; args: Record<string, string>; reason?: string }> = [];
   private readonly globalModels: ModelsConfig;
+  private capabilitiesInitialized = false;
 
   constructor(config: ConsciousBrainInitConfig) {
     super(config);
@@ -297,8 +306,14 @@ export class ConsciousBrain extends BaseBrain {
     const brainJsonPath = join(this.brainDir, "brain.json");
     const watcher = fsWatch(brainJsonPath, () => {
       readFile(brainJsonPath, "utf-8")
-        .then(raw => { this.brainJson = JSON.parse(raw) as BrainJson; })
-        .catch(() => {});
+        .then(raw => {
+          this.brainJson = JSON.parse(raw) as BrainJson;
+          if (!this.capabilitiesInitialized) return;
+          return this.reloadConfigDrivenCapabilities();
+        })
+        .catch((err) => {
+          this.logger.warn(this.id, 0, `brain.json reload ignored: ${err?.message ?? err}`);
+        });
     });
     this.abortController.signal.addEventListener("abort", () => watcher.close(), { once: true });
 
@@ -307,7 +322,6 @@ export class ConsciousBrain extends BaseBrain {
     this.slotRegistry = new SlotRegistry();
     this.contextEngine = new ContextEngine(this.slotRegistry);
     this.sessionManager = new SessionManager(this.id, this.pathManager);
-    this.workspace = config.workspace;
     this.toolLoader = new ToolLoader();
     this.slotLoader = new SlotLoader();
     this.subscriptionLoader = new SubscriptionLoader();
@@ -320,8 +334,18 @@ export class ConsciousBrain extends BaseBrain {
     this.slotLoader.setSlotContext({
       brainId: this.id,
       brainDir: this.brainDir,
+      signal: this.abortController.signal,
+      eventBus: this.boundEventBus,
       brainBoard: this.brainBoard,
       pathManager: this.pathManager,
+      env: {},
+      getBrainJson: () => this.brainJson,
+      hooks: this.hooks,
+      queueCommand: (toolName, args, reason) => this.queueCommand(toolName, args, reason),
+      sessionManager: this.sessionManager,
+      slot: this.slotRegistry,
+      tools: this.toolRegistry,
+      subscriptions: this.subscriptionRegistry,
     });
     this.slotLoader.setCallbacks(
       (slots) => { for (const slot of slots) this.slotRegistry.registerStatic(slot); },
@@ -331,13 +355,20 @@ export class ConsciousBrain extends BaseBrain {
     this.subscriptionLoader.setLogContext(this.id);
     this.subscriptionLoader.setEmitter((event) => this.pushEvent(event));
     this.subscriptionLoader.setBrainContext({
-      id: this.id,
+      brainId: this.id,
       brainDir: this.brainDir,
+      signal: this.abortController.signal,
       hooks: this.hooks,
       brainBoard: this.brainBoard,
       pathManager: this.pathManager,
       eventBus: this.boundEventBus,
+      env: {},
+      getBrainJson: () => this.brainJson,
       queueCommand: (toolName, args, reason) => this.queueCommand(toolName, args, reason),
+      sessionManager: this.sessionManager,
+      slot: this.slotRegistry,
+      tools: this.toolRegistry,
+      subscriptions: this.subscriptionRegistry,
     });
     this.subscriptionLoader.setCallback((sources) => this.subscriptionRegistry.replaceStatic(sources));
     this.subscriptionRegistry.setEmitter((event) => this.pushEvent(event));
@@ -352,19 +383,33 @@ export class ConsciousBrain extends BaseBrain {
     //     • BRAIN_DIR:   absolute path to this brain's directory
     //     • CURRENT_TIME: wall-clock time, refreshed at the start of each agent loop iteration
 
-    this.brainBoard.set(this.id, "BRAIN_ID", this.id, { persist: false });
-    this.brainBoard.set(this.id, "BRAIN_DIR", config.brainDir, { persist: false });
+    const builtinVars = buildBuiltinBrainBoardVars(
+      this.id,
+      config.brainDir,
+      this.pathManager,
+    );
+    for (const [key, value] of Object.entries(builtinVars)) {
+      this.brainBoard.set(this.id, key, value, { persist: false });
+    }
+    if (this.brainBoard.get(this.id, BRAINBOARD_KEYS.CURRENT_DIR) == null) {
+      this.brainBoard.set(
+        this.id,
+        BRAINBOARD_KEYS.CURRENT_DIR,
+        resolveBrainDefaultDir(this.id, this.brainJson, this.pathManager),
+        { persist: false },
+      );
+    }
 
     this.sessionManager.setCallbacks({
       onSessionSwitch: (_newSid, lastContextUsage) => {
         if (lastContextUsage !== null) {
-          this.brainBoard.set(this.id, "currentContextUsage", lastContextUsage);
+          this.brainBoard.set(this.id, BRAINBOARD_KEYS.CURRENT_CONTEXT_USAGE, lastContextUsage);
         } else {
-          this.brainBoard.remove(this.id, "currentContextUsage");
+          this.brainBoard.remove(this.id, BRAINBOARD_KEYS.CURRENT_CONTEXT_USAGE);
         }
       },
       onContextUsageChange: (_sessionId, usage) => {
-        this.brainBoard.set(this.id, "currentContextUsage", usage);
+        this.brainBoard.set(this.id, BRAINBOARD_KEYS.CURRENT_CONTEXT_USAGE, usage);
       },
     });
   }
@@ -381,6 +426,22 @@ export class ConsciousBrain extends BaseBrain {
       this.subscriptionLoader.registerWatchPatterns(this.fsWatcher, this.id);
     }
 
+    await this.reloadConfigDrivenCapabilities();
+    this.capabilitiesInitialized = true;
+  }
+
+  updateTools(tools: ToolDefinition[]): void {
+    this.tools = tools;
+    this.brainBoard.set(this.id, BRAINBOARD_KEYS.ACTIVE_TOOLS, tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      guidance: t.guidance,
+      input_schema: t.input_schema,
+    })), { persist: false });
+    this.logger.info(this.id, 0, `tools reloaded: ${tools.length} total`);
+  }
+
+  private async reloadConfigDrivenCapabilities(): Promise<void> {
     await this.toolLoader.load({
       brainId: this.id,
       brainDir: this.brainDir,
@@ -390,7 +451,6 @@ export class ConsciousBrain extends BaseBrain {
         this.pathManager,
         this.id,
         "tools",
-        this.resolveRedirectPath(this.brainJson.paths?.tools),
       ),
     });
     await this.slotLoader.load({
@@ -402,7 +462,6 @@ export class ConsciousBrain extends BaseBrain {
         this.pathManager,
         this.id,
         "slots",
-        this.resolveRedirectPath(this.brainJson.paths?.slots),
       ),
     });
     await this.subscriptionLoader.load({
@@ -414,14 +473,8 @@ export class ConsciousBrain extends BaseBrain {
         this.pathManager,
         this.id,
         "subscriptions",
-        this.resolveRedirectPath(this.brainJson.paths?.subscriptions),
       ),
     });
-  }
-
-  updateTools(tools: ToolDefinition[]): void {
-    this.tools = tools;
-    this.logger.info(this.id, 0, `tools reloaded: ${tools.length} total`);
   }
 
   protected async runMain(_signal: AbortSignal): Promise<void> {
@@ -516,6 +569,7 @@ export class ConsciousBrain extends BaseBrain {
       const currentModel = Array.isArray(mc.model) ? mc.model[0] : (mc.model ?? "");
       await runAgentLoop({
         brainId: this.id,
+        getBrainJson: () => this.brainJson,
         provider: this.provider,
         getTools: () => this.tools,
         dynamicTools: this.toolRegistry,
@@ -527,7 +581,6 @@ export class ConsciousBrain extends BaseBrain {
         brainBoard: this.brainBoard,
         slotRegistry: this.slotRegistry,
         pathManager: this.pathManager,
-        workspace: this.workspace,
         eventBus: this.boundEventBus,
         logger: this.logger,
         sessionManager: this.sessionManager,
@@ -536,10 +589,6 @@ export class ConsciousBrain extends BaseBrain {
         keepToolResults: this.brainJson.session?.keepToolResults ?? BRAIN_DEFAULTS.session.keepToolResults,
         keepMedias: this.brainJson.session?.keepMedias ?? BRAIN_DEFAULTS.session.keepMedias,
         showThinking: this.brainJson.models?.showThinking ?? true,
-        trackBackgroundTask: (p) => {
-          this.pendingTasks.add(p);
-          p.finally(() => this.pendingTasks.delete(p));
-        },
         shouldYieldInnerLoop: () => this.queue.hasHandoff("innerLoop"),
         timezone: this.brainJson.timezone,
       });
@@ -582,21 +631,19 @@ export class ConsciousBrain extends BaseBrain {
 
     const toolCtx: ToolContext = {
       brainId: this.id,
+      brainDir: this.brainDir,
       signal,
       eventBus: this.boundEventBus,
       brainBoard: this.brainBoard,
+      env: await readBrainDotEnv(this.id, this.pathManager),
+      getBrainJson: () => this.brainJson,
+      hooks: this.hooks,
+      queueCommand: (toolName, args, reason) => this.queueCommand(toolName, args, reason),
       slot: this.slotRegistry,
       tools: this.toolRegistry,
       subscriptions: this.subscriptionRegistry,
-      pathManager: this.pathManager,
-      workspace: this.workspace,
+      pathManager: createCurrentDirPathManager(this.pathManager, this.brainBoard, this.id),
       sessionManager: this.sessionManager,
-      trackBackgroundTask: (p) => {
-        this.pendingTasks.add(p);
-        p.finally(() => this.pendingTasks.delete(p));
-      },
-      logger: this.logger,
-      env: await readBrainDotEnv(this.id, this.pathManager),
     };
 
     this.hooks.emit(HookEvent.TurnStart, { turn: this.currentTurn, eventCount: 1 });
@@ -645,13 +692,6 @@ export class ConsciousBrain extends BaseBrain {
     this.stop();
     this.abortController.abort();
 
-    if (this.pendingTasks.size > 0) {
-      this.logger.info(this.id, this.currentTurn, `awaiting ${this.pendingTasks.size} background task(s)...`);
-      const timeout = new Promise<void>(r => setTimeout(r, 5000));
-      await Promise.race([Promise.allSettled([...this.pendingTasks]), timeout]);
-      this.pendingTasks.clear();
-    }
-
     await super.shutdown();
     this.toolRegistry.clear();
     this.subscriptionRegistry.clear();
@@ -660,10 +700,6 @@ export class ConsciousBrain extends BaseBrain {
     this.logger.info(this.id, this.currentTurn, "shutdown() complete");
   }
 
-  private resolveRedirectPath(redirected?: string): string | undefined {
-    if (!redirected) return undefined;
-    return isAbsolute(redirected) ? redirected : join(this.pathManager.root(), redirected);
-  }
 }
 
 // ─── Signal combinators ───

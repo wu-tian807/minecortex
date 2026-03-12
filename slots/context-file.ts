@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { SlotFactory, ContextSlot } from "../src/context/types.js";
+import { BRAINBOARD_KEYS } from "../src/defaults/brainboard-vars.js";
 
 const ROOT = process.cwd();
 const MAX_TREE_DEPTH = 3;
@@ -74,8 +75,8 @@ const create: SlotFactory = (ctx): ContextSlot => {
     id: "context-file:current",
     order: 60,
     priority: 5,
-    condition: () => brainBoard.get(brainId, "current_dir") != null,
-    content: () => buildFocusContent(brainBoard.get(brainId, "current_dir") as string),
+    condition: () => brainBoard.get(brainId, BRAINBOARD_KEYS.CURRENT_DIR) != null,
+    content: () => buildFocusContent(brainBoard.get(brainId, BRAINBOARD_KEYS.CURRENT_DIR) as string),
     version: 0,
   };
 };

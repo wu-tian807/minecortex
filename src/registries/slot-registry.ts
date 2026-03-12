@@ -1,15 +1,12 @@
 import type { DynamicSlotAPI } from "../core/types.js";
-import type { ContextSlot } from "./types.js";
+import type { ContextSlot } from "../context/types.js";
+import type { SlotRegistryView } from "./types.js";
 
-export class SlotRegistry implements DynamicSlotAPI {
-  // Two separate maps mirror the ToolLoader pattern:
+export class SlotRegistry implements DynamicSlotAPI, SlotRegistryView {
   // staticSlots  — managed exclusively by SlotLoader (file discovery / hot-reload)
   // dynamicSlots — managed exclusively by tools via ctx.slot (DynamicSlotAPI)
-  // Neither side can corrupt the other's entries.
   private staticSlots = new Map<string, ContextSlot>();
   private dynamicSlots = new Map<string, ContextSlot>();
-
-  // ─── Static layer (SlotLoader callbacks) ───
 
   registerStatic(slot: ContextSlot): void {
     this.staticSlots.set(slot.id, slot);
@@ -26,8 +23,6 @@ export class SlotRegistry implements DynamicSlotAPI {
   all(): ContextSlot[] {
     return [...this.staticSlots.values(), ...this.dynamicSlots.values()];
   }
-
-  // ─── DynamicSlotAPI (for tools via ToolContext.slot) ───
 
   register(id: string, content: string): void {
     this.dynamicSlots.set(id, {
@@ -58,9 +53,9 @@ export class SlotRegistry implements DynamicSlotAPI {
   }
 
   list(): string[] {
-    return [...this.dynamicSlots.values()].map((s) =>
-      typeof s.content === "function" ? s.content() : s.content,
-    ).filter((c): c is string => typeof c === "string");
+    return [...this.dynamicSlots.values()].map((slot) =>
+      typeof slot.content === "function" ? slot.content() : slot.content,
+    ).filter((content): content is string => typeof content === "string");
   }
 
   clear(): void {

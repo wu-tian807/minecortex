@@ -1,5 +1,5 @@
 import { readFile, access } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { extname } from "node:path";
 import type { ToolDefinition, ToolOutput, ContentPart, InputModality, ToolContext } from "../../src/core/types.js";
 import { getModelSpec } from "../../src/llm/provider.js";
 
@@ -28,12 +28,10 @@ const MEDIA_MAP: Record<string, { mime: string; modality: InputModality }> = {
 /** Read the current brain's model name then look up its supported input modalities. */
 async function getBrainInputModalities(ctx: ToolContext): Promise<InputModality[]> {
   try {
-    const brainDir = ctx.pathManager.local(ctx.brainId).root();
-    const raw = await readFile(join(brainDir, "brain.json"), "utf-8");
-    const brainJson = JSON.parse(raw) as { models?: { model?: string }; model?: string };
+    const brainJson = ctx.getBrainJson() as { models?: { model?: string }; model?: string };
     const model = brainJson.models?.model ?? brainJson.model;
     if (model) return getModelSpec(model).input;
-  } catch { /* brain.json missing or malformed — fall through */ }
+  } catch { /* brain config missing or malformed — fall through */ }
   return ["text"]; // safe default: assume text-only
 }
 
@@ -44,12 +42,13 @@ export default {
     "Supports text files with optional offset/limit for large files, and media files (images, video, audio) " +
     "returned as base64 when the active model supports that modality. " +
     "It is always better to speculatively read multiple files as a batch that are potentially useful.",
+  guidance: "**read_file**: Always read a file before editing or analyzing it. Read multiple files in parallel.",
   input_schema: {
     type: "object",
     properties: {
       path: {
         type: "string",
-        description: "File path (absolute, project-relative, or brain-local like 'state.json')",
+        description: "File path (absolute or relative to currentDir, e.g. 'notes/todo.md')",
       },
       offset: {
         type: "integer",

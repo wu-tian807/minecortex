@@ -1,4 +1,4 @@
-import type { BrainBoardAPI } from '../core/types.js';
+import type { BrainContext } from '../core/types.js';
 
 export interface ContextSlot {
   id: string;
@@ -11,13 +11,7 @@ export interface ContextSlot {
 
 export type SlotFactory = (ctx: SlotContext) => ContextSlot | ContextSlot[];
 
-export interface SlotContext {
-  brainId: string;
-  brainDir: string;
-  config?: Record<string, unknown>;
-  brainBoard: BrainBoardAPI;
-  pathManager: import('../core/types.js').PathManagerAPI;
-}
+export type SlotContext = BrainContext;
 
 export interface ThoughtType {
   name: string;

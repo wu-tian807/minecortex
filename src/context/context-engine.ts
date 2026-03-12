@@ -1,12 +1,12 @@
 import type { ModelSpec } from "../core/types.js";
 import type { LLMMessage } from "../llm/types.js";
-import type { SlotRegistry } from "./slot-registry.js";
+import type { SlotRegistryView } from "../registries/types.js";
 import { assembleSystemPrompt } from "./prompt-pipeline.js";
 
 export class ContextEngine {
-  private registry: SlotRegistry;
+  private registry: SlotRegistryView;
 
-  constructor(registry: SlotRegistry) {
+  constructor(registry: SlotRegistryView) {
     this.registry = registry;
   }
 
