@@ -12,13 +12,12 @@ export class ContextEngine {
 
   assemblePrompt(
     sessionHistory: LLMMessage[],
-    spec?: ModelSpec,
-    tokenBudget?: number,
+    _spec?: ModelSpec,
+    _tokenBudget?: number,
     vars: Record<string, string> = {},
   ): LLMMessage[] {
-    const budget = tokenBudget ?? spec?.contextWindow ?? 128_000;
     const allSlots = this.registry.all();
-    const systemPrompt = assembleSystemPrompt(allSlots, budget, spec, vars);
+    const systemPrompt = assembleSystemPrompt(allSlots, vars);
 
     return [
       { role: "system", content: systemPrompt },

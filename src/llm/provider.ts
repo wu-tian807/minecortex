@@ -77,7 +77,6 @@ const DEFAULT_SPEC: ModelSpec = {
   contextWindow: 128000,
   maxOutput: 4096,
   defaultTemperature: 0.7,
-  tokensPerChar: 0.3,
 };
 
 /** Always re-read from disk so model spec changes take effect without restart. */

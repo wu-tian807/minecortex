@@ -3,8 +3,5 @@
     "model": "gemini-2.5-flash",
     "maxRetries": 3,
     "timeout": -1
-  },
-  "renderer": {
-    "activeBrain": "coder"
   }
 }

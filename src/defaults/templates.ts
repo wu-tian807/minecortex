@@ -66,7 +66,6 @@ export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
     contextWindow: 1048576,
     maxOutput: 8192,
     defaultTemperature: 1.0,
-    tokensPerChar: 0.25,
   },
   "gemini-2.5-flash": {
     input: ["text", "image", "video", "audio"],
@@ -74,7 +73,6 @@ export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
     contextWindow: 1048576,
     maxOutput: 65536,
     defaultTemperature: 1.0,
-    tokensPerChar: 0.25,
   },
   "gemini-2.5-pro": {
     input: ["text", "image", "video", "audio"],
@@ -82,7 +80,6 @@ export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
     contextWindow: 1048576,
     maxOutput: 65536,
     defaultTemperature: 1.0,
-    tokensPerChar: 0.25,
   },
   "gemini-2.5-flash-lite": {
     input: ["text", "image", "video", "audio"],
@@ -90,7 +87,6 @@ export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
     contextWindow: 1048576,
     maxOutput: 65536,
     defaultTemperature: 1.0,
-    tokensPerChar: 0.25,
   },
   "gemini-3.1-pro-preview": {
     input: ["text", "image", "video", "audio"],
@@ -98,7 +94,6 @@ export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
     contextWindow: 1048576,
     maxOutput: 65536,
     defaultTemperature: 1.0,
-    tokensPerChar: 0.25,
   },
   "claude-opus-4-6": {
     input: ["text", "image"],
@@ -106,7 +101,6 @@ export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
     contextWindow: 200000,
     maxOutput: 128000,
     defaultTemperature: 1.0,
-    tokensPerChar: 0.35,
   },
   "claude-sonnet-4-6": {
     input: ["text", "image"],
@@ -114,7 +108,6 @@ export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
     contextWindow: 200000,
     maxOutput: 64000,
     defaultTemperature: 1.0,
-    tokensPerChar: 0.35,
   },
   "qwen3.5:35b": {
     input: ["text", "image"],
@@ -122,7 +115,6 @@ export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
     contextWindow: 262144,
     maxOutput: 8192,
     defaultTemperature: 1.0,
-    tokensPerChar: 0.35,
   },
   "qwen3.5": {
     input: ["text", "image"],
@@ -130,7 +122,6 @@ export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
     contextWindow: 262144,
     maxOutput: 8192,
     defaultTemperature: 1.0,
-    tokensPerChar: 0.35,
   },
   "deepseek-chat": {
     input: ["text"],
@@ -138,6 +129,5 @@ export const DEFAULT_MODELS_JSON: Record<string, ModelSpec> = {
     contextWindow: 65536,
     maxOutput: 8192,
     defaultTemperature: 0.7,
-    tokensPerChar: 0.35,
   },
 };

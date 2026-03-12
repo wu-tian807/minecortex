@@ -1,0 +1,17 @@
+{
+  "models": {
+    "temperature": 0.7,
+    "reasoningEffort": "medium"
+  },
+  "subscriptions": {
+    "global": "none",
+    "enable": ["cli", "recorder", "auto_compact"]
+  },
+  "tools": {
+    "global": "none",
+    "enable": ["send_message"]
+  },
+  "slots": {
+    "global": "all"
+  }
+}

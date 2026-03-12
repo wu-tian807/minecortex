@@ -68,7 +68,6 @@ export interface ModelSpec {
   contextWindow: number;
   maxOutput: number;
   defaultTemperature: number;
-  tokensPerChar: number;
 }
 
 // ─── Brain Config ───

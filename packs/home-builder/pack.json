@@ -1,0 +1,9 @@
+{
+  "id": "home-builder",
+  "name": "Home Builder AI",
+  "version": "1.0.0",
+  "description": "一个具备自我需求循环的自主生存建设AI。拥有6个独立脑区（规划、探索、建设、编码、监控、发言），通过需求驱动外出探索获取奖励，进而建设并升级属于自己的网页家园。",
+  "runtime": {
+    "overlays": []
+  }
+}

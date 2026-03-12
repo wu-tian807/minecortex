@@ -1,0 +1,19 @@
+{
+  "models": {
+    "model": "gemini-3.1-pro-preview",
+    "temperature": 0.9,
+    "reasoningEffort": "low",
+    "showThinking": false
+  },
+  "subscriptions": {
+    "global": "none",
+    "enable": ["cli", "recorder", "auto_compact"]
+  },
+  "tools": {
+    "global": "none",
+    "enable": ["send_message", "read_file"]
+  },
+  "slots": {
+    "global": "all"
+  }
+}
