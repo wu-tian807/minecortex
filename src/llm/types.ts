@@ -10,7 +10,7 @@ export interface LLMMessage {
   ts?: number;
   toolCallId?: string;
   toolName?: string;
-  toolStatus?: "pending" | "completed" | "failed" | "synthetic";
+  toolStatus?: "pending" | "completed" | "failed" | "synthetic" | "interrupted";
   toolCalls?: LLMToolCall[];
   usage?: { inputTokens: number; outputTokens: number };
   /** Gemini thought signature for the last text block (base64). */

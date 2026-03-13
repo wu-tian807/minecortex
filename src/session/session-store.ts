@@ -1,5 +1,4 @@
 import { readFile, writeFile, appendFile, mkdir, rename } from "node:fs/promises";
-import { watch as watchFs } from "node:fs";
 import { join } from "node:path";
 import {
   isMediaContentPart,
@@ -9,12 +8,12 @@ import {
   type SerializedPart,
 } from "../core/types.js";
 import type { LLMMessage } from "../llm/types.js";
-
-
-interface SessionJson {
-  currentSessionId: string;
-  responseApi?: { lastResponseId: string; provider: string };
-}
+import {
+  readCurrentSessionId,
+  updateSessionPointerMeta,
+  watchCurrentSessionId,
+  writeCurrentSessionId,
+} from "./session-pointer.js";
 
 type SerializedMessage = Omit<LLMMessage, "content"> & {
   content: string | SerializedPart[];
@@ -33,7 +32,7 @@ export class SessionStore {
   private writeLock: Promise<unknown> = Promise.resolve();
   /** Last known session ID — used by the fs watcher to deduplicate switch events. */
   private _cachedSessionId: string | undefined;
-  private _sessionWatcher: ReturnType<typeof watchFs> | null = null;
+  private _sessionWatcher: import("node:fs").FSWatcher | null = null;
 
   // ─── Internal callbacks ───────────────────────────────────────────────────
   //
@@ -60,10 +59,6 @@ export class SessionStore {
   constructor(brainId: string, pathManager: PathManagerAPI) {
     this.brainId = brainId;
     this.pathManager = pathManager;
-  }
-
-  private sessionJsonPath(): string {
-    return join(this.pathManager.local(this.brainId).root(), "session.json");
   }
 
   private sessionDir(sid: string): string {
@@ -119,13 +114,7 @@ export class SessionStore {
   }
 
   async currentSessionId(): Promise<string | null> {
-    try {
-      const raw = await readFile(this.sessionJsonPath(), "utf-8");
-      const data: SessionJson = JSON.parse(raw);
-      return data.currentSessionId ?? null;
-    } catch {
-      return null;
-    }
+    return readCurrentSessionId(this.pathManager, this.brainId);
   }
 
   async createSession(): Promise<string> {
@@ -135,9 +124,8 @@ export class SessionStore {
       await mkdir(dir, { recursive: true });
       await this.writeAtomic(this.messagesPath(sid), "");
 
-      const sessionJson: SessionJson = { currentSessionId: sid };
       await mkdir(this.pathManager.local(this.brainId).root(), { recursive: true });
-      await this.writeAtomic(this.sessionJsonPath(), JSON.stringify(sessionJson, null, 2));
+      await writeCurrentSessionId(this.pathManager, this.brainId, sid);
 
       // Brand-new empty session — no usage yet.
       // Update _cachedSessionId so the fs watcher doesn't re-fire when it sees
@@ -159,8 +147,7 @@ export class SessionStore {
     try {
       raw = await readFile(this.messagesPath(id), "utf-8");
     } catch {
-      console.warn(`[session] pointer dangling (${id}), auto-creating new session`);
-      await this.createSession();
+      console.warn(`[session] pointer dangling (${id}), messages file is missing`);
       return null;
     }
 
@@ -224,21 +211,22 @@ export class SessionStore {
    */
   startWatch(): void {
     if (this._sessionWatcher) return;
-    const path = this.sessionJsonPath();
-    let debounce: ReturnType<typeof setTimeout> | null = null;
-    try {
-      this._sessionWatcher = watchFs(path, { persistent: false }, () => {
-        if (debounce) clearTimeout(debounce);
-        debounce = setTimeout(() => { this.handleSessionJsonChange().catch(() => {}); }, 100);
-      });
-    } catch { /* session.json may not exist yet — non-critical */ }
+    this._sessionWatcher = watchCurrentSessionId({
+      pathManager: this.pathManager,
+      brainId: this.brainId,
+      initialSessionId: this._cachedSessionId,
+      debounceMs: 100,
+      onChange: (sid) => {
+        this._cachedSessionId = sid;
+        this.handleSessionChange(sid).catch(() => {});
+      },
+    });
   }
 
-  private async handleSessionJsonChange(): Promise<void> {
-    const id = await this.currentSessionId();
-    // Only react when the session pointer actually changed.
-    if (!id || id === this._cachedSessionId) return;
-    await this.forceSync();
+  private async handleSessionChange(id: string): Promise<void> {
+    const loaded = await this.loadSessionMessages(id);
+    const usage = this.lastUsageFrom(loaded?.messages ?? []);
+    this.callbacks.onSessionSwitch?.(id, usage);
   }
 
   /** Extract the last inputTokens+outputTokens sum from a message list, or null. */
@@ -251,15 +239,11 @@ export class SessionStore {
   /** Merge arbitrary fields into session.json without clobbering unrelated keys. */
   async updateSessionMeta(updates: Record<string, unknown>): Promise<void> {
     await this.withWriteLock(async () => {
-      let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(await readFile(this.sessionJsonPath(), "utf-8"));
-      } catch {
-        const sid = await this.currentSessionId();
-        data = { currentSessionId: sid ?? "" };
-      }
-      Object.assign(data, updates);
-      await this.writeAtomic(this.sessionJsonPath(), JSON.stringify(data, null, 2));
+      const sid = await this.currentSessionId();
+      await updateSessionPointerMeta(this.pathManager, this.brainId, {
+        currentSessionId: sid ?? "",
+        ...updates,
+      });
     });
   }
 
@@ -294,9 +278,8 @@ export class SessionStore {
       const dir = this.sessionDir(id);
       await mkdir(dir, { recursive: true });
       await this.writeAtomic(this.messagesPath(id), "");
-      const sessionJson: SessionJson = { currentSessionId: id };
       await mkdir(this.pathManager.local(this.brainId).root(), { recursive: true });
-      await this.writeAtomic(this.sessionJsonPath(), JSON.stringify(sessionJson, null, 2));
+      await writeCurrentSessionId(this.pathManager, this.brainId, id);
     }
     return id;
   }

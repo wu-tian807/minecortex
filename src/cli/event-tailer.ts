@@ -1,10 +1,10 @@
 /** @desc EventTailer — watches events.jsonl for new lines and session.json for session switches */
 
-import { watch, readFileSync, existsSync } from "node:fs";
+import { watch, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 
 import { getPathManager } from "../fs/index.js";
+import { watchCurrentSessionId } from "../session/session-pointer.js";
 import { type RendererEvent, parseRendererEvent } from "./events.js";
 
 export class EventTailer {
@@ -62,26 +62,15 @@ export class EventTailer {
     this.sessionWatcher = null;
     const brain = this.getActiveBrain();
     if (!brain) return;
-    const path = join(getPathManager().local(brain).root(), "session.json");
-    if (!existsSync(path)) return;
-
-    let debounce: ReturnType<typeof setTimeout> | null = null;
-    this.sessionWatcher = watch(path, () => {
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => this.onSessionJsonChange(), 120);
+    this.sessionWatcher = watchCurrentSessionId({
+      pathManager: getPathManager(),
+      brainId: brain,
+      initialSessionId: this.getActiveSession(),
+      debounceMs: 120,
+      onChange: (sessionId) => {
+        this.onSessionSwitch(brain, sessionId);
+      },
     });
-  }
-
-  private onSessionJsonChange(): void {
-    const brain = this.getActiveBrain();
-    if (!brain) return;
-    try {
-      const path = join(getPathManager().local(brain).root(), "session.json");
-      const data = JSON.parse(readFileSync(path, "utf-8")) as { currentSessionId?: string };
-      const newSid = data.currentSessionId;
-      if (!newSid || newSid === this.getActiveSession()) return;
-      this.onSessionSwitch(brain, newSid);
-    } catch { /* ignore */ }
   }
 
   private async readNewLines(): Promise<void> {

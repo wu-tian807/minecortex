@@ -1,10 +1,10 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 
 import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
 import type { LLMMessage } from "../../src/llm/types.js";
-import { summarizeForCompaction, microCompact } from "../../src/session/compaction.js";
-import { repairToolPairing } from "../../src/session/history-normalizer.js";
+import { summarizeForCompaction } from "../../src/session/compaction.js";
+import { prepareCompactionHistory } from "../../src/session/session-history.js";
+import { readSessionPointerJson } from "../../src/session/session-pointer.js";
 import { createProvider } from "../../src/llm/provider.js";
 import { assembleResponse } from "../../src/llm/stream.js";
 
@@ -53,13 +53,14 @@ export default {
     const sessionManager = ctx.sessionManager;
     if (!sessionManager) return "Session manager unavailable.";
 
-    const brainDir = ctx.pathManager.local(ctx.brainId).root();
-    const sessionJsonPath = join(brainDir, "session.json");
-
     // Read session.json once to get current session ID and any extra metadata to preserve.
     let sessionData: { currentSessionId: string; [k: string]: unknown };
     try {
-      sessionData = JSON.parse(await readFile(sessionJsonPath, "utf-8"));
+      const data = await readSessionPointerJson(ctx.pathManager, ctx.brainId);
+      if (!data?.currentSessionId) {
+        return "No active session found.";
+      }
+      sessionData = data as { currentSessionId: string; [k: string]: unknown };
     } catch {
       return "No active session found.";
     }
@@ -80,39 +81,10 @@ export default {
       ? lastUsage.inputTokens + lastUsage.outputTokens
       : 0;
 
-    // Detect in-flight tool calls that haven't received a result yet.
-    //
-    // Two layouts are possible depending on when compact runs:
-    //   A) last = assistant + toolCalls          (parallel batch, no pending written yet)
-    //   B) last = [Pending: …] tool message      (sequential: appendToolPendings already ran)
-    //
-    // In both cases we park the assistant message so repairToolPairing won't generate
-    // a synthetic error — the real result will be appended to the new session after
-    // compact returns.
-    const lastMsg = messages[messages.length - 1];
-    const secondLastMsg = messages[messages.length - 2];
-
-    let baseMessages: LLMMessage[];
-    let parked: LLMMessage | null;
-
-    if (lastMsg?.role === "assistant" && lastMsg.toolCalls?.length) {
-      // Layout A
-      baseMessages = messages.slice(0, -1);
-      parked = lastMsg;
-    } else if (
-      lastMsg?.role === "tool" && lastMsg.toolStatus === "pending" &&
-      secondLastMsg?.role === "assistant" && secondLastMsg.toolCalls?.length
-    ) {
-      // Layout B — drop the pending placeholder too; the real result replaces it
-      baseMessages = messages.slice(0, -2);
-      parked = secondLastMsg;
-    } else {
-      baseMessages = messages;
-      parked = null;
-    }
-
-    const compacted = microCompact(baseMessages, { keepToolResults: 3, keepMedias: 2 });
-    const repaired = repairToolPairing(compacted);
+    const { compactedMessages, parkedMessages } = prepareCompactionHistory(messages, {
+      keepToolResults: 3,
+      keepMedias: 2,
+    });
 
     let modelName: string | undefined;
     try {
@@ -173,10 +145,10 @@ export default {
       } catch { /* LLM unavailable */ }
     }
 
-    const { summary, keptMessages } = await summarizeForCompaction(repaired, 0.7, summarizer);
-    // Re-attach the in-flight assistant message so the real results appended after this
-    // tool returns have a matching tool_use block in the new session.
-    const newMessages = [summary, ...keptMessages, ...(parked ? [parked] : [])];
+    const { summary, keptMessages } = await summarizeForCompaction(compactedMessages, 0.7, summarizer);
+    // Re-attach any live in-flight tool batch so real results appended after compact
+    // still have a matching assistant tool_call block in the new session.
+    const newMessages = [summary, ...keptMessages, ...parkedMessages];
 
     // Stamp the summarize usage onto the last message of the new session.
     // This gives lastUsageFrom() a meaningful compact-time estimate so the status-bar

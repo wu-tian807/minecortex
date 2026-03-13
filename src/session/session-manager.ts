@@ -1,8 +1,10 @@
 import type { PathManagerAPI } from "../core/types.js";
 import type { LLMMessage, LLMToolCall } from "../llm/types.js";
-import { repairToolPairing } from "./history-normalizer.js";
 import {
-  compactPromptHistory,
+  buildPersistentHistoryRepair,
+  normalizeHistory,
+} from "./history-normalizer.js";
+import {
   preparePromptHistory,
   type PromptHistoryOptions,
 } from "./session-history.js";
@@ -11,9 +13,18 @@ import {
   createPendingToolMessages,
   createToolResultMessage,
   type ToolLifecycleSink,
-} from "./tool-lifecycle.js";
+} from "./tool-normalizer.js";
 
 export { preparePromptHistory } from "./session-history.js";
+
+export interface NormalizedSession {
+  sessionId: string;
+  raw: string;
+  messages: LLMMessage[];
+  parseErrorLine: number | null;
+  changed: boolean;
+  needsPersistentRepair: boolean;
+}
 
 export class SessionManager implements ToolLifecycleSink {
   private store: SessionStore;
@@ -50,52 +61,65 @@ export class SessionManager implements ToolLifecycleSink {
     return this.store.createSession();
   }
 
-  async loadSession(sid?: string): Promise<LLMMessage[]> {
-    const loaded = await this.loadSessionSnapshot(sid);
-    if (!loaded) {
-      return [];
-    }
+  async loadRawSession(sid?: string): Promise<LoadedSession | null> {
+    return this.store.loadSessionMessages(sid);
+  }
+
+  async loadNormalizedSession(sid?: string): Promise<NormalizedSession | null> {
+    const loaded = await this.loadRawSession(sid);
+    if (!loaded) return null;
+
+    const normalized = normalizeHistory(loaded.messages);
+    return {
+      sessionId: loaded.sessionId,
+      raw: loaded.raw,
+      messages: normalized.messages,
+      parseErrorLine: loaded.parseErrorLine,
+      changed: normalized.changed,
+      needsPersistentRepair: loaded.parseErrorLine != null || normalized.hasInterruptedToolCalls,
+    };
+  }
+
+  async repairSession(sid?: string): Promise<LLMMessage[]> {
+    const loaded = await this.loadRawSession(sid);
+    if (!loaded) return [];
 
     const { sessionId, raw, messages, parseErrorLine } = loaded;
     if (parseErrorLine != null) {
       console.warn(`[session] parse error in ${sessionId} at line ${parseErrorLine}, truncating to last valid message`);
     }
 
-    const repaired = repairToolPairing(messages);
-    const changed = JSON.stringify(repaired) !== JSON.stringify(messages);
-    const needsPersistentRepair =
-      parseErrorLine != null || repaired.some((m) => m.toolStatus === "synthetic");
-
+    const repair = buildPersistentHistoryRepair(messages);
+    const needsPersistentRepair = parseErrorLine != null || repair.needsRepair;
     if (needsPersistentRepair) {
       const label = parseErrorLine != null ? `parse-error-line-${parseErrorLine}` : "repair";
       await this.store.writeRecoverySnapshot(sessionId, raw, label);
-      await this.store.replaceMessages(sessionId, repaired);
-      return repaired;
+      await this.store.replaceMessages(sessionId, repair.messages);
+      return repair.messages;
     }
 
-    // Benign normalization (for example, ignoring stale pending placeholders)
-    // should not rewrite the session file from the hot path.
-    if (changed) {
-      return repaired;
-    }
+    return repair.changed ? repair.messages : messages;
+  }
 
-    return messages;
+  async loadSession(sid?: string): Promise<LLMMessage[]> {
+    const normalized = await this.loadNormalizedSession(sid);
+    return normalized?.messages ?? [];
   }
 
   async loadSessionSnapshot(sid?: string): Promise<LoadedSession | null> {
-    return this.store.loadSessionMessages(sid);
+    return this.loadRawSession(sid);
   }
 
-  /** Narrow-typed alias for ToolContext.SessionManagerAPI — returns only messages. */
+  /** Narrow-typed alias for ToolContext.SessionManagerAPI — returns normalized messages. */
   async loadSnapshot(sid: string): Promise<{ messages: LLMMessage[] } | null> {
-    const loaded = await this.store.loadSessionMessages(sid);
-    return loaded ? { messages: loaded.messages } : null;
+    const normalized = await this.loadNormalizedSession(sid);
+    return normalized ? { messages: normalized.messages } : null;
   }
 
   async loadPromptHistory(options: PromptHistoryOptions = {}, sid?: string): Promise<LLMMessage[]> {
-    const loaded = await this.loadSessionSnapshot(sid);
-    if (!loaded) return [];
-    return preparePromptHistory(loaded.messages, options);
+    const normalized = await this.loadNormalizedSession(sid);
+    if (!normalized) return [];
+    return preparePromptHistory(normalized.messages, options);
   }
 
   async appendMessage(msg: LLMMessage, sid?: string): Promise<void> {

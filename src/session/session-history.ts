@@ -1,6 +1,6 @@
 import type { LLMMessage } from "../llm/types.js";
 import { microCompact } from "./compaction.js";
-import { repairToolPairing } from "./history-normalizer.js";
+import { normalizeHistory } from "./history-normalizer.js";
 
 export interface PromptHistoryOptions {
   keepToolResults?: number;
@@ -11,12 +11,50 @@ export function preparePromptHistory(
   messages: LLMMessage[],
   options: PromptHistoryOptions = {},
 ): LLMMessage[] {
-  return microCompact(repairToolPairing(messages), options);
+  return microCompact(messages, options);
 }
 
-export function compactPromptHistory(
+export function prepareCompactionHistory(
   messages: LLMMessage[],
   options: PromptHistoryOptions = {},
-): LLMMessage[] {
-  return microCompact(messages, options);
+): { compactedMessages: LLMMessage[]; parkedMessages: LLMMessage[] } {
+  const normalized = normalizeHistory(messages).messages;
+  const { baseMessages, parkedMessages } = splitTrailingInFlightToolBatch(normalized);
+  return {
+    compactedMessages: microCompact(baseMessages, options),
+    parkedMessages,
+  };
+}
+
+function splitTrailingInFlightToolBatch(messages: LLMMessage[]): {
+  baseMessages: LLMMessage[];
+  parkedMessages: LLMMessage[];
+} {
+  if (messages.length === 0) {
+    return { baseMessages: messages, parkedMessages: [] };
+  }
+
+  let toolStart = messages.length;
+  while (toolStart > 0 && messages[toolStart - 1].role === "tool") {
+    toolStart--;
+  }
+
+  const trailingTools = messages.slice(toolStart);
+  if (trailingTools.length === 0) {
+    return { baseMessages: messages, parkedMessages: [] };
+  }
+
+  const assistant = messages[toolStart - 1];
+  if (
+    assistant?.role !== "assistant" ||
+    !assistant.toolCalls?.length ||
+    !trailingTools.some((msg) => msg.toolStatus === "pending")
+  ) {
+    return { baseMessages: messages, parkedMessages: [] };
+  }
+
+  return {
+    baseMessages: messages.slice(0, toolStart - 1),
+    parkedMessages: [assistant, ...trailingTools],
+  };
 }

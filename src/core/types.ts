@@ -214,7 +214,7 @@ export type DynamicSubscriptionAPI = DynamicRegistry<EventSource>;
  * Deliberately narrow — tools should not reach into full session internals.
  */
 export interface SessionManagerAPI {
-  /** Read messages from a specific session (with media deserialization). */
+  /** Read normalized messages from a specific session (with media deserialization). */
   loadSnapshot(sid: string): Promise<{ messages: unknown[] } | null>;
   /** Create a new session, write initial messages, and switch the pointer. */
   newSession(initialMessages?: unknown[]): Promise<string>;

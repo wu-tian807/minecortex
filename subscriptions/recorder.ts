@@ -1,11 +1,15 @@
 /** @desc Recorder subscription — pure event writer to events.jsonl + qa.md (no stdout) */
 
 import { readFile, writeFile, appendFile, mkdir } from "node:fs/promises";
-import { readFileSync, watch as watchFs } from "node:fs";
+import { watch as watchFs } from "node:fs";
 import { join, dirname } from "node:path";
-import type { Event, EventSource, SubscriptionContext, EventBusAPI } from "../src/core/types.js";
+import type { Event, EventSource, SubscriptionContext, EventBusAPI, PathManagerAPI } from "../src/core/types.js";
 import type { LLMMessage } from "../src/llm/types.js";
 import { HookEvent } from "../src/hooks/types.js";
+import {
+  readCurrentSessionId,
+  watchCurrentSessionId,
+} from "../src/session/session-pointer.js";
 
 type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
 
@@ -62,10 +66,12 @@ class EventRecorder {
   private closed = false;
   private brainId: string;
   private eventBus: EventBusAPI | null = null;
+  private pathManager: PathManagerAPI;
 
-  constructor(logDir: string, brainId: string) {
+  constructor(logDir: string, brainId: string, pathManager: PathManagerAPI) {
     this.qaPath = join(logDir, "qa.md");
     this.brainId = brainId;
+    this.pathManager = pathManager;
   }
 
   async init(brainDir: string): Promise<void> {
@@ -73,10 +79,7 @@ class EventRecorder {
     await this.ensureQaDir();
     let isResume = false;
     try {
-      const sessionJson = JSON.parse(
-        await readFile(join(brainDir, "session.json"), "utf-8")
-      ) as { currentSessionId?: string };
-      const sid = sessionJson.currentSessionId;
+      const sid = await readCurrentSessionId(this.pathManager, this.brainId);
       if (sid) {
         this.currentSessionId = sid;
         this.eventsPath = join(brainDir, "sessions", sid, "events.jsonl");
@@ -99,23 +102,20 @@ class EventRecorder {
 
   private watchSessionJson(): void {
     if (!this.brainDir) return;
-    const sessionJsonPath = join(this.brainDir, "session.json");
-    let debounce: ReturnType<typeof setTimeout> | null = null;
-    try {
-      this.sessionWatcher = watchFs(sessionJsonPath, () => {
-        if (debounce) clearTimeout(debounce);
-        debounce = setTimeout(() => { this.onSessionJsonChange().catch(() => {}); }, 100);
-      });
-    } catch { /* file may not exist yet */ }
+    this.sessionWatcher = watchCurrentSessionId({
+      pathManager: this.pathManager,
+      brainId: this.brainId,
+      initialSessionId: this.currentSessionId,
+      debounceMs: 100,
+      onChange: (sid) => {
+        this.onSessionChange(sid).catch(() => {});
+      },
+    });
   }
 
-  private async onSessionJsonChange(): Promise<void> {
+  private async onSessionChange(newSid: string): Promise<void> {
     if (!this.brainDir || this.closed) return;
     try {
-      const sessionJson = JSON.parse(
-        await readFile(join(this.brainDir, "session.json"), "utf-8")
-      ) as { currentSessionId?: string };
-      const newSid = sessionJson.currentSessionId;
       if (!newSid || newSid === this.currentSessionId) return;
 
       const oldEventsPath = this.eventsPath;
@@ -284,7 +284,7 @@ export default function create(ctx: SubscriptionContext): EventSource {
   const unsubs: (() => void)[] = [];
   const logsDir = ctx.pathManager.global().logsDir(ctx.brainId);
   const brainDir = ctx.pathManager.local(ctx.brainId).root();
-  const recorder = new EventRecorder(logsDir, ctx.brainId);
+  const recorder = new EventRecorder(logsDir, ctx.brainId, ctx.pathManager);
   const showThinking = getShowThinking(ctx);
 
   return {

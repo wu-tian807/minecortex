@@ -1,10 +1,11 @@
 /** @desc RendererConfig — state persistence and active brain/session resolution */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { getPathManager } from "../fs/index.js";
+import { readCurrentSessionId, writeCurrentSessionId } from "../session/session-pointer.js";
 import { listBrainIds, listSessionIds } from "./fs-helpers.js";
 
 interface RendererStateJson {
@@ -48,22 +49,12 @@ export class RendererConfig {
 
   // ─── Per-brain session.json ───
 
-  readSession(brainId: string): string {
-    try {
-      const path = join(getPathManager().local(brainId).root(), "session.json");
-      const data = JSON.parse(readFileSync(path, "utf-8")) as { currentSessionId?: string };
-      return data.currentSessionId ?? "";
-    } catch { return ""; }
+  async readSession(brainId: string): Promise<string> {
+    return (await readCurrentSessionId(getPathManager(), brainId)) ?? "";
   }
 
   async writeSession(brainId: string, sessionId: string): Promise<void> {
-    const path = join(getPathManager().local(brainId).root(), "session.json");
-    try {
-      let data: Record<string, unknown> = {};
-      try { data = JSON.parse(readFileSync(path, "utf-8")); } catch { /* fresh */ }
-      data.currentSessionId = sessionId;
-      await writeFile(path, JSON.stringify(data, null, 2));
-    } catch { /* ignore */ }
+    await writeCurrentSessionId(getPathManager(), brainId, sessionId);
   }
 
   // ─── Resolve active brain + session on startup ───
@@ -76,7 +67,7 @@ export class RendererConfig {
       return { brain: "", session: "", needsSelection: true };
     }
 
-    const session  = this.readSession(brain);
+    const session  = await this.readSession(brain);
     const sessions = await listSessionIds(brain);
     return {
       brain,

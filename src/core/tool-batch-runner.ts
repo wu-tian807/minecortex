@@ -1,6 +1,6 @@
 import type { ToolDefinition, ToolContext } from "./types.js";
 import type { LLMToolCall } from "../llm/types.js";
-import type { ToolLifecycleSink } from "../session/tool-lifecycle.js";
+import type { ToolLifecycleSink } from "../session/tool-normalizer.js";
 import { HookEvent } from "../hooks/types.js";
 import { executeTool } from "./tool-executor.js";
 
