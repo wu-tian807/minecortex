@@ -36,9 +36,8 @@ interface ShellSession {
   process: ChildProcess;
   shellPath: string;
   pending: PendingCommand | null;
-  /** Resolves when the session is idle and ready for the next command */
-  ready: Promise<void>;
-  markReady: (() => void) | null;
+  /** Tail promise of the per-session command queue. */
+  queueTail: Promise<void>;
   terminalIds: Set<string>;
   spawnError?: Error;
   stderrTail: string;
@@ -292,7 +291,6 @@ export class TerminalManager implements TerminalManagerAPI {
 
       const cb = session.pending.onComplete;
       session.pending = null;
-      if (session.markReady) { session.markReady(); session.markReady = null; }
       cb(isNaN(exitCode) ? undefined : exitCode);
     });
 
@@ -347,8 +345,7 @@ export class TerminalManager implements TerminalManagerAPI {
       process: child,
       shellPath,
       pending: null,
-      ready: Promise.resolve(),
-      markReady: null,
+      queueTail: Promise.resolve(),
       terminalIds: new Set(),
       stderrTail: "",
     };
@@ -464,7 +461,6 @@ export class TerminalManager implements TerminalManagerAPI {
       this.sharedShells.delete(baseBrainId);
     }
     this.sessions.delete(session.id);
-    if (session.markReady) { session.markReady(); session.markReady = null; }
   }
 
   /** Return the shared bash for this brain, creating one if needed.
@@ -491,6 +487,49 @@ export class TerminalManager implements TerminalManagerAPI {
     return session;
   }
 
+  private enqueueSessionTurn(session: ShellSession): {
+    waitTurn: Promise<void>;
+    releaseTurn: () => void;
+  } {
+    const waitTurn = session.queueTail.catch(() => undefined);
+    let resolveTurn!: () => void;
+    let released = false;
+    const myTurn = new Promise<void>((resolve) => {
+      resolveTurn = resolve;
+    });
+    session.queueTail = waitTurn.then(() => myTurn);
+
+    return {
+      waitTurn,
+      releaseTurn: () => {
+        if (released) return;
+        released = true;
+        resolveTurn();
+      },
+    };
+  }
+
+  private async acquireQueuedSession(brainId: string | undefined, initialCwd?: string): Promise<{
+    session: ShellSession;
+    releaseTurn: () => void;
+  }> {
+    while (true) {
+      const session = await this.getOrCreateSharedShell(brainId, initialCwd);
+      const { waitTurn, releaseTurn } = this.enqueueSessionTurn(session);
+      await waitTurn;
+
+      // A previous command may have timed out and detached this shell from the pool.
+      // In that case, retry against the fresh replacement session instead of writing
+      // into the detached shell concurrently with the backgrounded job.
+      if (this.sharedShells.get(session.baseBrainId) !== session || session.process.exitCode !== null) {
+        releaseTurn();
+        continue;
+      }
+
+      return { session, releaseTurn };
+    }
+  }
+
   // ─── exec ───
 
   async exec(command: string, opts: ExecOpts): Promise<ExecResult> {
@@ -507,17 +546,7 @@ export class TerminalManager implements TerminalManagerAPI {
 
     const cwdF = this.cwdFile(opts.brainId);
 
-    const session = await this.getOrCreateSharedShell(opts.brainId, opts.initialCwd);
-
-    // 原子地占住下一个 gate，再等待上一个完成。
-    // 若先 await 再设 gate，两个并发的 exec() 都能通过旧 gate 并覆写 session.pending，
-    // 导致先发出的命令永远收不到 onComplete 回调。
-    const prevReady = session.ready;
-    let readyResolve!: () => void;
-    session.ready = new Promise<void>((r) => { readyResolve = r; });
-    session.markReady = readyResolve;
-
-    await prevReady;
+    const { session, releaseTurn } = await this.acquireQueuedSession(opts.brainId, opts.initialCwd);
 
     const instance: TerminalInstance = {
       id,
@@ -533,8 +562,7 @@ export class TerminalManager implements TerminalManagerAPI {
     session.terminalIds.add(id);
 
     if (session.spawnError || !session.process.stdin) {
-      // 释放 gate，防止并发的 exec() 在 await prevReady 处永久挂起
-      if (session.markReady) { session.markReady(); session.markReady = null; }
+      releaseTurn();
       const msg = `Shell unavailable (${session.shellPath}): ${session.spawnError?.message ?? "spawn failure"}`;
       instance.exitCode = 127;
       instance.elapsedMs = 0;
@@ -570,6 +598,7 @@ export class TerminalManager implements TerminalManagerAPI {
           if (this.sharedShells.get(session.baseBrainId) === session) {
             this.sharedShells.delete(session.baseBrainId);
           }
+          releaseTurn();
 
           resolve({
             terminalId: id,
@@ -589,6 +618,7 @@ export class TerminalManager implements TerminalManagerAPI {
           session.terminalIds.delete(id);
           instance.exitCode  = exitCode;
           instance.elapsedMs = Date.now() - startedAt;
+          releaseTurn();
 
           if (diagnostic) {
             const footer = [
@@ -616,7 +646,7 @@ export class TerminalManager implements TerminalManagerAPI {
         if (timer) clearTimeout(timer);
         session.terminalIds.delete(id);
         session.pending = null;
-        if (session.markReady) { session.markReady(); session.markReady = null; }
+        releaseTurn();
         const msg = `Shell write failed: ${err instanceof Error ? err.message : String(err)}`;
         instance.exitCode = 127;
         instance.elapsedMs = Date.now() - startedAt;
