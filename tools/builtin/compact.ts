@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import type { ToolDefinition, ToolOutput } from "../../src/core/types.js";
 import type { LLMMessage } from "../../src/llm/types.js";
+import { extractMessageBodyText } from "../../src/llm/thinking.js";
 import { summarizeForCompaction } from "../../src/session/compaction.js";
 import { prepareCompactionHistory } from "../../src/session/session-history.js";
 import { readSessionPointerJson } from "../../src/session/session-pointer.js";
@@ -111,7 +112,7 @@ export default {
         summarizer = async (msgs: LLMMessage[]) => {
           const conversationText = msgs
             .map(m => {
-              const text = typeof m.content === "string" ? m.content : "[multimodal]";
+              const text = extractMessageBodyText(m) || (Array.isArray(m.content) ? "[multimodal]" : "");
               return `[${m.role}] ${text.slice(0, 500)}`;
             })
             .join("\n");

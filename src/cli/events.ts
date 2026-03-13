@@ -16,7 +16,8 @@ export type RendererEvent =
   | { k: "brain_message"; source: string; text: string; ts: number }
   | { k: "cli_message";  source: string; text: string; ts: number }
   | { k: "assistant_chunk"; brain?: string; kind: "text" | "thinking"; text: string; ts: number }
-  | { k: "assistant";    brain?: string; text?: string; thinking?: string; ts: number }
+  | { k: "thinking";     brain?: string; text: string; ts: number }
+  | { k: "assistant";    brain?: string; text?: string; ts: number }
   | { k: "tool_call";    brain?: string; name: string; args: Record<string, unknown>; ts: number }
   | { k: "tool_result";  brain?: string; name: string; preview: string; durationMs: number; ts: number }
   | { k: "todo_update";  todos: Array<{ id: string; content: string; status: string }>; ts: number }
@@ -50,8 +51,12 @@ const TOOL_ICONS: Record<string, string> = {
 
 // ─── Helpers ───
 
-function stripThinking(text: string): string {
-  return text.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
+function renderThinkingEvent(brain: string | undefined, text: string): string | null {
+  const thinking = text.trim();
+  if (!thinking) return null;
+  const tag = brain ? `${C.cyan}[${brain}]${C.reset}` : "";
+  const thinkingLines = thinking.split("\n").map(l => `${C.dim}  ${l}${C.reset}`).join("\n");
+  return `${C.dim}💭 thinking${tag ? " " + tag : ""}${C.reset}\n${thinkingLines}\n${C.dim}─────${C.reset}\n`;
 }
 
 // ─── Parse a JSONL line into a RendererEvent (null = invalid) ───
@@ -91,15 +96,13 @@ export function formatEvent(ev: RendererEvent): string | null {
     case "cli_message":
       return `${C.yellow}📨 ${ev.source}:${C.reset} ${ev.text.slice(0, 200)}\n\n`;
 
+    case "thinking":
+      return renderThinkingEvent(ev.brain, ev.text)?.concat("\n") ?? null;
+
     case "assistant": {
-      const text     = ev.text ? stripThinking(ev.text) : "";
-      const thinking = ev.thinking?.trim();
+      const text = ev.text?.trim() ?? "";
       const tag      = ev.brain ? `${C.cyan}[${ev.brain}]${C.reset}` : "";
       let out = "";
-      if (thinking) {
-        const thinkingLines = thinking.split("\n").map(l => `${C.dim}  ${l}${C.reset}`).join("\n");
-        out += `${C.dim}💭 thinking${tag ? " " + tag : ""}${C.reset}\n${thinkingLines}\n${C.dim}─────${C.reset}\n`;
-      }
       if (text) {
         const rendered = renderMarkdown(text);
         out += tag ? `${tag}\n${rendered}\n` : `${rendered}\n`;

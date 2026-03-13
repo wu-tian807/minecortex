@@ -1,12 +1,20 @@
 import type { LLMMessage } from "../llm/types.js";
 import {
+  normalizeThinkingTimeline,
+  type NormalizedThinkingTimeline,
+} from "./thinking-normalizer.js";
+import {
   buildPersistentToolRepair,
   normalizeToolTimeline,
   type NormalizedToolTimeline,
   type PersistentToolRepair,
 } from "./tool-normalizer.js";
 
-export type { NormalizedToolTimeline, PersistentToolRepair };
+export type {
+  NormalizedThinkingTimeline,
+  NormalizedToolTimeline,
+  PersistentToolRepair,
+};
 
 /**
  * History normalization entrypoint.
@@ -14,7 +22,12 @@ export type { NormalizedToolTimeline, PersistentToolRepair };
  * normalizers can be chained here without changing higher-level callers.
  */
 export function normalizeHistory(messages: LLMMessage[]): NormalizedToolTimeline {
-  return normalizeToolTimeline(messages);
+  const thinkingNormalized = normalizeThinkingTimeline(messages);
+  const toolNormalized = normalizeToolTimeline(thinkingNormalized.messages);
+  return {
+    ...toolNormalized,
+    changed: thinkingNormalized.changed || toolNormalized.changed,
+  };
 }
 
 /**

@@ -17,6 +17,7 @@ import type {
 } from "./types.js";
 import type { LLMProvider, LLMMessage, LLMToolCall, LLMResponse } from "../llm/types.js";
 import { createFallbackProvider, getModelSpec, mergeModelsConfig } from "../llm/provider.js";
+import { stripThinkingBlocks } from "../llm/thinking.js";
 import type { ModelsConfig } from "./types.js";
 import { ContextEngine } from "../context/context-engine.js";
 import { SlotRegistry } from "../registries/slot-registry.js";
@@ -200,18 +201,10 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       // inside appendAssistantTurn (below) whenever the assistant message carries usage data.
       // No manual brainBoard write needed here.
 
-      let content = response.content;
       const hasThinking = showThinking && response.thinking;
-      if (hasThinking) {
-        const thinkingBlock = `<thinking>${response.thinking}</thinking>`;
-        if (typeof content === "string") {
-          content = content ? `${thinkingBlock}\n${content}` : thinkingBlock;
-        }
-      }
-
       const assistantMsg: LLMMessage = {
         role: "assistant",
-        content,
+        content: response.content,
         thinking: hasThinking ? response.thinking : undefined,
         thinkingSignature: hasThinking ? response.thinkingSignature : undefined,
         textSignature: response.textSignature,
@@ -236,8 +229,8 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       hooks?.emit(HookEvent.AssistantMessage, { msg: assistantMsg, turn });
       onAssistantMessage?.(assistantMsg);
 
-      const textContent = typeof content === "string" ? content : "";
-      const displayContent = textContent.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
+      const textContent = typeof assistantMsg.content === "string" ? assistantMsg.content : "";
+      const displayContent = stripThinkingBlocks(textContent);
       if (displayContent) {
         logger?.info(brainId, turn, displayContent);
       }

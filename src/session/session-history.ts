@@ -1,4 +1,5 @@
 import type { LLMMessage } from "../llm/types.js";
+import { projectThinkingIntoPromptContent } from "../llm/thinking.js";
 import { microCompact } from "./compaction.js";
 import { normalizeHistory } from "./history-normalizer.js";
 
@@ -11,7 +12,7 @@ export function preparePromptHistory(
   messages: LLMMessage[],
   options: PromptHistoryOptions = {},
 ): LLMMessage[] {
-  return microCompact(messages, options);
+  return projectPromptHistoryForProvider(microCompact(messages, options));
 }
 
 export function prepareCompactionHistory(
@@ -24,6 +25,10 @@ export function prepareCompactionHistory(
     compactedMessages: microCompact(baseMessages, options),
     parkedMessages,
   };
+}
+
+function projectPromptHistoryForProvider(messages: LLMMessage[]): LLMMessage[] {
+  return messages.map(projectThinkingIntoPromptContent);
 }
 
 function splitTrailingInFlightToolBatch(messages: LLMMessage[]): {

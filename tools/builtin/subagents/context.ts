@@ -1,5 +1,6 @@
 import type { ToolContext } from "../../../src/core/types.js";
 import type { LLMMessage } from "../../../src/llm/types.js";
+import { stripThinkingBlocks } from "../../../src/llm/thinking.js";
 import { SessionManager } from "../../../src/session/session-manager.js";
 import type { ContextMode } from "./types.js";
 
@@ -45,15 +46,11 @@ export function renderParentContext(history: LLMMessage[], contextMode: ContextM
 
 export function serializeContent(content: LLMMessage["content"]): string {
   if (typeof content === "string") {
-    return stripThinking(content).replace(/\s+/g, " ").trim();
+    return stripThinkingBlocks(content).replace(/\s+/g, " ").trim();
   }
   try {
     return JSON.stringify(content);
   } catch {
     return "[unserializable content]";
   }
-}
-
-function stripThinking(text: string): string {
-  return text.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
 }

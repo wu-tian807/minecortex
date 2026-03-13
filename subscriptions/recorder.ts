@@ -5,6 +5,7 @@ import { watch as watchFs } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Event, EventSource, SubscriptionContext, EventBusAPI, PathManagerAPI } from "../src/core/types.js";
 import type { LLMMessage } from "../src/llm/types.js";
+import { extractMessageBodyText } from "../src/llm/thinking.js";
 import { HookEvent } from "../src/hooks/types.js";
 import {
   readCurrentSessionId,
@@ -67,6 +68,7 @@ class EventRecorder {
   private brainId: string;
   private eventBus: EventBusAPI | null = null;
   private pathManager: PathManagerAPI;
+  private eventWriteChain: Promise<void> = Promise.resolve();
 
   constructor(logDir: string, brainId: string, pathManager: PathManagerAPI) {
     this.qaPath = join(logDir, "qa.md");
@@ -158,7 +160,15 @@ class EventRecorder {
 
   async appendEvent(event: object): Promise<void> {
     if (this.closed || !this.eventsPath) return;
-    await appendFile(this.eventsPath, JSON.stringify(event) + "\n", "utf-8");
+    const eventsPath = this.eventsPath;
+    const payload = JSON.stringify(event) + "\n";
+    const write = async () => {
+      if (this.closed) return;
+      await appendFile(eventsPath, payload, "utf-8");
+    };
+    const task = this.eventWriteChain.then(write, write);
+    this.eventWriteChain = task.catch(() => {});
+    await task;
   }
 
   // ─── Recorders ───
@@ -179,9 +189,9 @@ class EventRecorder {
   }
 
   recordAssistantMessage(msg: LLMMessage): void {
-    const raw = typeof msg.content === "string" ? msg.content : "";
-    const text = raw.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trim();
-    const thinking = msg.thinking ?? "";
+    const text = extractMessageBodyText(msg);
+    const thinking = msg.thinking?.trim() ?? "";
+    const ts = Date.now();
 
     if (text || thinking) {
       let qaContent = `## Assistant\n\n`;
@@ -194,13 +204,12 @@ class EventRecorder {
       this.writeQA(qaContent).catch(() => {});
     }
 
-    this.appendEvent({
-      k: "assistant",
-      brain: this.brainId,
-      ...(text ? { text } : {}),
-      ...(thinking ? { thinking } : {}),
-      ts: Date.now(),
-    }).catch(() => {});
+    if (thinking) {
+      this.appendEvent({ k: "thinking", brain: this.brainId, text: thinking, ts }).catch(() => {});
+    }
+    if (text) {
+      this.appendEvent({ k: "assistant", brain: this.brainId, text, ts }).catch(() => {});
+    }
   }
 
   setEventBus(bus: EventBusAPI): void {

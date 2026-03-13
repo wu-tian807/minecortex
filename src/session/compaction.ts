@@ -2,6 +2,7 @@ import type { LLMMessage } from "../llm/types.js";
 import { isMediaContentPart, type ContentPart } from "../core/types.js";
 import { estimateTokens } from "../core/token-stats.js";
 import { BRAIN_DEFAULTS } from "../defaults/brain-defaults.js";
+import { extractMessageBodyText } from "../llm/thinking.js";
 
 interface MicroCompactConfig {
   keepToolResults?: number;  // keep last N tool results intact
@@ -99,7 +100,7 @@ function templateSummary(toSummarize: LLMMessage[], kept: LLMMessage[]): string 
   let lastUserMessage = "";
 
   for (const msg of toSummarize) {
-    const text = extractText(msg.content);
+    const text = extractMessageBodyText(msg);
 
     if (msg.role === "user") {
       if (text) lastUserMessage = text;
@@ -129,7 +130,7 @@ function templateSummary(toSummarize: LLMMessage[], kept: LLMMessage[]): string 
     }
   }
 
-  const keptText = kept.length > 0 ? extractText(kept[0].content) : "";
+  const keptText = kept.length > 0 ? extractMessageBodyText(kept[0]) : "";
 
   return [
     "# Compacted Session Summary",
@@ -166,14 +167,6 @@ function templateSummary(toSummarize: LLMMessage[], kept: LLMMessage[]): string 
     `- Session had ${toSummarize.length + kept.length} total messages`,
     toolsUsed.length > 0 ? `- Active tool set: ${toolsUsed.join(", ")}` : "",
   ].join("\n");
-}
-
-function extractText(content: string | ContentPart[]): string {
-  if (typeof content === "string") return content;
-  return content
-    .filter((p): p is { type: "text"; text: string } => p.type === "text")
-    .map(p => p.text)
-    .join(" ");
 }
 
 function findToolName(messages: LLMMessage[], toolCallId?: string): string {

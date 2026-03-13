@@ -95,7 +95,7 @@ export class EventTailer {
         const line = buf.subarray(pos, lineEnd).toString("utf-8").trim();
         if (line) {
           const ev = parseRendererEvent(line);
-          if (ev && ev.k !== "user_input") {
+          if (ev) {
             this.onEvent(ev, true, nextPos);
           }
         }
