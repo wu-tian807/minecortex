@@ -62,16 +62,20 @@ export class SessionManager implements ToolLifecycleSink {
     }
 
     const repaired = repairToolPairing(messages);
-    const needsWrite = parseErrorLine != null || JSON.stringify(repaired) !== JSON.stringify(messages);
-    if (needsWrite) {
-      // Back up only for real anomalies (parse error or synthetic results injected
-      // for dangling tool calls); routine `pending` cleanup doesn't need a backup.
-      const isCritical = parseErrorLine != null || repaired.some((m) => m.toolStatus === "synthetic");
-      if (isCritical) {
-        const label = parseErrorLine != null ? `parse-error-line-${parseErrorLine}` : "repair";
-        await this.store.writeRecoverySnapshot(sessionId, raw, label);
-      }
+    const changed = JSON.stringify(repaired) !== JSON.stringify(messages);
+    const needsPersistentRepair =
+      parseErrorLine != null || repaired.some((m) => m.toolStatus === "synthetic");
+
+    if (needsPersistentRepair) {
+      const label = parseErrorLine != null ? `parse-error-line-${parseErrorLine}` : "repair";
+      await this.store.writeRecoverySnapshot(sessionId, raw, label);
       await this.store.replaceMessages(sessionId, repaired);
+      return repaired;
+    }
+
+    // Benign normalization (for example, ignoring stale pending placeholders)
+    // should not rewrite the session file from the hot path.
+    if (changed) {
       return repaired;
     }
 
@@ -89,8 +93,9 @@ export class SessionManager implements ToolLifecycleSink {
   }
 
   async loadPromptHistory(options: PromptHistoryOptions = {}, sid?: string): Promise<LLMMessage[]> {
-    const messages = await this.loadSession(sid);
-    return compactPromptHistory(messages, options);
+    const loaded = await this.loadSessionSnapshot(sid);
+    if (!loaded) return [];
+    return preparePromptHistory(loaded.messages, options);
   }
 
   async appendMessage(msg: LLMMessage, sid?: string): Promise<void> {

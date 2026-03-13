@@ -149,6 +149,9 @@ export class SessionStore {
   }
 
   async loadSessionMessages(sid?: string): Promise<LoadedSession | null> {
+    // Avoid reading a half-written jsonl while append/replace is in progress.
+    await this.writeLock.catch(() => undefined);
+
     const id = sid ?? (await this.currentSessionId());
     if (!id) return null;
 
