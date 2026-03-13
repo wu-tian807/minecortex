@@ -76,6 +76,10 @@ function getErrorCode(err: unknown): string | undefined {
 /** 从错误对象提取消息 */
 function getMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
+  if (typeof err === "object" && err !== null) {
+    const message = (err as Record<string, unknown>).message;
+    if (typeof message === "string") return message;
+  }
   if (typeof err === "string") return err;
   try {
     return String(err);
@@ -99,6 +103,75 @@ function getRetryDelay(err: unknown): number | undefined {
 function isAbortError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return err.name === "AbortError" || err.name === "TimeoutError";
+}
+
+type StructuredApiError = {
+  code?: number;
+  status?: string;
+  message?: string;
+  details?: unknown[];
+};
+
+function parseStructuredApiError(raw: string): StructuredApiError | null {
+  try {
+    const parsed = JSON.parse(raw) as { error?: StructuredApiError };
+    if (parsed?.error && typeof parsed.error === "object") {
+      return parsed.error;
+    }
+  } catch {
+    // ignore non-JSON error strings
+  }
+  return null;
+}
+
+function formatFieldViolation(
+  violation: unknown,
+): { text: string; isEnumIssue: boolean } | null {
+  if (typeof violation !== "object" || violation === null) return null;
+
+  const data = violation as Record<string, unknown>;
+  const field = typeof data.field === "string" ? data.field : undefined;
+  const description = typeof data.description === "string" ? data.description : undefined;
+  if (!field && !description) return null;
+
+  const isEnumIssue =
+    (field?.includes(".enum[") ?? false) ||
+    (description?.includes(".enum[") ?? false);
+  const text = field && description ? `${field}: ${description}` : (description ?? field)!;
+  return { text, isEnumIssue };
+}
+
+function formatStructuredBadRequest(raw: string): string | null {
+  const error = parseStructuredApiError(raw);
+  if (!error) return null;
+
+  const violations: { text: string; isEnumIssue: boolean }[] = [];
+  for (const detail of error.details ?? []) {
+    if (typeof detail !== "object" || detail === null) continue;
+    const record = detail as Record<string, unknown>;
+    const fieldViolations = record.fieldViolations;
+    if (!Array.isArray(fieldViolations)) continue;
+
+    for (const violation of fieldViolations) {
+      const formatted = formatFieldViolation(violation);
+      if (formatted) violations.push(formatted);
+    }
+  }
+
+  if (violations.length === 0) return null;
+
+  const header = error.status
+    ? `API 请求参数错误 (${error.status})`
+    : "API 请求参数错误";
+  const lines = violations.map((violation) => `- ${violation.text}`);
+
+  if (violations.some((violation) => violation.isEnumIssue)) {
+    lines.push(
+      "- 提示: Gemini function schema 对 enum 很严格，非字符串 enum 常会被拒绝；可改成字符串 enum，或在适配层降级掉 enum。",
+    );
+  }
+
+  return `${header}:\n${lines.join("\n")}`;
 }
 
 /**
@@ -209,7 +282,7 @@ function formatNetworkError(code: string, original: string): string {
 function formatStatusError(status: number, original: string): string {
   switch (status) {
     case 400:
-      return `API 请求参数错误: ${original}`;
+      return formatStructuredBadRequest(original) ?? `API 请求参数错误: ${original}`;
     case 401:
       return `API 认证失败。请检查 key/llm_key.json 中的 api_key 配置。`;
     case 403:

@@ -3,6 +3,36 @@
 import type { ContentPart } from "../core/types.js";
 import type { LLMMessage } from "./types.js";
 import type { ToolDefinition } from "../core/types.js";
+import { stripThinkingBlocks } from "./thinking.js";
+
+function sanitizeGeminiSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map((item) => sanitizeGeminiSchema(item));
+  }
+  if (schema == null || typeof schema !== "object") {
+    return schema;
+  }
+
+  const input = schema as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(input)) {
+    output[key] = sanitizeGeminiSchema(value);
+  }
+
+  const enumValues = input.enum;
+  if (Array.isArray(enumValues) && enumValues.some((value) => typeof value !== "string")) {
+    delete output.enum;
+
+    const allowedValues = enumValues.map((value) => JSON.stringify(value)).join(", ");
+    const note = `Allowed values: ${allowedValues}.`;
+    const description =
+      typeof output.description === "string" ? output.description.trim() : "";
+    output.description = description ? `${description} ${note}` : note;
+  }
+
+  return output;
+}
 
 export function toolDefsToGemini(tools?: ToolDefinition[]): any[] | undefined {
   if (!tools?.length) return undefined;
@@ -11,11 +41,12 @@ export function toolDefsToGemini(tools?: ToolDefinition[]): any[] | undefined {
       functionDeclarations: tools.map((t) => ({
         name: t.name,
         description: t.description,
-        parameters: {
+        // Google function schemas reject some JSON Schema variants such as numeric enum values.
+        parameters: sanitizeGeminiSchema({
           type: "object",
           properties: t.input_schema.properties,
           required: t.input_schema.required,
-        },
+        }),
       })),
     },
   ];
@@ -42,7 +73,7 @@ export function extractSystemText(messages: LLMMessage[]): string | undefined {
 /** Extract plain text from content, stripping <thinking> blocks */
 export function extractTextContent(msg: LLMMessage): string {
   if (typeof msg.content === "string") {
-    return msg.content.replace(/<thinking>[\s\S]*?<\/thinking>\n?/, "").trim();
+    return stripThinkingBlocks(msg.content);
   }
   return msg.content
     .filter((p) => p.type === "text")
