@@ -22,7 +22,11 @@ import type { ModelsConfig } from "./types.js";
 import { ContextEngine } from "../context/context-engine.js";
 import { SlotRegistry } from "../registries/slot-registry.js";
 import { SessionManager } from "../session/session-manager.js";
-import { assembleResponseWithCallback } from "../llm/stream.js";
+import {
+  assembleResponseWithCallback,
+  getPartialResponse,
+  responseToAssistantMessage,
+} from "../llm/stream.js";
 import { renderEventDisplay } from "../context/event-router.js";
 import { HookEvent } from "../hooks/types.js";
 import { runToolBatch } from "./tool-batch-runner.js";
@@ -139,17 +143,13 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       logger?.debug(brainId, turn,
         `LLM call: ${messages.length} msgs, ${tools.length} tools, session=${sessionHistory.length}`);
 
-      // Track partial text/thinking via onChunk so that on non-abort errors we
-      // can still emit a truncated AssistantMessage before surfacing the error.
-      let partialText = "";
-      let partialThinking = "";
-
       let response: LLMResponse;
       try {
         const stream = provider.chatStream(messages, tools, signal);
         response = await assembleResponseWithCallback(stream, (chunk) => {
-          if (chunk.type === "text") partialText += chunk.text;
-          if (chunk.type === "thinking") partialThinking += chunk.text;
+          if (chunk.type === "thinking" && !showThinking) {
+            return;
+          }
           hooks?.emit(HookEvent.StreamChunk, { chunk, turn });
         });
       } catch (err: any) {
@@ -158,15 +158,17 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
           break;
         }
         logger?.error(brainId, turn, `LLM call failed: ${err.message}`);
-        // If partial output was generated before the error, persist and surface it.
-        if (partialText.trim() || partialThinking.trim()) {
-          const partialMsg: LLMMessage = {
-            role: "assistant",
-            content: partialText,
-            thinking: partialThinking || undefined,
+        const partialResponse = getPartialResponse(err);
+        const partialText =
+          partialResponse && typeof partialResponse.content === "string"
+            ? partialResponse.content
+            : "";
+        if (partialText.trim() || partialResponse?.thinking?.trim()) {
+          const partialMsg = responseToAssistantMessage(partialResponse!, {
+            showThinking,
             truncated: true,
             ts: Date.now(),
-          };
+          });
           await lifecycle.appendAssistantTurn(partialMsg);
           hooks?.emit(HookEvent.AssistantMessage, { msg: partialMsg, turn });
         }
@@ -179,13 +181,11 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
         logger?.warn(brainId, turn, "LLM stream aborted mid-flight; saving partial response");
         const raw = typeof response.content === "string" ? response.content : "";
         if (raw.trim() || response.thinking?.trim()) {
-          const partialMsg: LLMMessage = {
-            role: "assistant",
-            content: raw,
-            thinking: response.thinking,
+          const partialMsg = responseToAssistantMessage(response, {
+            showThinking,
             truncated: true,
             ts: Date.now(),
-          };
+          });
           await lifecycle.appendAssistantTurn(partialMsg);
           hooks?.emit(HookEvent.AssistantMessage, { msg: partialMsg, turn });
         }
@@ -201,19 +201,10 @@ export async function runAgentLoop(opts: AgentLoopOpts): Promise<LLMResponse | n
       // inside appendAssistantTurn (below) whenever the assistant message carries usage data.
       // No manual brainBoard write needed here.
 
-      const hasThinking = showThinking && response.thinking;
-      const assistantMsg: LLMMessage = {
-        role: "assistant",
-        content: response.content,
-        thinking: hasThinking ? response.thinking : undefined,
-        thinkingSignature: hasThinking ? response.thinkingSignature : undefined,
-        textSignature: response.textSignature,
-        toolCalls: response.toolCalls,
-        usage: response.usage
-          ? { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens }
-          : undefined,
+      const assistantMsg = responseToAssistantMessage(response, {
+        showThinking,
         ts: Date.now(),
-      };
+      });
 
       if (signal.aborted) {
         // Stream completed but signal was aborted before we could process tool calls.

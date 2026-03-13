@@ -5,6 +5,16 @@ import type { ToolDefinition, ContentPart } from "../core/types.js";
 import type { LLMMessage, LLMProvider, StreamChunk } from "./types.js";
 import { parseSSE } from "./stream.js";
 
+type AnthropicAssistantBlock =
+  | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string; signature?: string }
+  | { type: "redacted_thinking"; data: string }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> };
+
+interface AnthropicSidecar {
+  contentBlocks: AnthropicAssistantBlock[];
+}
+
 function toolDefsToAnthropic(tools?: ToolDefinition[]) {
   if (!tools?.length) return undefined;
   return tools.map((t) => ({
@@ -42,6 +52,97 @@ function extractSystemText(messages: LLMMessage[]): string | undefined {
     .join("\n");
 }
 
+function toAnthropicSidecar(sidecarData: LLMMessage["providerSidecarData"]): AnthropicSidecar | null {
+  const raw = sidecarData?.anthropic;
+  if (!raw || typeof raw !== "object") return null;
+  const contentBlocks = (raw as { contentBlocks?: unknown }).contentBlocks;
+  if (!Array.isArray(contentBlocks)) return null;
+
+  const normalized = contentBlocks.flatMap((block): AnthropicAssistantBlock[] => {
+    if (!block || typeof block !== "object") return [];
+    const item = block as Record<string, unknown>;
+    switch (item.type) {
+      case "text":
+        return typeof item.text === "string" ? [{ type: "text", text: item.text }] : [];
+      case "thinking":
+        return typeof item.thinking === "string"
+          ? [{
+              type: "thinking",
+              thinking: item.thinking,
+              signature: typeof item.signature === "string" ? item.signature : undefined,
+            }]
+          : [];
+      case "redacted_thinking":
+        return typeof item.data === "string"
+          ? [{ type: "redacted_thinking", data: item.data }]
+          : [];
+      case "tool_use":
+        return typeof item.id === "string" &&
+          typeof item.name === "string" &&
+          item.input &&
+          typeof item.input === "object" &&
+          !Array.isArray(item.input)
+          ? [{
+              type: "tool_use",
+              id: item.id,
+              name: item.name,
+              input: item.input as Record<string, unknown>,
+            }]
+          : [];
+      default:
+        return [];
+    }
+  });
+
+  return normalized.length > 0 ? { contentBlocks: normalized } : null;
+}
+
+function anthropicBlocksToApi(blocks: AnthropicAssistantBlock[]): any[] {
+  return blocks.map((block) => {
+    switch (block.type) {
+      case "thinking":
+        return {
+          type: "thinking",
+          thinking: block.thinking,
+          ...(block.signature ? { signature: block.signature } : {}),
+        };
+      case "redacted_thinking":
+        return { type: "redacted_thinking", data: block.data };
+      default:
+        return block;
+    }
+  });
+}
+
+function fallbackAssistantBlocks(msg: LLMMessage): any[] {
+  const blocks: any[] = [];
+  if (msg.content) {
+    const c = contentToAnthropic(msg.content);
+    if (typeof c === "string") {
+      if (c) blocks.push({ type: "text", text: c });
+    } else {
+      blocks.push(...c);
+    }
+  }
+  for (const tc of msg.toolCalls ?? []) {
+    blocks.push({
+      type: "tool_use",
+      id: tc.id,
+      name: tc.name,
+      input: tc.arguments,
+    });
+  }
+  return blocks;
+}
+
+function assistantMessageToAnthropicContent(msg: LLMMessage): any[] {
+  const sidecar = toAnthropicSidecar(msg.providerSidecarData);
+  if (sidecar?.contentBlocks.length) {
+    return anthropicBlocksToApi(sidecar.contentBlocks);
+  }
+  return fallbackAssistantBlocks(msg);
+}
+
 function messagesToAnthropic(messages: LLMMessage[]): any[] {
   const result: any[] = [];
 
@@ -73,30 +174,16 @@ function messagesToAnthropic(messages: LLMMessage[]): any[] {
       continue;
     }
 
-    if (msg.role === "assistant" && msg.toolCalls?.length) {
-      const blocks: any[] = [];
-      if (msg.content) {
-        const c = contentToAnthropic(msg.content);
-        if (typeof c === "string") {
-          if (c) blocks.push({ type: "text", text: c });
-        } else {
-          blocks.push(...c);
-        }
+    if (msg.role === "assistant") {
+      const blocks = assistantMessageToAnthropicContent(msg);
+      if (blocks.length > 0) {
+        result.push({ role: "assistant", content: blocks });
       }
-      for (const tc of msg.toolCalls) {
-        blocks.push({
-          type: "tool_use",
-          id: tc.id,
-          name: tc.name,
-          input: tc.arguments,
-        });
-      }
-      result.push({ role: "assistant", content: blocks });
       continue;
     }
 
     result.push({
-      role: msg.role === "assistant" ? "assistant" : "user",
+      role: "user",
       content: contentToAnthropic(msg.content),
     });
   }
@@ -170,12 +257,13 @@ function createAnthropicProvider(opts: ProviderFactoryOpts): LLMProvider {
       }
       const response = res;
 
-      let currentBlock: {
-        type: string;
-        id?: string;
-        name?: string;
-        arguments: string;
-      } | null = null;
+      let currentBlock:
+        | { type: "text"; text: string }
+        | { type: "thinking"; thinking: string; signature?: string }
+        | { type: "redacted_thinking"; data: string }
+        | { type: "tool_use"; id?: string; name?: string; arguments: string }
+        | null = null;
+      const assistantBlocks: AnthropicAssistantBlock[] = [];
       let inputTokens = 0;
       let outputTokens = 0;
 
@@ -206,9 +294,21 @@ function createAnthropicProvider(opts: ProviderFactoryOpts): LLMProvider {
                 arguments: "",
               };
             } else if (block?.type === "thinking") {
-              currentBlock = { type: "thinking", arguments: "" };
+              currentBlock = {
+                type: "thinking",
+                thinking: typeof block.thinking === "string" ? block.thinking : "",
+                signature: typeof block.signature === "string" ? block.signature : undefined,
+              };
+            } else if (block?.type === "redacted_thinking") {
+              currentBlock = {
+                type: "redacted_thinking",
+                data: typeof block.data === "string" ? block.data : "",
+              };
             } else {
-              currentBlock = { type: "text", arguments: "" };
+              currentBlock = {
+                type: "text",
+                text: typeof block?.text === "string" ? block.text : "",
+              };
             }
             break;
           }
@@ -216,27 +316,53 @@ function createAnthropicProvider(opts: ProviderFactoryOpts): LLMProvider {
           case "content_block_delta": {
             const delta = parsed.delta;
             if (delta?.type === "text_delta" && delta.text) {
+              if (currentBlock?.type === "text") currentBlock.text += delta.text;
               yield { type: "text", text: delta.text };
             } else if (delta?.type === "thinking_delta" && delta.thinking) {
+              if (currentBlock?.type === "thinking") currentBlock.thinking += delta.thinking;
               yield { type: "thinking", text: delta.thinking };
+            } else if (delta?.type === "signature_delta" && currentBlock?.type === "thinking") {
+              currentBlock.signature = delta.signature;
             } else if (
               delta?.type === "input_json_delta" &&
               delta.partial_json &&
               currentBlock
             ) {
-              currentBlock.arguments += delta.partial_json;
+              if (currentBlock.type === "tool_use") {
+                currentBlock.arguments += delta.partial_json;
+              }
             }
             break;
           }
 
           case "content_block_stop":
             if (currentBlock?.type === "tool_use") {
+              let parsedArguments: Record<string, unknown> = {};
+              try {
+                parsedArguments = currentBlock.arguments ? JSON.parse(currentBlock.arguments) : {};
+              } catch {}
+              assistantBlocks.push({
+                type: "tool_use",
+                id: currentBlock.id ?? "_tool",
+                name: currentBlock.name ?? "unknown_tool",
+                input: parsedArguments,
+              });
               yield {
                 type: "tool_call",
-                id: currentBlock.id!,
-                name: currentBlock.name!,
+                id: currentBlock.id ?? "_tool",
+                name: currentBlock.name ?? "unknown_tool",
                 arguments: currentBlock.arguments,
               };
+            } else if (currentBlock?.type === "thinking") {
+              assistantBlocks.push({
+                type: "thinking",
+                thinking: currentBlock.thinking,
+                ...(currentBlock.signature ? { signature: currentBlock.signature } : {}),
+              });
+            } else if (currentBlock?.type === "redacted_thinking") {
+              assistantBlocks.push(currentBlock);
+            } else if (currentBlock?.type === "text" && currentBlock.text) {
+              assistantBlocks.push(currentBlock);
             }
             currentBlock = null;
             break;
@@ -246,6 +372,16 @@ function createAnthropicProvider(opts: ProviderFactoryOpts): LLMProvider {
             break;
 
           case "message_stop":
+            if (assistantBlocks.length > 0) {
+              yield {
+                type: "provider_sidecar",
+                providerSidecarData: {
+                  anthropic: {
+                    contentBlocks: assistantBlocks,
+                  },
+                },
+              };
+            }
             yield { type: "usage", inputTokens, outputTokens };
             break;
         }

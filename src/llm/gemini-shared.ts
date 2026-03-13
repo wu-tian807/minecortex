@@ -3,7 +3,6 @@
 import type { ContentPart } from "../core/types.js";
 import type { LLMMessage } from "./types.js";
 import type { ToolDefinition } from "../core/types.js";
-import { stripThinkingBlocks } from "./thinking.js";
 
 function sanitizeGeminiSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) {
@@ -68,17 +67,6 @@ export function extractSystemText(messages: LLMMessage[]): string | undefined {
     .filter((p) => p.type === "text")
     .map((p) => (p as Extract<ContentPart, { type: "text" }>).text)
     .join("\n");
-}
-
-/** Extract plain text from content, stripping <thinking> blocks */
-export function extractTextContent(msg: LLMMessage): string {
-  if (typeof msg.content === "string") {
-    return stripThinkingBlocks(msg.content);
-  }
-  return msg.content
-    .filter((p) => p.type === "text")
-    .map((p) => (p as any).text)
-    .join("");
 }
 
 function toolResultText(msg: LLMMessage): string {
@@ -172,23 +160,21 @@ export async function* streamGeminiResponse(
     const parts = candidate?.content?.parts;
     if (parts) {
       for (const part of parts) {
-        const sig = (part as any).thoughtSignature as string | undefined;
-
         if (part.functionCall) {
           hasContent = true;
+          const id = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
           yield {
             type: "tool_call",
-            id: `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            id,
             name: part.functionCall.name!,
             arguments: JSON.stringify(part.functionCall.args ?? {}),
-            thoughtSignature: sig,
           };
         } else if (part.text != null) {
           hasContent = true;
           if ((part as any).thought) {
-            yield { type: "thinking", text: part.text, thoughtSignature: sig };
+            yield { type: "thinking", text: part.text };
           } else {
-            yield { type: "text", text: part.text, thoughtSignature: sig };
+            yield { type: "text", text: part.text };
           }
         }
       }

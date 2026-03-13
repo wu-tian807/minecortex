@@ -21,22 +21,6 @@ export function isThinkingOnlyAssistantMessage(msg: LLMMessage): boolean {
   return Boolean(msg.thinking?.trim()) && !extractTextContent(msg.content) && !msg.toolCalls?.length;
 }
 
-export function projectThinkingIntoPromptContent(msg: LLMMessage): LLMMessage {
-  if (msg.role !== "assistant" || !msg.thinking?.trim() || typeof msg.content !== "string") {
-    return msg;
-  }
-
-  const thinkingBlock = `<thinking>${msg.thinking.trim()}</thinking>`;
-  const content = msg.content.trim();
-  const projectedContent = content ? `${thinkingBlock}\n${content}` : thinkingBlock;
-  if (projectedContent === msg.content) return msg;
-
-  return {
-    ...msg,
-    content: projectedContent,
-  };
-}
-
 export function extractMessageBodyText(msg: LLMMessage): string {
   const text = extractTextContent(msg.content);
   return msg.role === "assistant" ? stripThinkingBlocks(text) : text;

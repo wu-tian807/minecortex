@@ -8,9 +8,9 @@ import {
   toolDefsToGemini,
   contentPartsToGemini,
   extractSystemText,
-  extractTextContent,
   streamGeminiResponse,
 } from "./gemini-shared.js";
+import { extractTextContent } from "./thinking.js";
 
 function messagesToGemini2(messages: LLMMessage[]): any[] {
   const contents: any[] = [];
@@ -28,12 +28,13 @@ function messagesToGemini2(messages: LLMMessage[]): any[] {
 
     if (msg.role === "assistant") {
       const parts: any[] = [];
+      const thinkingText = msg.thinking;
 
-      if (msg.thinking) {
-        parts.push({ thought: true, text: msg.thinking });
+      if (thinkingText) {
+        parts.push({ thought: true, text: thinkingText });
       }
 
-      const textContent = extractTextContent(msg);
+      const textContent = extractTextContent(msg.content);
       if (textContent) {
         parts.push({ text: textContent });
       }
@@ -64,7 +65,6 @@ function createGemini2Provider(opts: ProviderFactoryOpts): LLMProvider {
   const temperature = opts.temperature;
   const maxOutputTokens = opts.maxTokens;
   const reasoningEffort = opts.reasoningEffort;
-  const showThinking = opts.showThinking ?? false;
 
   return {
     async *chatStream(messages, tools, signal) {
@@ -86,7 +86,10 @@ function createGemini2Provider(opts: ProviderFactoryOpts): LLMProvider {
             : reasoningEffort === "medium"
               ? 16384
               : 4096;
-        config.thinkingConfig = { includeThoughts: showThinking, thinkingBudget: budget };
+        config.thinkingConfig = {
+          includeThoughts: opts.showThinking ?? false,
+          thinkingBudget: budget,
+        };
       }
 
       const response = await client.models.generateContentStream({ model, contents, config });

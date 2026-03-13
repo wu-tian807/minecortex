@@ -1,9 +1,9 @@
-/** OpenAI Chat Completions adapter — SSE streaming, <think> tag parsing, multimodal */
+/** OpenAI Chat Completions adapter — SSE streaming, multimodal */
 
 import { registerProvider, type ProviderFactoryOpts } from "./provider.js";
 import type { ToolDefinition, ContentPart, ReasoningEffort } from "../core/types.js";
 import type { LLMMessage, LLMProvider, StreamChunk } from "./types.js";
-import { parseSSE, ThinkTagParser } from "./stream.js";
+import { parseSSE } from "./stream.js";
 
 export function toolDefsToOpenAI(tools?: ToolDefinition[]) {
   if (!tools?.length) return undefined;
@@ -85,7 +85,6 @@ export interface OpenAIStreamOpts {
   maxTokens?: number;
   reasoningEffort?: ReasoningEffort;
   extractReasoning?: boolean;
-  useThinkTags?: boolean;
 }
 
 export async function* openAICompatStream(
@@ -136,7 +135,6 @@ export async function* openAICompatStream(
   }
   const response = res;
 
-  const thinkParser = streamOpts.useThinkTags ? new ThinkTagParser() : null;
   const pendingToolCalls = new Map<
     number,
     { id: string; name: string; arguments: string }
@@ -175,11 +173,7 @@ export async function* openAICompatStream(
     }
 
     if (delta.content) {
-      if (thinkParser) {
-        for (const chunk of thinkParser.feed(delta.content)) yield chunk;
-      } else {
-        yield { type: "text", text: delta.content };
-      }
+      yield { type: "text", text: delta.content };
     }
 
     if (delta.tool_calls) {
@@ -203,9 +197,6 @@ export async function* openAICompatStream(
       choice.finish_reason === "tool_calls" ||
       choice.finish_reason === "stop"
     ) {
-      if (thinkParser) {
-        for (const chunk of thinkParser.flush()) yield chunk;
-      }
       for (const [, tc] of pendingToolCalls) {
         yield {
           type: "tool_call",
@@ -218,9 +209,6 @@ export async function* openAICompatStream(
     }
   }
 
-  if (thinkParser) {
-    for (const chunk of thinkParser.flush()) yield chunk;
-  }
   for (const [, tc] of pendingToolCalls) {
     yield {
       type: "tool_call",
@@ -250,7 +238,6 @@ function createOpenAICompatProvider(opts: ProviderFactoryOpts): LLMProvider {
           temperature: opts.temperature ?? 0.7,
           maxTokens: opts.maxTokens,
           reasoningEffort: opts.reasoningEffort,
-          useThinkTags: true,
         },
         messages,
         tools,

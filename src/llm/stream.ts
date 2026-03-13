@@ -1,41 +1,64 @@
-import type { LLMResponse, StreamChunk, LLMToolCall } from "./types.js";
+import type {
+  LLMMessage,
+  LLMResponse,
+  StreamChunk,
+  LLMToolCall,
+  ProviderSidecarData,
+} from "./types.js";
 
-/** Collect an async stream of chunks into a single LLMResponse. */
-export async function assembleResponse(
-  stream: AsyncIterable<StreamChunk>,
-): Promise<LLMResponse> {
-  let text = "";
-  let thinking = "";
-  let thinkingSignature: string | undefined;
-  let textSignature: string | undefined;
-  const toolCalls: LLMToolCall[] = [];
-  let usage: { inputTokens: number; outputTokens: number; thinkingTokens?: number } | undefined;
+function mergeProviderSidecarData(
+  current: ProviderSidecarData | undefined,
+  incoming: ProviderSidecarData | undefined,
+): ProviderSidecarData | undefined {
+  if (!incoming) return current;
+  if (!current) return { ...incoming };
+  return { ...current, ...incoming };
+}
 
-  for await (const chunk of stream) {
+class ResponseAccumulator {
+  private text = "";
+  private thinking = "";
+  private readonly toolCalls: LLMToolCall[] = [];
+  private usage: { inputTokens: number; outputTokens: number; thinkingTokens?: number } | undefined;
+  private providerSidecarData: ProviderSidecarData | undefined;
+
+  addChunk(chunk: StreamChunk): void {
     switch (chunk.type) {
       case "text":
-        text += chunk.text;
-        if (chunk.thoughtSignature) textSignature = chunk.thoughtSignature;
+        this.text += chunk.text;
+        this.providerSidecarData = mergeProviderSidecarData(
+          this.providerSidecarData,
+          chunk.providerSidecarData,
+        );
         break;
       case "thinking":
-        thinking += chunk.text;
-        if (chunk.thoughtSignature) thinkingSignature = chunk.thoughtSignature;
+        this.thinking += chunk.text;
+        this.providerSidecarData = mergeProviderSidecarData(
+          this.providerSidecarData,
+          chunk.providerSidecarData,
+        );
         break;
       case "tool_call": {
         let args: Record<string, unknown> = {};
         try {
           args = JSON.parse(chunk.arguments);
         } catch {}
-        toolCalls.push({
+        this.toolCalls.push({
           id: chunk.id,
           name: chunk.name,
           arguments: args,
-          thoughtSignature: chunk.thoughtSignature,
+          providerSidecarData: chunk.providerSidecarData,
         });
         break;
       }
+      case "provider_sidecar":
+        this.providerSidecarData = mergeProviderSidecarData(
+          this.providerSidecarData,
+          chunk.providerSidecarData,
+        );
+        break;
       case "usage":
-        usage = {
+        this.usage = {
           inputTokens: chunk.inputTokens,
           outputTokens: chunk.outputTokens,
           thinkingTokens: chunk.thinkingTokens,
@@ -44,14 +67,65 @@ export async function assembleResponse(
     }
   }
 
+  buildResponse(truncated?: boolean): LLMResponse {
+    return {
+      content: this.text,
+      thinking: this.thinking || undefined,
+      toolCalls: this.toolCalls.length > 0 ? this.toolCalls : undefined,
+      usage: this.usage,
+      providerSidecarData: this.providerSidecarData,
+      ...(truncated ? { truncated: true } : {}),
+    };
+  }
+}
+
+export class LLMStreamError extends Error {
+  partialResponse?: LLMResponse;
+
+  constructor(message: string, options?: { cause?: unknown; partialResponse?: LLMResponse }) {
+    super(message);
+    this.name = "LLMStreamError";
+    this.cause = options?.cause;
+    this.partialResponse = options?.partialResponse;
+  }
+}
+
+export function getPartialResponse(error: unknown): LLMResponse | undefined {
+  return error instanceof LLMStreamError ? error.partialResponse : undefined;
+}
+
+export function responseToAssistantMessage(
+  response: LLMResponse,
+  options: { showThinking: boolean; ts: number; truncated?: boolean },
+): LLMMessage {
   return {
-    content: text,
-    thinking: thinking || undefined,
-    thinkingSignature,
-    textSignature,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    usage,
+    role: "assistant",
+    content: response.content,
+    thinking: options.showThinking ? response.thinking : undefined,
+    toolCalls: response.toolCalls,
+    usage: response.usage
+      ? {
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+        }
+      : undefined,
+    providerSidecarData: response.providerSidecarData,
+    ...(options.truncated ? { truncated: true } : {}),
+    ts: options.ts,
   };
+}
+
+/** Collect an async stream of chunks into a single LLMResponse. */
+export async function assembleResponse(
+  stream: AsyncIterable<StreamChunk>,
+): Promise<LLMResponse> {
+  const accumulator = new ResponseAccumulator();
+
+  for await (const chunk of stream) {
+    accumulator.addChunk(chunk);
+  }
+
+  return accumulator.buildResponse();
 }
 
 /** Collect stream with per-chunk callback for streaming hooks.
@@ -61,135 +135,25 @@ export async function assembleResponseWithCallback(
   stream: AsyncIterable<StreamChunk>,
   onChunk?: (chunk: StreamChunk) => void,
 ): Promise<LLMResponse> {
-  let text = "";
-  let thinking = "";
-  let thinkingSignature: string | undefined;
-  let textSignature: string | undefined;
-  const toolCalls: LLMToolCall[] = [];
-  let usage: { inputTokens: number; outputTokens: number; thinkingTokens?: number } | undefined;
-
-  const buildResponse = (truncated?: boolean): LLMResponse => ({
-    content: text,
-    thinking: thinking || undefined,
-    thinkingSignature,
-    textSignature,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    usage,
-    ...(truncated ? { truncated: true } : {}),
-  });
+  const accumulator = new ResponseAccumulator();
 
   try {
     for await (const chunk of stream) {
       onChunk?.(chunk);
-
-      switch (chunk.type) {
-        case "text":
-          text += chunk.text;
-          if (chunk.thoughtSignature) textSignature = chunk.thoughtSignature;
-          break;
-        case "thinking":
-          thinking += chunk.text;
-          if (chunk.thoughtSignature) thinkingSignature = chunk.thoughtSignature;
-          break;
-        case "tool_call": {
-          let args: Record<string, unknown> = {};
-          try {
-            args = JSON.parse(chunk.arguments);
-          } catch {}
-          toolCalls.push({
-            id: chunk.id,
-            name: chunk.name,
-            arguments: args,
-            thoughtSignature: chunk.thoughtSignature,
-          });
-          break;
-        }
-        case "usage":
-          usage = {
-            inputTokens: chunk.inputTokens,
-            outputTokens: chunk.outputTokens,
-            thinkingTokens: chunk.thinkingTokens,
-          };
-          break;
-      }
+      accumulator.addChunk(chunk);
     }
   } catch (err: any) {
     // AbortError: return whatever we managed to collect rather than discarding it.
     if (err?.name === "AbortError" || err?.code === "ERR_ABORTED" || err?.message === "aborted") {
-      return buildResponse(true);
+      return accumulator.buildResponse(true);
     }
-    throw err;
+    throw new LLMStreamError(err?.message ?? "LLM stream failed", {
+      cause: err,
+      partialResponse: accumulator.buildResponse(true),
+    });
   }
 
-  return buildResponse();
-}
-
-// ── <think> tag state-machine parser: NORMAL → IN_THINK → NORMAL ──
-
-type ThinkState = "NORMAL" | "IN_THINK";
-
-export class ThinkTagParser {
-  private state: ThinkState = "NORMAL";
-  private buffer = "";
-
-  *feed(text: string): Generator<StreamChunk> {
-    this.buffer += text;
-
-    while (this.buffer.length > 0) {
-      if (this.state === "NORMAL") {
-        const idx = this.buffer.indexOf("<think>");
-        if (idx === -1) {
-          const partial = this.partialMatch(this.buffer, "<think>");
-          if (partial >= 0) {
-            const safe = this.buffer.slice(0, partial);
-            if (safe) yield { type: "text", text: safe };
-            this.buffer = this.buffer.slice(partial);
-            return;
-          }
-          yield { type: "text", text: this.buffer };
-          this.buffer = "";
-        } else {
-          if (idx > 0) yield { type: "text", text: this.buffer.slice(0, idx) };
-          this.buffer = this.buffer.slice(idx + 7);
-          this.state = "IN_THINK";
-        }
-      } else {
-        const idx = this.buffer.indexOf("</think>");
-        if (idx === -1) {
-          const partial = this.partialMatch(this.buffer, "</think>");
-          if (partial >= 0) {
-            const safe = this.buffer.slice(0, partial);
-            if (safe) yield { type: "thinking", text: safe };
-            this.buffer = this.buffer.slice(partial);
-            return;
-          }
-          yield { type: "thinking", text: this.buffer };
-          this.buffer = "";
-        } else {
-          if (idx > 0) yield { type: "thinking", text: this.buffer.slice(0, idx) };
-          this.buffer = this.buffer.slice(idx + 8);
-          this.state = "NORMAL";
-        }
-      }
-    }
-  }
-
-  *flush(): Generator<StreamChunk> {
-    if (this.buffer) {
-      yield {
-        type: this.state === "IN_THINK" ? "thinking" : "text",
-        text: this.buffer,
-      } as StreamChunk;
-      this.buffer = "";
-    }
-  }
-
-  private partialMatch(buf: string, tag: string): number {
-    for (let i = 1; i < tag.length; i++) {
-      if (buf.endsWith(tag.slice(0, i))) return buf.length - i;
-    }
-    return -1;
-  }
+  return accumulator.buildResponse();
 }
 
 // ── SSE event parser for streaming HTTP responses ──

@@ -48,6 +48,25 @@ function formatTodoList(todos: TodoItem[]): string {
   return `[todos] ${done}/${total}\n${lines.join("\n")}`;
 }
 
+function describeEventPayload(payload: unknown): string {
+  if (!payload) return "";
+  if (typeof payload === "string") return payload.trim();
+  if (typeof payload !== "object") return String(payload);
+
+  const record = payload as Record<string, unknown>;
+  const content = typeof record.content === "string" ? record.content.trim() : "";
+  const summary = typeof record.summary === "string" ? record.summary.trim() : "";
+  if (summary && content) return `${summary}: ${content}`;
+  if (content) return content;
+  if (summary) return summary;
+
+  try {
+    return JSON.stringify(payload);
+  } catch {
+    return "[unserializable payload]";
+  }
+}
+
 function getShowThinking(ctx: SubscriptionContext): boolean {
   try {
     const config = ctx.getBrainJson() as { showThinking?: boolean; models?: { showThinking?: boolean } };
@@ -181,6 +200,22 @@ class EventRecorder {
   recordBrainMessage(source: string, text: string): void {
     this.appendEvent({ k: "brain_message", source, text, ts: Date.now() }).catch(() => {});
     this.writeQA(`> ⟵ from \`${source}\`: ${text}\n\n`).catch(() => {});
+  }
+
+  recordIncomingEvent(event: Event): void {
+    const text = describeEventPayload(event.payload);
+    const ts = event.ts || Date.now();
+    this.appendEvent({
+      k: "incoming_event",
+      source: event.source,
+      eventType: event.type,
+      ...(text ? { text } : {}),
+      ts,
+    }).catch(() => {});
+
+    const label = `${event.source}:${event.type}`;
+    const line = text ? `> ↘ \`${label}\`: ${text}\n\n` : `> ↘ \`${label}\`\n\n`;
+    this.writeQA(line).catch(() => {});
   }
 
   recordCliMessage(source: string, text: string): void {
@@ -321,6 +356,8 @@ export default function create(ctx: SubscriptionContext): EventSource {
               const payload = e.payload as { content?: string; summary?: string } | undefined;
               const text = payload?.content ?? JSON.stringify(e.payload);
               recorder.recordBrainMessage(e.source, text);
+            } else {
+              recorder.recordIncomingEvent(e);
             }
           }
         })

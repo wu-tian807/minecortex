@@ -14,6 +14,7 @@ export type RendererEvent =
   | { k: "user_input"; text: string; segments?: InputSegment[]; ts: number }
   | { k: "command"; brain: string; toolName: string; ts: number }
   | { k: "brain_message"; source: string; text: string; ts: number }
+  | { k: "incoming_event"; source: string; eventType: string; text?: string; ts: number }
   | { k: "cli_message";  source: string; text: string; ts: number }
   | { k: "assistant_chunk"; brain?: string; kind: "text" | "thinking"; text: string; ts: number }
   | { k: "thinking";     brain?: string; text: string; ts: number }
@@ -92,6 +93,14 @@ export function formatEvent(ev: RendererEvent): string | null {
 
     case "brain_message":
       return `${C.magenta}⟵ ${ev.source}:${C.reset} ${ev.text.slice(0, 200)}\n\n`;
+
+    case "incoming_event": {
+      const label = `${ev.source}:${ev.eventType}`;
+      const text = ev.text?.trim();
+      return text
+        ? `${C.magenta}↘ ${label}:${C.reset} ${text.slice(0, 200)}\n\n`
+        : `${C.magenta}↘ ${label}${C.reset}\n\n`;
+    }
 
     case "cli_message":
       return `${C.yellow}📨 ${ev.source}:${C.reset} ${ev.text.slice(0, 200)}\n\n`;

@@ -26,7 +26,6 @@ function createDeepSeekReasoningProvider(
           maxTokens: opts.maxTokens,
           reasoningEffort: opts.reasoningEffort,
           extractReasoning: true,
-          useThinkTags: false,
         },
         messages,
         tools,

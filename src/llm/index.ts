@@ -16,7 +16,7 @@ export {
   buildRetryOptions,
   type FallbackProviderOptions,
 } from "./provider.js";
-export { assembleResponse, ThinkTagParser } from "./stream.js";
+export { assembleResponse } from "./stream.js";
 export { withRetry, type RetryOptions, type RetryInfo } from "./retry.js";
 export {
   classifyLLMError,
