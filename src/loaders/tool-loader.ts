@@ -5,7 +5,54 @@ import type {
 import type { LoaderContext } from "./types.js";
 import { BaseLoader } from "./base-loader.js";
 
-type ToolFactory = { default?: ToolDefinition };
+type ToolLike = Partial<ToolDefinition>;
+
+type ToolFactory = { default?: ToolLike };
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isValidInputSchema(value: unknown): value is ToolDefinition["input_schema"] {
+  if (!isPlainObject(value)) return false;
+  if (value.type !== "object") return false;
+  return isPlainObject(value.properties);
+}
+
+function normalizeToolDefinition(
+  def: ToolLike | undefined,
+  exposedName: string,
+): ToolDefinition | null {
+  if (!def) return null;
+  if (typeof def.name !== "string") {
+    console.warn(`[ToolLoader] skipped "${exposedName}": missing string "name"`);
+    return null;
+  }
+  if (typeof def.description !== "string") {
+    console.warn(`[ToolLoader] skipped "${exposedName}": missing string "description"`);
+    return null;
+  }
+  if (typeof def.execute !== "function") {
+    console.warn(`[ToolLoader] skipped "${exposedName}": missing function "execute"`);
+    return null;
+  }
+
+  if (!isValidInputSchema(def.input_schema)) {
+    console.warn(
+      `[ToolLoader] skipped "${exposedName}": missing valid "input_schema" object schema`,
+    );
+    return null;
+  }
+
+  return {
+    name: exposedName,
+    description: def.description,
+    guidance: def.guidance,
+    ccVersion: def.ccVersion,
+    input_schema: def.input_schema,
+    execute: def.execute,
+  };
+}
 
 /**
  * Loads tool definitions from tools/ directories.
@@ -30,8 +77,7 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
   }
 
   validateFactory(factory: ToolFactory): boolean {
-    const def = factory.default;
-    return Boolean(def && typeof def.name === "string" && typeof def.execute === "function");
+    return normalizeToolDefinition(factory.default, factory.default?.name ?? "(anonymous)") !== null;
   }
 
   createInstance(
@@ -40,9 +86,7 @@ export class ToolLoader extends BaseLoader<ToolFactory, ToolDefinition | null> {
     name: string,
     _descriptor: CapabilityDescriptor,
   ): ToolDefinition | null {
-    const def = factory.default;
-    if (!def) return null;
-    return { ...def, name };
+    return normalizeToolDefinition(factory.default, name);
   }
 
   onRegister(_name: string, _instance: ToolDefinition | null): void {
