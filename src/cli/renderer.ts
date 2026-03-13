@@ -38,6 +38,7 @@ export interface RendererCallbacks {
 interface StreamingState {
   active:   boolean;
   thinking: string;
+  renderedThinking: string;
 }
 
 const PROMPT      = `${C.cyan}›${C.reset} `;
@@ -45,13 +46,14 @@ const PROMPT      = `${C.cyan}›${C.reset} `;
 const PROMPT_CONT = "  ";
 
 function makeStreamingState(): StreamingState {
-  return { active: false, thinking: "" };
+  return { active: false, thinking: "", renderedThinking: "" };
 }
 
 // ─── CLIRenderer ───
 
 export class CLIRenderer implements OverlayHost {
   private callbacks: RendererCallbacks;
+  private pendingThinkingEvent: Extract<RendererEvent, { k: "thinking" }> | null = null;
 
   // Active context
   activeBrain   = "";
@@ -106,6 +108,9 @@ export class CLIRenderer implements OverlayHost {
     process.stdout.on("resize", () => {
       const line = this.buildInputLine();
       const count = this.countInputRows(line);
+      if (count !== this.lastInputLineCount) {
+        this.footer.clear();
+      }
       this.lastInputLineCount = count;
       this.footer.setupScrollRegion(count);
       this.drawFooter();
@@ -282,6 +287,7 @@ export class CLIRenderer implements OverlayHost {
     const line     = this.buildInputLine();
     const newCount = this.countInputRows(line);
     if (newCount !== this.lastInputLineCount) {
+      this.footer.clear();
       this.lastInputLineCount = newCount;
       this.footer.setupScrollRegion(newCount);
       this.drawFooter();
@@ -325,6 +331,7 @@ export class CLIRenderer implements OverlayHost {
 
   private appendTextChunk(text: string): void {
     if (!text || !this.isTTY || this.overlay) return;
+    this.flushStreamedThinking();
     if (!this.streaming.active) {
       this.streaming.active = true;
       // Move to the bottom of the scroll region (content area) and start a new line.
@@ -339,6 +346,32 @@ export class CLIRenderer implements OverlayHost {
     if (!text) return;
     this.streaming.thinking += text;
     this.scheduleRedraw();
+  }
+
+  private flushStreamedThinking(): void {
+    const fullThinking = this.streaming.thinking.trim();
+    if (!fullThinking) return;
+
+    const renderedThinking = this.streaming.renderedThinking.trim();
+    if (fullThinking === renderedThinking) return;
+
+    let nextThinking = fullThinking;
+    if (renderedThinking && fullThinking.startsWith(renderedThinking)) {
+      nextThinking = fullThinking.slice(renderedThinking.length).trim();
+    }
+    if (!nextThinking) {
+      this.streaming.renderedThinking = fullThinking;
+      return;
+    }
+
+    const out = formatEvent({
+      k: "thinking",
+      brain: this.activeBrain || undefined,
+      text: nextThinking,
+      ts: Date.now(),
+    });
+    if (out) this.print(out);
+    this.streaming.renderedThinking = fullThinking;
   }
 
   /**
@@ -365,13 +398,24 @@ export class CLIRenderer implements OverlayHost {
     return hadStreaming;
   }
 
+  private flushPendingThinking(): void {
+    if (!this.pendingThinkingEvent) return;
+    const thinkingEvent = this.pendingThinkingEvent;
+    this.pendingThinkingEvent = null;
+    this.finalizeLiveAssistant();
+    const out = formatEvent(thinkingEvent);
+    if (out) this.print(out);
+  }
+
   private printEvent(ev: RendererEvent, isLive = false, replayUntil?: number): void {
     if (ev.k === "turn_start") {
+      this.pendingThinkingEvent = null;
       if (!isLive) this.streaming = makeStreamingState();
       return;
     }
     if (ev.k === "turn_end") {
       if (isLive) {
+        this.flushPendingThinking();
         if (this.streaming.active || this.streaming.thinking) {
           this.streaming = makeStreamingState();
           this.refreshFooter();
@@ -386,9 +430,36 @@ export class CLIRenderer implements OverlayHost {
       if (ev.kind === "thinking") this.appendThinkingChunk(ev.text);
       return;
     }
+    if (ev.k === "thinking" && isLive) {
+      const renderedThinking = this.streaming.renderedThinking.trim();
+      const finalThinking = ev.text.trim();
+      if (!renderedThinking) {
+        this.pendingThinkingEvent = ev;
+        return;
+      }
+      if (!finalThinking || finalThinking === renderedThinking) {
+        this.pendingThinkingEvent = null;
+        return;
+      }
+      if (finalThinking.startsWith(renderedThinking)) {
+        const remainder = finalThinking.slice(renderedThinking.length).trim();
+        this.pendingThinkingEvent = remainder
+          ? { ...ev, text: remainder }
+          : null;
+        return;
+      }
+      this.pendingThinkingEvent = ev;
+      return;
+    }
     if (ev.k === "assistant" && isLive) {
       const hadStreaming = this.streaming.active;
+      const thinkingEvent = this.pendingThinkingEvent;
+      this.pendingThinkingEvent = null;
       this.finalizeLiveAssistant();
+      if (thinkingEvent) {
+        const thinkingOut = formatEvent(thinkingEvent);
+        if (thinkingOut) this.print(thinkingOut);
+      }
       if (!hadStreaming) {
         const out = formatEvent(ev);
         if (out) this.print(out);
@@ -462,6 +533,7 @@ export class CLIRenderer implements OverlayHost {
     this.activeBrain   = brainId;
     this.activeSession = sessionId;
     this.statusBar.setContext(brainId, sessionId);
+    this.pendingThinkingEvent = null;
     this.streaming = makeStreamingState();
     this.setThinking(false);
     this.subscribeContext(brainId);
@@ -667,12 +739,8 @@ export class CLIRenderer implements OverlayHost {
 
     if (this.activeBrain) {
       const ev: RendererEvent = { k: "user_input", text: trimmed, segments, ts: Date.now() };
-      const rendered = formatEvent(ev);
-      if (rendered) this.print(rendered);
-
       const evPath = this.eventsPath();
       appendFile(evPath, JSON.stringify(ev) + "\n", "utf-8").catch(() => {});
-      this.tailer.offset += Buffer.byteLength(JSON.stringify(ev) + "\n", "utf-8");
 
       this.callbacks.onUserInput(this.activeBrain, trimmed);
     }
